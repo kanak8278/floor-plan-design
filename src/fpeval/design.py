@@ -171,6 +171,66 @@ def check_bath_proportion(rooms, polys, names, cats, adjacency) -> list[DFinding
     return out
 
 
+# ------------------------------------------------------------------ balcony
+def check_balcony(rooms, polys, names, cats, adjacency, footprint) -> list[DFinding]:
+    """A balcony must open to the outside and hang off exactly one room.
+
+    Both halves are topological, not cosmetic. A balcony with no edge on the
+    building perimeter is an internal void -- it cannot open to anything, so it
+    is not a balcony. And a balcony reached from two rooms is a through-route
+    across the facade, which is not how one is used.
+    """
+    out: list[DFinding] = []
+    bals = [r for r in rooms if cats.get(r.id) in ("balcony", "sitout", "patio")]
+    for b in bals:
+        poly = polys.get(b.id)
+        if poly is None:
+            continue
+        # Exterior edge: part of its boundary must lie on the footprint's
+        # boundary rather than inside it.
+        opens_out = True
+        if footprint is not None and not footprint.is_empty:
+            shared = poly.boundary.intersection(footprint.boundary.buffer(220))
+            opens_out = (not shared.is_empty) and shared.length >= 600
+        if not opens_out:
+            out.append(DFinding(
+                "DESIGN.BALCONY_ENCLOSED", "error", 1.0,
+                f"{names.get(b.id, b.id)} has no edge on the building perimeter, so "
+                "it opens onto nothing; a balcony must face outside", [b.id]))
+
+        nb = list(adjacency.get(b.id, ()))
+        if not nb:
+            out.append(DFinding(
+                "DESIGN.BALCONY_NO_ACCESS", "error", 1.0,
+                f"{names.get(b.id, b.id)} has no door; nothing reaches it", [b.id]))
+        elif len(nb) > 1 and cats.get(b.id) == "balcony":
+            out.append(DFinding(
+                "DESIGN.BALCONY_THROUGH_ROUTE", "warn", 0.6,
+                f"{names.get(b.id, b.id)} opens off {len(nb)} rooms "
+                f"({', '.join(names.get(x, x) for x in nb[:3])}); a balcony hangs "
+                "off one room, it is not a passage across the facade", [b.id] + nb[:3]))
+        else:
+            host = cats.get(nb[0], "")
+            if host not in ("living", "dining", "bedroom", "master_bedroom",
+                            "kitchen", "utility", "study", "foyer"):
+                out.append(DFinding(
+                    "DESIGN.BALCONY_ODD_HOST", "warn", 0.4,
+                    f"{names.get(b.id, b.id)} opens off a {host or 'unknown'}; a "
+                    "balcony normally hangs off a living room, a bedroom or the "
+                    "kitchen utility", [b.id, nb[0]]))
+    return out
+
+
+def _footprint(polys):
+    """Union of the rooms, as a stand-in for the building outline."""
+    if not polys:
+        return None
+    try:
+        return unary_union(list(polys.values()))
+    except Exception:
+        return None
+
+
 def check(plan, *, adjacency: dict[str, set[str]] | None = None,
           entry_rooms: list[str] | None = None,
           typology: Any = None, brief: dict | None = None) -> list[DFinding]:
@@ -332,6 +392,7 @@ def check(plan, *, adjacency: dict[str, set[str]] | None = None,
                 "crosses the house", park + kits))
 
     out += check_bath_proportion(rooms, polys, names, cats, a)
+    out += check_balcony(rooms, polys, names, cats, a, _footprint(polys))
 
     # ---- 12. dual aspect ---------------------------------------------------
     for r in rooms:
