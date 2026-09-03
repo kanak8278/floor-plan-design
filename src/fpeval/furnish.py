@@ -32,17 +32,18 @@ Geometry notes that cost measurements to learn:
 from __future__ import annotations
 
 import copy
+import json
 import math
 import time
 from dataclasses import dataclass, field, asdict, replace
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Optional, Sequence
 
-from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
 from . import catalog, roomtypes
 from .envelope import VASTU_BEARING
-from .ir import Furniture, Opening, P, Plan, Room, Wall
+from .ir import Furniture, P, Plan, Room, Wall
 from .rules import bearing_deg, zone_of_bearing
 
 # ---------------------------------------------------------------- constants
@@ -124,8 +125,11 @@ def _dims(spec: Spec) -> tuple[int, int, int]:
 RULES: dict[str, tuple[Spec, ...]] = {
     "living": (
         Spec("sofa", "sofa", "wall", clear_front=750, align="center",
-             min_room_m2=8.0, away_from_door=700,
-             note="longest free run; 750 in front is one person edging past"),
+             min_room_m2=8.0, away_from_door=700, shrink_to=1400,
+             note="longest free run; 750 in front is one person edging past. "
+                  "Shrinks to 1400 (a loveseat) rather than leaving the room "
+                  "empty: measured 2.5% of ResPlan living rooms have no 2 m "
+                  "wall clear of a door swing"),
         Spec("tv_stand", "tv_stand", "facing", of="sofa", gap=2000, optional=True,
              min_room_m2=10.0, avoid_window=True, shrink_to=900,
              note="2.0 m is the shortest comfortable throw for a 43in panel"),
@@ -154,9 +158,10 @@ RULES: dict[str, tuple[Spec, ...]] = {
         Spec("nightstand_b", "nightstand", "beside", of="bed", side="right", gap=50,
              optional=True, min_room_m2=10.5),
         Spec("wardrobe", "wardrobe", "wall", prefer=("S", "W"), optional=True,
-             min_room_m2=8.5, align="flush", avoid_window=True, clear_front=600,
+             min_room_m2=8.5, align="flush", avoid_window=True, clear_front=500,
              shrink_to=900,
-             note="600 to swing a shutter; tall so it must not cover a window"),
+             note="500 for a sliding shutter, which is what builders fit; "
+                  "tall, so it must not cover a window"),
         Spec("dresser", "dresser", "wall", optional=True, min_room_m2=15.0, level=1,
              shrink_to=800),
     ),
@@ -170,7 +175,7 @@ RULES: dict[str, tuple[Spec, ...]] = {
              optional=True, min_room_m2=12.0),
         Spec("wardrobe", "wardrobe", "wall", width=1800, prefer=("S", "W"),
              optional=True, min_room_m2=11.0, align="flush", avoid_window=True,
-             clear_front=600, shrink_to=900),
+             clear_front=500, shrink_to=900),
         Spec("dresser", "dresser", "wall", optional=True, min_room_m2=16.0, level=1,
              shrink_to=800),
         Spec("chair", "chair", "corner", optional=True, min_room_m2=20.0, level=2),
@@ -196,8 +201,12 @@ RULES: dict[str, tuple[Spec, ...]] = {
              note="NBC gives 2.8 m2 for a WC+bath; 1.6 is where the pan alone fits"),
         Spec("basin", "sink_b", "wall", clear_front=550, min_room_m2=2.2,
              optional=True, min_gap_to=(("wc", 150),)),
-        Spec("shower", "shower", "corner", optional=True, min_room_m2=3.0,
-             clear_front=0, note="900x900 tray in a corner, no enclosure modelled"),
+        Spec("shower", "shower", "corner", optional=True, min_room_m2=2.8,
+             clear_front=0,
+             note="900x900 corner cubicle. Exempting it from the window rule was "
+                  "tried and reverted: the catalogue item is 2100 tall, so 36 of "
+                  "6155 placements on ResPlan then stood a full-height enclosure "
+                  "across a window. A tray-only shower needs a shorter item"),
         Spec("washer_dryer", "washing_machine", "wall", optional=True,
              min_room_m2=6.0, level=1),
     ),
@@ -474,6 +483,22 @@ class FurnishReport:
             head = d.reason.split(";")[0].split("(")[0].strip()
             out[head] = out.get(head, 0) + 1
         return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    def fingerprint(self) -> str:
+        """Everything the solver decided, with wall-clock timings removed.
+
+        `ms` fields legitimately vary run to run, so a byte-identity check has
+        to be taken over the decisions, not over the whole report.
+        """
+        return json.dumps({
+            "plan_id": self.plan_id, "seed": self.seed, "density": self.density,
+            "policy_diff": list(self.policy_diff),
+            "placements": [asdict(p) for p in self.placements],
+            "drops": [asdict(d) for d in self.drops],
+            "rooms": [{k: v for k, v in asdict(r).items() if k != "ms"}
+                      for r in self.rooms],
+            "skipped": [list(s) for s in self.skipped],
+        }, sort_keys=True)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1132,9 +1157,13 @@ def _beside_cands(ref: _Placed, spec: Spec, w: float, d: float) -> list[_Cand]:
     sides = {"left": (-1.0,), "right": (1.0,), "both": (-1.0, 1.0)}[spec.side]
     for sgn in sides:
         off = ref.w / 2.0 + spec.gap + w / 2.0
-        back = (d - ref.d) / 2.0              # keep the back planes coincident
-        x = ref.cx + ux * sgn * off - fx * back
-        y = ref.cy + uy * sgn * off - fy * back
+        # Keep the two BACK planes coincident, not the two centres: the bed is
+        # 2000 deep and the nightstand 400, so the offset is +f*(d - ref.d)/2.
+        # The sign was inverted here and a render review caught it - the
+        # nightstands sat 1600 mm off the wall, level with the foot of the bed.
+        back = (d - ref.d) / 2.0
+        x = ref.cx + ux * sgn * off + fx * back
+        y = ref.cy + uy * sgn * off + fy * back
         out.append(_Cand(x, y, ref.rot, None, 0.0, "flush"))
     return _dedupe(out)
 
@@ -1284,9 +1313,8 @@ def _furnish_kitchen(ctx: _Ctx, specs: Sequence[Spec], pol: ResolvedPolicy,
             # A fridge or washing machine does not have to stand in the
             # platform run; Indian kitchens routinely put the fridge on the
             # opposite wall. Sink and hob do have to, so they get no fallback.
-            pl, why2 = _try_place(ctx, s2, placed, dims_override=(w, d, h),
-                                  anchor="wall")
-            why = why if pl is None else why
+            pl, _ = _try_place(ctx, s2, placed, dims_override=(w, d, h),
+                               anchor="wall")
         if pl is None:
             drops.append((spec, why))
         else:
@@ -1421,6 +1449,16 @@ def furnish(plan: Plan, policy: dict[str, Any] | None = None,
                         drops.append((spec, "no seat position free"))
                     continue
                 pl, why = _try_place(ctx, s2, placed)
+                if pl is None and s2.key == "bed" and s2.item == "bed_queen":
+                    # Measured on a 3.9x2.6 m solver bedroom with a door mid-way
+                    # along BOTH long walls: no 1500x2000 + 750 pose survives,
+                    # but a 900x1900 single flush to a corner does. A kid's room
+                    # with a single bed beats an empty room.
+                    s3 = replace(s2, item="bed_twin", clear_front=600,
+                                 note=s2.note + " [fell back to a single]")
+                    pl, why3 = _try_place(ctx, s3, placed)
+                    if pl is not None:
+                        s2, why = s3, why3
                 if pl is None:
                     drops.append((s2, why))
                 else:

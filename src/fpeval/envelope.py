@@ -246,6 +246,12 @@ class RoomReq:
     weight: float = 1.0
     min_area_m2: float | None = None      # None -> NBC table
     min_width_mm: int | None = None       # None -> NBC table
+    # Upper bound on area. There was none, and the model had no ceiling either,
+    # so a bathroom could absorb surplus indefinitely: wet-02 produced four at
+    # 6.8 m2 (19% of carpet) against a measured real-plan norm of ~4% per bath.
+    # Service rooms need a ceiling; habitable rooms genuinely should take the
+    # surplus, so this stays None for them.
+    max_area_m2: float | None = None
     max_aspect: float = 2.6
     vastu_zone: str | None = None         # None -> VASTU_DEFAULT_ZONE
     is_entrance: bool = False
