@@ -42,8 +42,13 @@ from shapely.ops import unary_union, linemerge
 from shapely.strtree import STRtree
 from shapely import affinity
 
-from .ir import Plan, Wall, Opening, Room, Site, P
+from .ir import Plan, Wall, Opening, Room, Site, Stair, P
 
+# `stair` is deliberately NOT a room. Measured A/B on 250 stair-carrying plans:
+# including it in the tiling took all-rooms-matched 90.40% -> 71.60%, because stair
+# polygons trace tread outlines (median 10 vertices vs 6 for rooms, max 69) and do
+# not tile cleanly. Stairs are extracted as Stair OBJECTS instead, which also matches
+# OpenPlan3D's model where Stair is a distinct type placed inside a room.
 ROOM_KEYS = ["living", "kitchen", "bedroom", "bathroom", "balcony", "storage"]
 DISPLAY = {"living": "Living", "kitchen": "Kitchen", "bedroom": "Bedroom",
            "bathroom": "Bathroom", "balcony": "Balcony", "storage": "Storage"}
@@ -100,6 +105,9 @@ def new_degenerate_counters() -> dict[str, int]:
         "opening_sliver_polygon": 0,
         "wall_sliver_dropped": 0,
         "plot_non_polygon": 0,
+        "stair_degenerate": 0,
+        "stair_obb_failed": 0,
+        "stair_too_small": 0,
     }
 
 
@@ -876,6 +884,50 @@ def _assign_room_walls(rooms_typed: list[tuple[str, Polygon]], idx: WallIndex,
 # entry point
 # --------------------------------------------------------------------------
 
+
+def _extract_stairs(plan: dict[str, Any], mm: float, rooms: list[Room],
+                    deg: dict) -> list[Stair]:
+    """ResPlan `stair` polygons -> Stair objects.
+
+    Deliberately NOT part of the room tiling (see ROOM_KEYS). Each polygon is
+    reduced to its oriented bounding box: short side = flight width, long side =
+    going, angle = rotation. Riser count is derived from the going at a 280 mm
+    tread, which is the NBC-compliant residential norm.
+    """
+    from shapely.geometry import Point as _Pt
+    out: list[Stair] = []
+    for g in geoms(plan.get("stair")):
+        if not isinstance(g, Polygon) or g.area <= AREA_EPS:
+            deg["stair_degenerate"] += 1
+            continue
+        box = _obb(g)                      # (long, short, angle_radians)
+        if box is None:
+            deg["stair_obb_failed"] += 1
+            continue
+        long_u, short_u, ang_rad = box
+        ang = math.degrees(ang_rad)
+        c = g.centroid
+        cx, cy = c.x, c.y
+        w_mm, d_mm = round(short_u * mm), round(long_u * mm)
+        if w_mm < 500 or d_mm < 700:          # too small to be a flight
+            deg["stair_too_small"] += 1
+            continue
+        # a tread outline that is far from rectangular is a turning flight
+        rect_fill = g.area / max(long_u * short_u, 1e-9)
+        kind = "straight" if rect_fill > 0.85 else "l-shaped"
+        cpt = _Pt(cx, cy)
+        host = next((r.id for r in rooms
+                     if len(r.polygon) >= 3
+                     and Polygon([(q.x / mm, q.y / mm) for q in r.polygon]).covers(cpt)), None)
+        out.append(Stair(
+            id=f"st{len(out)}", position=P(round(cx * mm), round(cy * mm)),
+            rotation=round(ang % 180.0, 3), width=w_mm, depth=d_mm,
+            riser_count=max(3, min(30, round(d_mm / 280.0))),
+            direction="up", stair_type=kind, room_id=host,
+        ))
+    return out
+
+
 def convert(plan: dict[str, Any], merge_collinear: bool = True,
             align_mm: float | None = None) -> Plan:
     """ResPlan plan dict -> canonical IR Plan.
@@ -904,6 +956,7 @@ def convert(plan: dict[str, Any], merge_collinear: bool = True,
     walls = idx.walls
     openings, ostats = _host_openings(plan, walls, mm, thickness, deg)
     rooms = _assign_room_walls(rooms_typed, idx, mm)
+    stairs = _extract_stairs(plan, mm, rooms, deg)
 
     plot = []
     land = geoms(plan.get("land"))
@@ -916,7 +969,7 @@ def convert(plan: dict[str, Any], merge_collinear: bool = True,
 
     return Plan(
         id=str(plan.get("id", "?")),
-        walls=walls, openings=openings, rooms=rooms,
+        walls=walls, openings=openings, rooms=rooms, stairs=stairs,
         site=Site(plot_polygon=plot, north_deg=0.0),
         provenance={"source": "ResPlan", "resplan_id": plan.get("id"),
                     "mm_per_unit": mm, "wall_depth_units": plan.get("wall_depth"),

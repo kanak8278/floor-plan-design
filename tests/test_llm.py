@@ -403,25 +403,28 @@ def test_area_unit_bridge():
 def test_schema_is_strict_shaped():
     sch = DesignSpec.to_json_schema()
     assert sch["additionalProperties"] is False
-    assert set(sch["required"]) == set(sch["properties"])
+    assert set(sch["required"]) < set(sch["properties"])
 
     def walk(node):
         if isinstance(node, dict):
             if node.get("type") == "object":
                 assert node.get("additionalProperties") is False
-                # Every object either requires all of its keys or none of them.
-                # "None" is the union-budget escape hatch used by unit_area.
-                req, props = set(node.get("required", [])), set(node["properties"])
-                assert req in (props, set()), node.get("required")
-            # an enum must never be paired with a type union -- the API 400s
-            if "enum" in node:
-                assert isinstance(node.get("type"), str), node
+                assert set(node.get("required", [])) <= set(node["properties"])
+            # Union types are forbidden outright: an enum paired with one is a
+            # 400, and even two of them push the compiled grammar over its size
+            # budget. Optionality is an absent key instead.
+            assert "anyOf" not in node, node
+            assert not isinstance(node.get("type"), list), node
             for v in node.values():
                 walk(v)
         elif isinstance(node, list):
             for v in node:
                 walk(v)
     walk(sch)
+    # the fields that must be omittable, because guessing them is the failure
+    # mode that matters
+    for k in ("plot_width_ft", "plot_depth_ft", "road_facing_side"):
+        assert k not in sch["required"], k
 
 
 def test_schema_stays_inside_the_strict_grammar_budget():
@@ -456,24 +459,47 @@ def test_schema_has_no_coordinate_fields():
         assert banned not in blob, banned
 
 
+def test_extract_tool_schema_is_flat_and_union_free():
+    """Nesting the spec under a "spec" key 400s with "grammar is too large";
+    the same properties merged flat are accepted. Measured, not guessed."""
+    sch = L.extract_spec_tool_schema()
+    props = set(sch["properties"])
+    assert "spec" not in props
+    assert set(L.SPEC_META_KEYS) <= props
+    assert set(DesignSpec.to_json_schema()["properties"]) <= props
+    blob = json.dumps(sch)
+    assert '"anyOf"' not in blob and '"null"' not in blob
+    # a flat payload must deserialise straight into a DesignSpec
+    payload = dict(_schema_shaped(default_indian_spec()),
+                   clarifying_questions=["q"], blocking_questions=[],
+                   assumptions=["a"], underdetermined=False)
+    assert L.validate_against_schema(payload, sch) == []
+    spec = DesignSpec.from_dict(payload)
+    assert spec.bhk_label == "2BHK" and spec.validate() == []
+
+
 def test_schema_covers_every_spec_field():
     props = set(DesignSpec.to_json_schema()["properties"])
     fields = set(DesignSpec.__dataclass_fields__) - {"spec_version", "provenance"}
     assert fields <= props, fields - props
 
 
-def _schema_shaped(spec) -> dict:
-    """Serialise in exactly the schema's shape.
+def _schema_shaped(node):
+    """Serialise in exactly the schema's shape: absent key, never null.
 
-    `unit_area` is plain-typed with an empty `required` list (the strict-mode
-    union budget is 16), so "not quoted" is encoded as an absent key, not an
-    explicit null. Everything else keeps its nulls.
+    The schema is union-free because the strict-mode grammar has a hard size
+    budget (see DesignSpec.to_json_schema), so `None` has no wire encoding --
+    it is expressed by leaving the key out.
     """
-    d = spec.to_dict()
-    d.pop("spec_version", None)
-    d.pop("provenance", None)
-    d["unit_area"] = {k: v for k, v in d["unit_area"].items() if v is not None}
-    return d
+    if hasattr(node, "to_dict"):
+        node = node.to_dict()
+        node.pop("spec_version", None)
+        node.pop("provenance", None)
+    if isinstance(node, dict):
+        return {k: _schema_shaped(v) for k, v in node.items() if v is not None}
+    if isinstance(node, list):
+        return [_schema_shaped(v) for v in node]
+    return node
 
 
 def test_generated_spec_validates_against_its_own_schema():

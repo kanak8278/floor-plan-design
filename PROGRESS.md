@@ -41,3 +41,16 @@ One line per verified step. Newest last.
 - Learned from the claude-api reference: `temperature` is REMOVED on current models (400 if sent), so determinism cannot come from sampling. Replaced with extract_consensus(): two independent extractions, keep only agreeing fields, disagreements recorded. That is a 4th checksum. Switched extraction to claude-opus-5.
 - INTEGRATION TEST PASSES end to end: envelope -> CP-SAT -> validator -> renderer -> Project. 30x40 3BHK OPTIMAL in 0.5s, face IoU 1.0000, 0 validator errors, Project round-trip identity, SVG well-formed. 20x30 3BHK correctly INFEASIBLE (area_budget).
 - Generated a real 30x40 3BHK east-facing plan: ground coverage 74.7% under BBMP's 75% cap, area statement, room schedule, north arrow, feet-inch dimension chains. Validator caught NBC.WC_OPENS_INTO_KITCHEN in the solver's own output -- the closed loop working.
+
+## Stairs and room types
+
+- Stairs: FIRST ATTEMPT WAS WRONG. Adding `stair` to ROOM_KEYS took all-rooms-matched 90.40% -> 71.60% on the 250 stair-carrying plans, because stair polygons trace tread outlines (median 10 vertices vs 6 for rooms, max 69) and do not tile cleanly. Measured, reverted.
+- Stairs are now `Stair` OBJECTS in the IR, matching OpenPlan3D's model where Stair is a distinct type inside a room. Zero regression: all-rooms-matched back to 90.40%. 277 stairs from 250 plans (width median 1627mm, going 2674mm, 10 risers, 170 straight / 107 L-shaped). Only 7.6% sit inside a labelled room -- the rest are in unlabelled circulation, which is consistent with stairs being 61.5% disjoint from rooms.
+- Added `Stair` and `Furniture` to the IR and wired both through the Project adapter. Round-trip identical 150/150.
+- NEW: `src/fpeval/roomtypes.py` is the single canonical room-type taxonomy (18 types). Written because three vocabularies had drifted: ResPlan's 6 categories, plausible.py's 17, and free-string `category` on the solver's RoomReq. Each type carries NBC class, carpet/built-up accounting, minima, target range, aspect limit, Vastu zone, window/door/wet flags, OpenPlan3D roomType + floor texture, a furnishing key, and aliases.
+- Taxonomy verified against real builder labels: MASTER BEDROOM, TOI-2, PHE SHAFT, PHE & HVAC/VRV, HANDWASH, PUJA, SITOUT, UITILITY, PWD RM, M.TOILET, OTS, MBR, car porch all map correctly; `master_bedroom` correctly beats `bedroom` via longest-alias-first.
+
+## Open
+
+- ResPlan has NO furniture at all, and generated plans are empty rooms. Furnishing system delegated: LLM selects catalogue IDs (closed enum), a relational placement solver owns coordinates. OpenPlan3D's `roomTemplates.ts` cannot be reused -- it hardcodes offsets assuming a 400x300 room.
+- LLM spec/brief/patch layer still in progress (spec.py, llm.py, brief.py).
