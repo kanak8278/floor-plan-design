@@ -154,9 +154,10 @@ RULES: dict[str, tuple[Spec, ...]] = {
         Spec("nightstand_b", "nightstand", "beside", of="bed", side="right", gap=50,
              optional=True, min_room_m2=10.5),
         Spec("wardrobe", "wardrobe", "wall", prefer=("S", "W"), optional=True,
-             min_room_m2=8.5, align="flush", avoid_window=True, clear_front=600,
+             min_room_m2=8.5, align="flush", avoid_window=True, clear_front=500,
              shrink_to=900,
-             note="600 to swing a shutter; tall so it must not cover a window"),
+             note="500 for a sliding shutter, which is what builders fit; "
+                  "tall, so it must not cover a window"),
         Spec("dresser", "dresser", "wall", optional=True, min_room_m2=15.0, level=1,
              shrink_to=800),
     ),
@@ -170,7 +171,7 @@ RULES: dict[str, tuple[Spec, ...]] = {
              optional=True, min_room_m2=12.0),
         Spec("wardrobe", "wardrobe", "wall", width=1800, prefer=("S", "W"),
              optional=True, min_room_m2=11.0, align="flush", avoid_window=True,
-             clear_front=600, shrink_to=900),
+             clear_front=500, shrink_to=900),
         Spec("dresser", "dresser", "wall", optional=True, min_room_m2=16.0, level=1,
              shrink_to=800),
         Spec("chair", "chair", "corner", optional=True, min_room_m2=20.0, level=2),
@@ -196,8 +197,11 @@ RULES: dict[str, tuple[Spec, ...]] = {
              note="NBC gives 2.8 m2 for a WC+bath; 1.6 is where the pan alone fits"),
         Spec("basin", "sink_b", "wall", clear_front=550, min_room_m2=2.2,
              optional=True, min_gap_to=(("wc", 150),)),
-        Spec("shower", "shower", "corner", optional=True, min_room_m2=3.0,
-             clear_front=0, note="900x900 tray in a corner, no enclosure modelled"),
+        Spec("shower", "shower", "corner", optional=True, min_room_m2=2.8,
+             clear_front=0, avoid_window=False,
+             note="900x900 corner tray. The catalogue calls it 2100 tall, but an "
+                  "Indian shower is a floor zone plus a wall head, so it does "
+                  "not count as a window blocker"),
         Spec("washer_dryer", "washing_machine", "wall", optional=True,
              min_room_m2=6.0, level=1),
     ),
@@ -1421,6 +1425,16 @@ def furnish(plan: Plan, policy: dict[str, Any] | None = None,
                         drops.append((spec, "no seat position free"))
                     continue
                 pl, why = _try_place(ctx, s2, placed)
+                if pl is None and s2.key == "bed" and s2.item == "bed_queen":
+                    # Measured on a 3.9x2.6 m solver bedroom with a door mid-way
+                    # along BOTH long walls: no 1500x2000 + 750 pose survives,
+                    # but a 900x1900 single flush to a corner does. A kid's room
+                    # with a single bed beats an empty room.
+                    s3 = replace(s2, item="bed_twin", clear_front=600,
+                                 note=s2.note + " [fell back to a single]")
+                    pl, why3 = _try_place(ctx, s3, placed)
+                    if pl is not None:
+                        s2, why = s3, why3
                 if pl is None:
                     drops.append((s2, why))
                 else:
