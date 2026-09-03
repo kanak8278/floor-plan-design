@@ -99,6 +99,9 @@ def canon(category: str) -> str:
 # 19% of the carpet area, against a measured real-plan norm of ~4% per bath.
 # Surplus belongs to the habitable rooms.
 SERVICE_TARGET_M2 = {
+    "balcony": 4.0,    # ~4.5 x 1.2 m, the size builder plans actually show
+    "sitout": 5.0,
+    "patio": 6.0,
     "bathroom": 4.0,   # real median 4.64, p25 3.82
     "utility": 3.0,
     "store": 2.5,
@@ -107,6 +110,9 @@ SERVICE_TARGET_M2 = {
     "pooja": 2.5,
 }
 SERVICE_TARGET_CAP_M2 = {
+    "balcony": 7.0,
+    "sitout": 9.0,
+    "patio": 14.0,
     "bathroom": 6.0,   # p85-ish; a master bath with a tub may reach this
     "utility": 5.0,
     "store": 5.0,
@@ -164,9 +170,15 @@ def spec_to_programme(spec: Any, *, relaxed: bool = False
             warn.append(f"dropped room '{getattr(r, 'id', '?')}': "
                         f"unmapped category '{getattr(r, 'category', '')}'")
             continue
-        if key in ("landscape", "shaft", "parking", "patio", "sitout", "balcony"):
+        # Balcony, sitout and patio ARE laid out: they occupy a perimeter cell of
+        # the tiling and the solver already prices "no exterior edge" heavily, so
+        # they land on the facade where they belong. Deferring them is why plans
+        # that explicitly asked for two balconies had none.
+        # Parking and landscape stay deferred -- they are SITE, placed against the
+        # plot boundary by `entrance.place_site_elements`, not tiled with rooms.
+        if key in ("landscape", "shaft", "parking"):
             warn.append(f"deferred '{getattr(r, 'id', '?')}' ({key}): "
-                        "outdoor/service space, not laid out by the rectangular solver")
+                        "site element, placed against the plot boundary instead")
             continue
         t = rt.get(key)
         given = getattr(r, "min_sqft", None)
@@ -209,8 +221,10 @@ def truth_to_programme(truth: Any, *, relaxed: bool = False
         if not t:
             warn.append(f"unknown room type '{key}'")
             continue
-        if key in ("landscape", "shaft", "parking", "patio", "sitout", "balcony", "stair"):
-            warn.append(f"deferred '{key}': not laid out by the rectangular solver")
+        # Same split as above: outdoor ROOMS are tiled, site elements are not.
+        if key in ("landscape", "shaft", "parking", "stair"):
+            warn.append(f"deferred '{key}': site or vertical element, "
+                        "not part of the single-storey room tiling")
             continue
         for i in range(n):
             rid = key if n == 1 else f"{key}{i+1}"
