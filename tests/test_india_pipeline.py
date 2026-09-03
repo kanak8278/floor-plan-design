@@ -4,14 +4,13 @@ Includes negative controls: deliberately corrupted schedules that MUST be reject
 A checker that only ever says yes is worthless.
 """
 import copy, glob, json, os, sys
-sys.path.insert(0, "src")
 from anthropic import Anthropic
 from fpeval.imgclass import classify
 from fpeval.imgcorpus import verify, parse_mm
 from fpeval.plausible import check, canonical
 
-sys.path.insert(0, "tests")
-from extract_probe import SCHEMA, PROMPT, MODEL          # reuse the extraction contract
+# The extraction contract lives in the library, not in a script.
+from fpeval.extract import TOOL as SCHEMA, PROMPT, MODEL
 import base64, mimetypes
 
 client = Anthropic()

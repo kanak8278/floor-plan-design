@@ -1,6 +1,5 @@
 """Classifier gate accuracy on a labelled set with deliberate hard negatives."""
 import json, sys, glob, os
-sys.path.insert(0, "src")
 from fpeval.imgclass import classify
 
 # ground truth from my own inspection of each file

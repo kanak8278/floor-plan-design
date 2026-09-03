@@ -5,7 +5,6 @@ test that runs the whole chain. Interface drift and unit mismatches show up here
 and nowhere else.
 """
 import json, sys, time, xml.etree.ElementTree as ET
-sys.path.insert(0, "src")
 
 from fpeval.bylaws import BENGALURU
 from fpeval.envelope import compute_envelope, CityProfileAdapter, RoomReq

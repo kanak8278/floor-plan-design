@@ -7,7 +7,7 @@ browser list is self-describing.
 from __future__ import annotations
 import argparse, json, sys, time
 from pathlib import Path
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401  (path + cwd)
 
 from fpeval.suite import load_suite
 from fpeval.score import run

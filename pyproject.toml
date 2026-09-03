@@ -10,3 +10,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fpeval"]
+
+[tool.pytest.ini_options]
+# `tests/` holds pytest tests only; runnable CLI tools live in `scripts/`.
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q --strict-markers"
+markers = [
+  "api: hits the Anthropic API and costs money; deselect with -m 'not api'",
+  "slow: takes more than ~30s (CP-SAT sweeps, full-corpus runs)",
+  "corpus: needs data/ResPlan.pkl (246 MB, gitignored)",
+]

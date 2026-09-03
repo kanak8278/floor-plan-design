@@ -1,6 +1,6 @@
 import pickle, sys, json, warnings
 warnings.filterwarnings("ignore")
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401  (path + cwd)
 from fpeval.resplan import convert
 from fpeval.project import to_project
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 40

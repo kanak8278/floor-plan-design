@@ -3,7 +3,7 @@ in the real editor. The editor reads projects from localStorage, which is
 per-browser-profile, so a seeding page is the only way to hand them over."""
 import pickle, json, sys, warnings
 warnings.filterwarnings("ignore")
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401  (path + cwd)
 from fpeval.resplan import convert
 from fpeval.project import to_project
 

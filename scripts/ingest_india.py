@@ -3,7 +3,7 @@
 Prints a per-image verdict plus an aggregate so we can see the real yield.
 """
 import glob, json, os, sys, traceback
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401  (path + cwd)
 from anthropic import Anthropic
 from fpeval.imgclass import classify
 from fpeval.extract import extract
