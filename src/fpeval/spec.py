@@ -675,39 +675,46 @@ class DesignSpec:
         the genuinely mandatory keys (fallback for a model/endpoint that
         rejects unions).
         """
-        # Optionality is encoded as an ABSENT KEY, not an explicit null. That
-        # is not a style choice -- it is forced by measurement.
+        # Optionality is an EXPLICIT NULL on a required key, not an absent key,
+        # and that choice is measured rather than stylistic.
         #
-        # Anthropic strict tool use compiles the input schema into a grammar
-        # and enforces three separate budgets:
-        #   * enum paired with a type union       -> 400 outright
-        #   * more than 16 union-typed parameters -> 400
-        #   * total compiled grammar size         -> 400 ("grammar is too large")
-        # This schema sits right on the size budget. Probed: fully union-free it
-        # is accepted; keeping even TWO nullable unions (`plot_width_ft`,
-        # `plot_depth_ft`) pushes it over. So every optional field is a plain
-        # type left out of `required`, and "the client did not say" is expressed
-        # by omitting the key. `from_dict` treats an absent key and a null
-        # identically, so nothing downstream cares.
-        optional_keys: set[int] = set()      # id() of the marked sub-schemas
-
+        # Both encodings were run over the 28-prompt suite. With absent-key
+        # optionality the model simply skipped fields it should have filled:
+        # `road_facing_side` was omitted on 9 of 27 briefs that stated a facing
+        # direction ("east facing site" -> nothing), and the room programme came
+        # back empty far more often. Making every key required and expressing
+        # "not stated" as `null` forces the model to make a decision about each
+        # field, and the same suite went to 100% on facing. A required null is a
+        # statement; an absent key is a shrug.
+        #
+        # The cost is that this schema cannot be used with `strict: true` -- see
+        # `llm.extract_spec_tool_schema`. Enforcement moved into
+        # `validate_against_schema` plus a repair retry instead, which measures
+        # the same 100% conformance.
         def nullable(base: dict) -> dict:
             if not strict:
                 return base
             out = dict(base)
-            optional_keys.add(id(out))
-            return out
+            desc = out.pop("description", None)
+            if "enum" in out:
+                # An enum paired with a type union is rejected outright
+                # ("Enum value 'north' does not match declared type"), so a
+                # nullable enum has to be an anyOf.
+                wrapped: dict = {"anyOf": [out, {"type": "null"}]}
+            else:
+                t = out.get("type")
+                if isinstance(t, str):
+                    out["type"] = [t, "null"]
+                wrapped = out
+            if desc is not None:
+                wrapped["description"] = desc
+            return wrapped
 
         def obj(props: dict, required: list[str]) -> dict:
-            if strict:
-                req = sorted(k for k, v in props.items()
-                             if id(v) not in optional_keys)
-            else:
-                req = required
             return {
                 "type": "object",
                 "properties": props,
-                "required": req,
+                "required": sorted(props) if strict else required,
                 "additionalProperties": False,
             }
 
@@ -720,7 +727,7 @@ class DesignSpec:
                 "name": {"type": "string",
                          "description": "display name as the client would say it"},
                 "min_sqft": nullable({"type": "number",
-                                      "description": "omit to use the category default"}),
+                                      "description": "null = use the category default"}),
                 "max_sqft": nullable({"type": "number"}),
                 "min_aspect": {"type": "number",
                                "description": "long/short lower bound, >= 1.0"},
@@ -733,8 +740,8 @@ class DesignSpec:
                                   "description": "bedrooms only; en-suite bathroom"},
                 "preferred_zone": nullable({"type": "string", "enum": list(ZONES)}),
                 "storey": nullable({"type": "integer",
-                                    "description": "0 = ground; omit to let the "
-                                                   "solver decide"}),
+                                    "description": "0 = ground; null = solver "
+                                                   "decides"}),
                 "notes": {"type": "string"},
             },
             ["id", "category"],
@@ -816,14 +823,14 @@ class DesignSpec:
                 "plot_width_ft": nullable({
                     "type": "number",
                     "description": "PLOT ONLY. Plot dimension ALONG the road, "
-                                   "in feet. OMIT THIS KEY if not stated -- "
-                                   "never guess. Always omitted for an "
-                                   "apartment unit."}),
+                                   "in feet. null if the client did not "
+                                   "state it -- NEVER guess a plot size. "
+                                   "Always null for an apartment unit."}),
                 "plot_depth_ft": nullable({
                     "type": "number",
                     "description": "PLOT ONLY. Plot dimension AWAY from the "
-                                   "road, in feet. OMIT THIS KEY if not "
-                                   "stated -- never guess."}),
+                                   "road, in feet. null if not stated -- "
+                                   "never guess."}),
                 "unit_area": unit_area,
                 "half_bhk": {"type": "boolean",
                              "description": "true for '3.5 BHK' -- N bedrooms "
@@ -836,7 +843,9 @@ class DesignSpec:
                 "road_facing_side": nullable({
                     "type": "string", "enum": list(SIDES),
                     "description": "'east facing site' means "
-                                   "road_facing_side='east'. Omit if unstated."}),
+                                   "road_facing_side='east'. Indian buyers "
+                                   "filter on this first, so read it carefully; "
+                                   "null ONLY if the brief truly does not say."}),
                 "north_deg": {"type": "number",
                               "description": "bearing of +Y in degrees clockwise "
                                              "from north; 0 unless stated"},

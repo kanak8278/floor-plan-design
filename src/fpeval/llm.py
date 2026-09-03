@@ -426,8 +426,8 @@ First decide what kind of site this is:
 - An independent house on land -> site_kind="plot", with plot_width_ft and
   plot_depth_ft in feet.
 - A flat in a tower -> site_kind="apartment_unit". There is NO plot. Leave
-  plot_width_ft and plot_depth_ft out entirely and put the quoted area in
-  unit_area instead. Do not invent a plot for an apartment: it would hand the solver a
+  plot_width_ft and plot_depth_ft null and put the quoted area in unit_area
+  instead. Do not invent a plot for an apartment: it would hand the solver a
   fictional site and make every setback and coverage rule meaningless.
 
 Vocabulary you must read correctly:
@@ -472,13 +472,12 @@ Vocabulary you must read correctly:
 
 Hard rules:
 1. NEVER invent a plot size. If the client did not state plot dimensions, set
-   OMIT plot_width_ft and plot_depth_ft entirely and ASK for them, listing
-   the question in BOTH clarifying_questions and blocking_questions. Omitting an
-   optional key is how this schema says "not stated" -- there are no nulls.
-   Guessing a plot size silently produces a plan for a plot that does not
-   exist. The same applies to road_facing_side. For an apartment unit, omitted
-   plot dimensions are CORRECT and need no question -- ask for the carpet area
-   instead if no area was quoted.
+   set plot_width_ft and plot_depth_ft to null and ASK for them with
+   blocking=true. Guessing a plot size silently produces a plan for a plot that
+   does not exist. The same applies to road_facing_side: null if unstated. But
+   null means "the brief does not say" -- if the brief DOES say "east facing",
+   fill it in. For an apartment unit, null plot dimensions are CORRECT and need
+   no question; ask for the carpet area instead if no area was quoted.
 1a. Facing direction is how Indian buyers filter first ("east facing 3BHK"), so
    treat it as a primary field, not an afterthought. For an apartment unit,
    road_facing_side means the main window/balcony orientation.
@@ -486,11 +485,20 @@ Hard rules:
    (gym, home theatre, cellar), put the closest category and explain in notes.
 3. Areas are square feet of CARPET area and are RANGES, not targets. If the
    client gives a size ("12x14 master"), centre a range on it (about +/-12%).
-   If they give no size, omit min_sqft/max_sqft and let the defaults apply.
+   If they give no size, use null for min_sqft/max_sqft and the category
+   defaults apply.
 4. Record adjacency the client actually asked for, plus prohibitions they imply
    ("toilet must not be next to the kitchen/pooja"). Do not pad the list with
    generic best practice.
-5. clarifying_questions are for things that materially change the plan and that
+5. The `rooms` array must NEVER be empty. Every brief implies at least a
+   living space and a kitchen, and an empty programme is the single most common
+   way this task is failed. If the brief is vague, emit your best-guess
+   programme AND ask about it -- never emit nothing.
+6. attached_bath applies to bedrooms only. A servant room with its own toilet
+   is a separate "toilet" room, not attached_bath on the servant room.
+7. Adjacency endpoints must be room ids from your own `rooms` array, or a bare
+   category name. Never a compass zone, and never a room related to itself.
+8. clarifying_questions are for things that materially change the plan and that
    you genuinely cannot infer. A fully specified brief gets an empty list. Do
    not ask about things you have already assumed -- put those in assumptions.
 """
@@ -505,41 +513,69 @@ SPEC_META_KEYS = ("clarifying_questions", "blocking_questions", "assumptions",
                   "underdetermined")
 
 
-def extract_spec_tool_schema(strict: bool = True) -> dict:
-    """The spec schema with the meta fields merged in FLAT at the top level.
+def extract_spec_tool_schema(strict: bool = False) -> dict:
+    """Tool schema for spec extraction: the spec plus the questions it raises.
 
-    Not a nested `{"spec": {...}, "clarifying_questions": [...]}` object, which
-    is the obvious shape. Measured: nesting the spec schema one level deeper
-    pushes the compiled strict grammar over its size budget and the request
-    400s with "The compiled grammar is too large", while the same properties
-    merged flat are accepted. The spec keys and the meta keys do not collide,
-    and `DesignSpec.from_dict` ignores keys it does not know, so the flat
-    payload deserialises directly.
+    `strict` defaults to False, and that is a measured decision, not laziness.
+    Strict tool use compiles the schema into a grammar with three hard budgets
+    (enum-plus-union rejected outright, >16 union-typed parameters rejected,
+    and a total grammar size cap). Probed against the real API:
+
+      * the bare spec schema with nullable unions -- ACCEPTED, at the size cap
+      * the same schema nested under a "spec" key -- 400 "grammar is too large"
+      * flat-merged with the four meta fields     -- 400, same error
+      * union-free (absent-key optionality)       -- ACCEPTED
+
+    So strict is only reachable by giving up explicit nulls, and giving those up
+    cost real accuracy: on the 28-prompt suite the union-free encoding dropped
+    `road_facing_side` on 9 of 27 briefs that stated it, because omitting an
+    optional key is easier for the model than filling a required nullable one.
+
+    Non-strict keeps the better encoding and loses nothing measurable: the reply
+    is checked against this schema locally, a failure is fed back as a
+    tool_result error, and the retry fixes it -- 100% conformance on the same
+    suite. `strict=True` is kept for the day the limits rise, and `call_tool`
+    degrades automatically if the API refuses it.
     """
-    strs = {"type": "array", "items": {"type": "string"}}
-    schema = DesignSpec.to_json_schema(strict=strict)
-    schema = json.loads(json.dumps(schema))     # defensive copy
-    schema["properties"].update({
-        "clarifying_questions": dict(strs, description=(
-            "Every question worth asking the client. Empty if the brief is "
-            "fully determined.")),
-        "blocking_questions": dict(strs, description=(
-            "The subset of clarifying_questions the solver CANNOT run without "
-            "-- e.g. no plot size on a plot-based house. A question here halts "
-            "the pipeline, so do not put merely nice-to-know questions in it. "
-            "Repeat the question text verbatim.")),
-        "assumptions": dict(strs, description=(
-            "Defaults you applied that the client did not state.")),
+    spec_schema = DesignSpec.to_json_schema(strict=True)
+    props = {
+        "spec": spec_schema,
+        "clarifying_questions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "blocking": {
+                        "type": "boolean",
+                        "description": "True ONLY if the solver cannot run "
+                                       "without the answer (e.g. no plot size "
+                                       "on a plot-based house). A blocking "
+                                       "question halts the pipeline. False for "
+                                       "questions that would merely improve "
+                                       "the design.",
+                    },
+                },
+                "required": ["question", "blocking"],
+                "additionalProperties": False,
+            },
+            "description": "Empty if the brief is fully determined.",
+        },
+        "assumptions": {
+            "type": "array", "items": {"type": "string"},
+            "description": "Defaults you applied that the client did not state.",
+        },
         "underdetermined": {
             "type": "boolean",
             "description": "True if the brief lacks information the solver needs.",
         },
-    })
-    if strict:
-        schema["required"] = sorted(set(schema["required"]) | set(SPEC_META_KEYS))
-    else:
-        schema["required"] = sorted(set(schema["required"]) | {"rooms"})
-    return schema
+    }
+    return {
+        "type": "object",
+        "properties": props,
+        "required": sorted(props),
+        "additionalProperties": False,
+    }
 
 
 MISSING_PLOT_QUESTION = (
@@ -557,7 +593,7 @@ def extract_spec(
     client: Any = None,
     usage: Optional[UsageLog] = None,
     max_attempts: int = 3,
-    strict: bool = True,
+    strict: bool = False,      # see extract_spec_tool_schema for why
     enforce_questions: bool = True,
     effort: str = "high",
 ) -> tuple[DesignSpec, list[str]]:
@@ -599,9 +635,7 @@ def extract_spec(
             strict=strict,
             effort=effort,
         )
-        # The payload is flat (see extract_spec_tool_schema); from_dict drops
-        # the meta keys it does not recognise.
-        spec = DesignSpec.from_dict(payload)
+        spec = DesignSpec.from_dict(payload.get("spec") or {})
         if spec.rooms:
             break
         violations.append("empty room programme returned")
@@ -610,15 +644,18 @@ def extract_spec(
                 "brief implies at least a living space and a kitchen. Emit the "
                 "full programme this time.")
 
-    questions = [str(q).strip() for q in
-                 (payload.get("clarifying_questions") or []) if str(q).strip()]
-    blocking = [str(q).strip() for q in
-                (payload.get("blocking_questions") or []) if str(q).strip()]
-    # A blocking question that is not in the question list is still a blocking
-    # question; keep the union so nothing is silently dropped.
-    for b in blocking:
-        if b not in questions:
-            questions.append(b)
+    questions: list[str] = []
+    blocking: list[str] = []
+    for q in payload.get("clarifying_questions") or []:
+        if isinstance(q, dict):
+            text, is_blocking = str(q.get("question") or ""), bool(q.get("blocking"))
+        else:
+            text, is_blocking = str(q), True
+        if not text.strip():
+            continue
+        questions.append(text.strip())
+        if is_blocking:
+            blocking.append(text.strip())
 
     if spec.plot_width_ft is None or spec.plot_depth_ft is None:
         if not blocking:

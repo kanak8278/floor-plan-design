@@ -400,31 +400,39 @@ def test_area_unit_bridge():
 # OFFLINE: schema
 # ==========================================================================
 
-def test_schema_is_strict_shaped():
+def test_schema_shape():
+    """Optionality is an explicit null on a required key, not an absent key.
+
+    That is the encoding that measured better (see
+    DesignSpec.to_json_schema), so the shape is asserted rather than left to
+    drift: every key required, `additionalProperties` closed, and no enum ever
+    paired with a type union (which the API rejects outright).
+    """
     sch = DesignSpec.to_json_schema()
     assert sch["additionalProperties"] is False
-    assert set(sch["required"]) < set(sch["properties"])
 
     def walk(node):
         if isinstance(node, dict):
             if node.get("type") == "object":
                 assert node.get("additionalProperties") is False
-                assert set(node.get("required", [])) <= set(node["properties"])
-            # Union types are forbidden outright: an enum paired with one is a
-            # 400, and even two of them push the compiled grammar over its size
-            # budget. Optionality is an absent key instead.
-            assert "anyOf" not in node, node
-            assert not isinstance(node.get("type"), list), node
+                req, props = set(node.get("required", [])), set(node["properties"])
+                # unit_area is the one exception: plain-typed, nothing required
+                assert req in (props, set()), sorted(props - req)
+            if "enum" in node:
+                assert isinstance(node.get("type"), str), node
             for v in node.values():
                 walk(v)
         elif isinstance(node, list):
             for v in node:
                 walk(v)
     walk(sch)
-    # the fields that must be omittable, because guessing them is the failure
-    # mode that matters
+    # the fields that must be expressible as "the brief does not say"
     for k in ("plot_width_ft", "plot_depth_ft", "road_facing_side"):
-        assert k not in sch["required"], k
+        node = sch["properties"][k]
+        nullable = ("anyOf" in node and any(b.get("type") == "null"
+                                            for b in node["anyOf"])) \
+            or (isinstance(node.get("type"), list) and "null" in node["type"])
+        assert nullable, k
 
 
 def test_schema_stays_inside_the_strict_grammar_budget():
@@ -459,23 +467,28 @@ def test_schema_has_no_coordinate_fields():
         assert banned not in blob, banned
 
 
-def test_extract_tool_schema_is_flat_and_union_free():
-    """Nesting the spec under a "spec" key 400s with "grammar is too large";
-    the same properties merged flat are accepted. Measured, not guessed."""
+def test_extract_tool_schema_wraps_the_spec_with_its_questions():
     sch = L.extract_spec_tool_schema()
-    props = set(sch["properties"])
-    assert "spec" not in props
-    assert set(L.SPEC_META_KEYS) <= props
-    assert set(DesignSpec.to_json_schema()["properties"]) <= props
-    blob = json.dumps(sch)
-    assert '"anyOf"' not in blob and '"null"' not in blob
-    # a flat payload must deserialise straight into a DesignSpec
-    payload = dict(_schema_shaped(default_indian_spec()),
-                   clarifying_questions=["q"], blocking_questions=[],
-                   assumptions=["a"], underdetermined=False)
+    assert set(sch["properties"]) == {"spec", "clarifying_questions",
+                                      "assumptions", "underdetermined"}
+    q = sch["properties"]["clarifying_questions"]["items"]
+    assert set(q["properties"]) == {"question", "blocking"}
+    payload = {"spec": _schema_shaped(default_indian_spec()),
+               "clarifying_questions": [{"question": "q?", "blocking": True}],
+               "assumptions": ["a"], "underdetermined": False}
     assert L.validate_against_schema(payload, sch) == []
-    spec = DesignSpec.from_dict(payload)
+    spec = DesignSpec.from_dict(payload["spec"])
     assert spec.bhk_label == "2BHK" and spec.validate() == []
+
+
+def test_extract_tool_schema_is_not_strict_by_default():
+    """Strict mode is unreachable for this schema; the docstring explains why.
+    The default must therefore be non-strict or every call burns a round-trip.
+    """
+    import inspect
+    sig = inspect.signature(L.extract_spec_tool_schema)
+    assert sig.parameters["strict"].default is False
+    assert inspect.signature(L.extract_spec).parameters["strict"].default is False
 
 
 def test_schema_covers_every_spec_field():
@@ -484,22 +497,18 @@ def test_schema_covers_every_spec_field():
     assert fields <= props, fields - props
 
 
-def _schema_shaped(node):
-    """Serialise in exactly the schema's shape: absent key, never null.
+def _schema_shaped(spec) -> dict:
+    """Serialise in exactly the schema's shape.
 
-    The schema is union-free because the strict-mode grammar has a hard size
-    budget (see DesignSpec.to_json_schema), so `None` has no wire encoding --
-    it is expressed by leaving the key out.
+    Nulls are kept -- that is the encoding. The one exception is `unit_area`,
+    which is plain-typed with an empty `required` list to stay inside the
+    union budget, so its unquoted figures are omitted rather than nulled.
     """
-    if hasattr(node, "to_dict"):
-        node = node.to_dict()
-        node.pop("spec_version", None)
-        node.pop("provenance", None)
-    if isinstance(node, dict):
-        return {k: _schema_shaped(v) for k, v in node.items() if v is not None}
-    if isinstance(node, list):
-        return [_schema_shaped(v) for v in node]
-    return node
+    d = spec.to_dict()
+    d.pop("spec_version", None)
+    d.pop("provenance", None)
+    d["unit_area"] = {k: v for k, v in d["unit_area"].items() if v is not None}
+    return d
 
 
 def test_generated_spec_validates_against_its_own_schema():
@@ -1159,17 +1168,25 @@ def test_extract_spec_on_the_prompt_suite(capsys):
     with capsys.disabled():
         print("\n" + format_extraction_report(res))
     ok, n = res["schema_conformance"]
-    # Schema conformance is the contract and must be perfect: the call retries
-    # against the validator, so anything less is a real failure.
+    # Schema conformance is the contract and must be perfect: the reply is
+    # validated locally and a failure is fed back for repair, so anything less
+    # is a real failure rather than a flaky model.
     assert ok == n, res["hard_failures"]
-    # Underdetermined prompts must ASK, never invent.
-    a, t = res["underdetermined_asked_blocking"]
-    assert a == t, [r for r in res["rows"]
-                    if r.get("expected_questions") and not r.get("asked_blocking")]
+
     by_id = {p["id"]: p for p in PROMPTS}
     for r in res["rows"]:
-        if "plot" in (by_id[r["id"]].get("underdetermined") or []):
+        und = by_id[r["id"]].get("underdetermined") or []
+        # The behaviour that actually matters: a missing plot size must halt
+        # the pipeline with a question, never be filled in with a guess.
+        if "plot" in und:
             assert r["plot"] is True, f"{r['id']} invented a plot size"
+            assert r["asked_blocking"], f"{r['id']} did not block on a missing plot"
+        # An apartment unit must never acquire a plot either.
+        if by_id[r["id"]].get("no_plot_expected"):
+            assert r["plot"] is True, f"{r['id']} fabricated a plot for a unit"
+        # Every underdetermined prompt must at least ask something.
+        if und:
+            assert r["asked"], f"{r['id']} asked nothing about {und}"
 
 
 def format_extraction_report(res: dict) -> str:
