@@ -38,6 +38,10 @@ MM_PER_FT = 304.8
 # --------------------------------------------------------------------------
 
 SIDES = ("north", "east", "south", "west")
+# An apartment unit has no plot. Faking one would put the solver on a fictional
+# site and make every setback and coverage check meaningless, so the two cases
+# are distinguished explicitly and validate() demands different things of each.
+SITE_KINDS = ("plot", "apartment_unit")
 ZONES = ("N", "NE", "E", "SE", "S", "SW", "W", "NW", "centre")
 WET_GROUPING = ("required", "preferred", "indifferent")
 VASTU_STRICTNESS = ("none", "advisory", "strict")
@@ -80,10 +84,16 @@ ROOM_CATEGORIES: dict[str, CategoryInfo] = {
     "staircase":      CategoryInfo(55, 120, max_aspect=2.6),
     "foyer":          CategoryInfo(20, 65, max_aspect=2.4),
     "corridor":       CategoryInfo(15, 100, max_aspect=6.0),
+    # From measured Bengaluru builder unit plans: PDR (powder room), HANDWASH,
+    # PHE SHAFT / HVAC platform. Absent from western datasets, load-bearing here.
+    "powder":         CategoryInfo(14, 32, wet=True, max_aspect=2.0),
+    "handwash":       CategoryInfo(6, 18, wet=True, max_aspect=2.4),
+    "shaft":          CategoryInfo(4, 24, max_aspect=4.0),
     # outdoor / semi-outdoor
     "balcony":        CategoryInfo(24, 90, outdoor=True, max_aspect=4.0),
     "sit_out":        CategoryInfo(35, 130, outdoor=True, max_aspect=3.0),
     "terrace":        CategoryInfo(60, 400, outdoor=True, max_aspect=4.0),
+    "patio":          CategoryInfo(40, 200, outdoor=True, max_aspect=3.0),
     "parking":        CategoryInfo(120, 260, outdoor=True, max_aspect=2.6),
     "garage":         CategoryInfo(150, 280, max_aspect=2.4),
 }
@@ -103,28 +113,38 @@ BEDROOM_CATEGORIES = frozenset({"bedroom", "master_bedroom", "guest_bedroom"})
 # 0.60 wrongly rejected a perfectly ordinary 2BHK on a 600 sqft plot. The tier
 # multipliers below correct for that.
 CITY_PROFILES: dict[str, dict[str, float]] = {
-    "generic_in":  {"coverage": 0.60, "far": 1.75},
-    "bengaluru":   {"coverage": 0.60, "far": 1.75},
-    "chennai":     {"coverage": 0.60, "far": 1.50},
-    "hyderabad":   {"coverage": 0.65, "far": 2.00},
-    "pune":        {"coverage": 0.55, "far": 1.50},
-    "mumbai":      {"coverage": 0.55, "far": 1.33},
-    "delhi":       {"coverage": 0.65, "far": 1.80},
-    "ahmedabad":   {"coverage": 0.60, "far": 1.80},
-    "kochi":       {"coverage": 0.60, "far": 2.00},
-    "kolkata":     {"coverage": 0.60, "far": 1.75},
-    "jaipur":      {"coverage": 0.65, "far": 1.75},
-    "lucknow":     {"coverage": 0.60, "far": 1.75},
-    "coimbatore":  {"coverage": 0.60, "far": 1.50},
+    # bengaluru is MEASURED off BBMP for a 1200 sqft plot (front 0.9 m, rear
+    # 0.7 m, one side 0.7 m => ~0.80 geometric, capped at the stated 75%
+    # coverage; FAR 1.75). The rest are estimates of the same shape and should
+    # be replaced by bylaws.py's real tables when that lands.
+    "generic_in":  {"coverage": 0.70, "far": 1.75},
+    "bengaluru":   {"coverage": 0.75, "far": 1.75},
+    "chennai":     {"coverage": 0.65, "far": 1.50},
+    "hyderabad":   {"coverage": 0.70, "far": 2.00},
+    "pune":        {"coverage": 0.62, "far": 1.50},
+    "mumbai":      {"coverage": 0.60, "far": 1.33},
+    "delhi":       {"coverage": 0.70, "far": 1.80},
+    "ahmedabad":   {"coverage": 0.68, "far": 1.80},
+    "kochi":       {"coverage": 0.65, "far": 2.00},
+    "kolkata":     {"coverage": 0.65, "far": 1.75},
+    "jaipur":      {"coverage": 0.70, "far": 1.75},
+    "lucknow":     {"coverage": 0.65, "far": 1.75},
+    "coimbatore":  {"coverage": 0.65, "far": 1.50},
 }
 
 # (plot area upper bound in sqft, coverage multiplier relative to the city value)
+# The city value is calibrated at the modal 1200 sqft plot, so that tier is 1.0.
 COVERAGE_TIERS: tuple[tuple[float, float], ...] = (
-    (800, 1.33),     # <=800 sqft: minimal setbacks, ~0.80 of a 0.60 city
-    (1500, 1.17),    # 800-1500 sqft: ~0.70
-    (2500, 1.03),    # 1500-2500 sqft: ~0.62
-    (float("inf"), 0.97),
+    (800, 1.10),     # <=800 sqft: setbacks relax further
+    (1500, 1.00),    # 800-1500 sqft: the calibration point
+    (2500, 0.90),
+    (float("inf"), 0.80),
 )
+
+# The impossibility check runs on a heuristic coverage, so it is given slack:
+# it must only fire when the programme is *clearly* unbuildable, never on a
+# merely tight one. Tight cases are advisories instead.
+IMPOSSIBLE_SLACK = 1.15
 
 
 def coverage_for(city_profile: str, plot_area_sqft: float) -> float:
@@ -214,6 +234,46 @@ class Adjacency:
 
 
 @dataclass
+class AreaQuote:
+    """The Indian area stack, as builders quote it and buyers reason in it.
+
+    Measured from real Bengaluru builder sheets: a 2BHK quoted saleable 1150 /
+    carpet 785 / RERA carpet 733 sqft. The loading factor (super built-up over
+    carpet) runs about 1.25-1.75, so a saleable figure alone tells the solver
+    almost nothing -- it must be resolved to carpet before use, and which
+    figure the client quoted must be recorded rather than guessed at.
+    """
+    saleable_sqft: Optional[float] = None
+    super_builtup_sqft: Optional[float] = None
+    builtup_sqft: Optional[float] = None
+    carpet_sqft: Optional[float] = None
+    rera_carpet_sqft: Optional[float] = None
+    balcony_sqft: Optional[float] = None
+    loading_factor: Optional[float] = None      # super built-up / carpet
+    quoted_as: Optional[str] = None             # which figure the client gave
+
+    DEFAULT_LOADING = 1.40                      # midpoint of the measured range
+
+    def resolved_carpet_sqft(self) -> Optional[float]:
+        """Best available carpet area. This is the only figure the solver can use."""
+        if self.carpet_sqft:
+            return self.carpet_sqft
+        if self.rera_carpet_sqft:
+            return self.rera_carpet_sqft
+        if self.builtup_sqft:
+            return self.builtup_sqft / 1.10     # built-up includes wall thickness
+        gross = self.super_builtup_sqft or self.saleable_sqft
+        if gross:
+            return gross / (self.loading_factor or self.DEFAULT_LOADING)
+        return None
+
+    def is_empty(self) -> bool:
+        return all(getattr(self, f) is None for f in
+                   ("saleable_sqft", "super_builtup_sqft", "builtup_sqft",
+                    "carpet_sqft", "rera_carpet_sqft"))
+
+
+@dataclass
 class EntranceSpec:
     side: Optional[str] = None          # north | east | south | west
     zone: Optional[str] = None          # finer: "NE" corner of the east face
@@ -243,9 +303,19 @@ class DesignSpec:
     clarifying question, never an invented 30x40.
     """
     # -- site ---------------------------------------------------------------
-    plot_width_ft: Optional[float] = None     # dimension along the road
-    plot_depth_ft: Optional[float] = None     # dimension away from the road
-    road_facing_side: Optional[str] = None    # "east" == "east facing site"
+    # `site_kind` decides which of the next two groups is meaningful. A
+    # plot-based house has plot dimensions and setbacks; an apartment unit has
+    # neither (there is no plot -- it is one unit in a tower) and is bounded by
+    # a quoted area instead. Inventing a plot for an apartment would hand the
+    # solver a fictional site and silently invalidate every setback, coverage
+    # and FAR check, so the two are kept distinct.
+    site_kind: str = "plot"
+    plot_width_ft: Optional[float] = None     # plot only: dimension along road
+    plot_depth_ft: Optional[float] = None     # plot only: depth from road
+    road_facing_side: Optional[str] = None    # "east" == "east facing site";
+                                              # for a unit, the main
+                                              # window/balcony orientation
+    unit_area: AreaQuote = field(default_factory=AreaQuote)   # unit only
     north_deg: float = 0.0                    # bearing of +Y, deg CW from north
     city_profile: str = "generic_in"
     corner_plot: bool = False
@@ -260,6 +330,11 @@ class DesignSpec:
     # -- style / soft --------------------------------------------------------
     style_pack: str = "default_in"
     vastu: VastuSpec = field(default_factory=VastuSpec)
+    # "3.5 BHK" is a real market label: three bedrooms plus a half -- a den or
+    # study too small to sell as a bedroom. Recorded as a flag rather than
+    # rounded away, because rounding it changes the programme.
+    half_bhk: bool = False
+    unit_label: str = ""                      # verbatim, e.g. "3 BHK + 2 T - TYPE 3 G"
     budget_band: Optional[str] = None         # e.g. "25-35L", "economy", "premium"
     family: Optional[str] = None              # e.g. "couple + 2 kids + parents"
     notes: str = ""
@@ -302,11 +377,30 @@ class DesignSpec:
         """The Indian shorthand this programme corresponds to."""
         return f"{self.bedroom_count}BHK"
 
+    @property
+    def is_apartment_unit(self) -> bool:
+        return self.site_kind == "apartment_unit"
+
     def estimated_buildable_sqft(self) -> Optional[float]:
+        """Enclosed floor area the programme has to fit into.
+
+        Plot: plot area x coverage x storeys. Apartment unit: the resolved
+        carpet area, since there is no plot to apply coverage to.
+        """
+        if self.is_apartment_unit:
+            return self.unit_area.resolved_carpet_sqft()
         area = self.plot_area_sqft
         if area is None:
             return None
         return area * coverage_for(self.city_profile, area) * max(self.storeys, 1)
+
+    @property
+    def bhk_label_full(self) -> str:
+        """The market label: "3.5 BHK + 2T"."""
+        n = self.bedroom_count
+        beds = f"{n}.5" if self.half_bhk else str(n)
+        t = len(self.rooms_of("bathroom", "toilet", "powder"))
+        return f"{beds} BHK" + (f" + {t}T" if t else "")
 
     def required_min_sqft(self) -> float:
         """Sum of minimum areas of non-optional rooms, outdoor excluded."""
@@ -327,7 +421,38 @@ class DesignSpec:
         errs: list[str] = []
 
         # --- site ---------------------------------------------------------
-        if self.plot_width_ft is None or self.plot_depth_ft is None:
+        if self.site_kind not in SITE_KINDS:
+            errs.append(f"site_kind={self.site_kind!r} not one of {SITE_KINDS}")
+        elif self.is_apartment_unit:
+            # No plot exists, so demanding plot dimensions would be wrong. What
+            # bounds the problem instead is the quoted area.
+            if self.unit_area.is_empty():
+                errs.append("apartment unit with no area quoted: give at least "
+                            "one of carpet/RERA carpet/built-up/super built-up/"
+                            "saleable sqft")
+            if self.plot_width_ft is not None or self.plot_depth_ft is not None:
+                errs.append("apartment unit must not carry plot dimensions; "
+                            "there is no plot")
+            if self.storeys != 1:
+                errs.append(f"apartment unit with storeys={self.storeys}; a unit "
+                            "spanning floors needs site_kind='plot' or a duplex "
+                            "unit model this spec does not have")
+            lf = self.unit_area.loading_factor
+            if lf is not None and not (1.05 <= lf <= 2.0):
+                errs.append(f"loading_factor={lf} outside the plausible "
+                            "1.05..2.0 (measured market range is 1.25-1.75)")
+            for a, b in (("carpet_sqft", "builtup_sqft"),
+                         ("builtup_sqft", "super_builtup_sqft"),
+                         ("super_builtup_sqft", "saleable_sqft")):
+                va, vb = getattr(self.unit_area, a), getattr(self.unit_area, b)
+                if va and vb and va > vb:
+                    errs.append(f"unit_area.{a}={va} exceeds {b}={vb}; the area "
+                                "stack must be non-decreasing")
+            rc, c = self.unit_area.rera_carpet_sqft, self.unit_area.carpet_sqft
+            if rc and c and rc > c:
+                errs.append(f"unit_area.rera_carpet_sqft={rc} exceeds "
+                            f"carpet_sqft={c}")
+        elif self.plot_width_ft is None or self.plot_depth_ft is None:
             errs.append("plot dimensions unknown: plot_width_ft/plot_depth_ft "
                         "must both be given before solving")
         else:
@@ -423,6 +548,7 @@ class DesignSpec:
         if e.zone is not None and e.zone not in ZONES:
             errs.append(f"entrance.zone={e.zone!r} not one of {ZONES}")
         if (e.side and self.road_facing_side and not self.corner_plot
+                and not self.is_apartment_unit
                 and e.side != self.road_facing_side):
             errs.append(f"entrance.side={e.side!r} is not the road-facing side "
                         f"{self.road_facing_side!r} on a non-corner plot: "
@@ -441,16 +567,21 @@ class DesignSpec:
         # --- impossible totals --------------------------------------------
         buildable = self.estimated_buildable_sqft()
         need = self.required_min_sqft()
-        if buildable is not None and need > buildable:
+        if buildable is not None and need > buildable * IMPOSSIBLE_SLACK:
+            where = ("the quoted unit area"
+                     if self.is_apartment_unit
+                     else f"a {self.plot_width_ft:.0f}x{self.plot_depth_ft:.0f} ft "
+                          f"plot over {self.storeys} storey(s) at "
+                          f"{self.city_profile} coverage")
             errs.append(
                 f"programme cannot fit: required minimum {need:.0f} sqft of "
                 f"enclosed rooms exceeds the ~{buildable:.0f} sqft buildable on "
-                f"a {self.plot_width_ft:.0f}x{self.plot_depth_ft:.0f} ft plot "
-                f"over {self.storeys} storey(s) at {self.city_profile} coverage"
+                f"{where}"
             )
 
         # --- multi-storey coherence ---------------------------------------
-        if self.storeys > 1 and not self.rooms_of("staircase"):
+        if self.storeys > 1 and not self.is_apartment_unit \
+                and not self.rooms_of("staircase"):
             errs.append(f"storeys={self.storeys} but the programme has no staircase")
 
         return errs
@@ -476,7 +607,17 @@ class DesignSpec:
         if self.vastu.enabled and not self.vastu.requirements:
             out.append("vastu enabled but no specific requirements listed")
         if self.road_facing_side is None:
-            out.append("road_facing_side unknown; entrance placement is unconstrained")
+            out.append("road_facing_side unknown; entrance placement is "
+                       "unconstrained (buyers filter on facing first, so this "
+                       "is usually worth asking about)")
+        if self.half_bhk and not self.rooms_of("study", "office", "store"):
+            out.append("half_bhk set but no study/den room in the programme")
+        if self.is_apartment_unit and self.unit_area.quoted_as in (
+                "saleable", "super_builtup") and not self.unit_area.carpet_sqft:
+            out.append(f"only a {self.unit_area.quoted_as} figure was quoted; "
+                       "carpet was derived with a "
+                       f"{self.unit_area.loading_factor or AreaQuote.DEFAULT_LOADING}"
+                       " loading factor and could be off by ~20%")
         if self.plot_area_sqft and self.plot_area_sqft < 600 and nbed >= 3:
             out.append(f"{nbed}BHK on a {self.plot_area_sqft:.0f} sqft plot is "
                        "aggressive for the Indian market")
@@ -505,6 +646,9 @@ class DesignSpec:
         ent = d.pop("entrance", None) or {}
         entrance = EntranceSpec(**{k: v for k, v in ent.items()
                                    if k in EntranceSpec.__dataclass_fields__})
+        ua = d.pop("unit_area", None) or {}
+        unit_area = AreaQuote(**{k: v for k, v in ua.items()
+                                 if k in AreaQuote.__dataclass_fields__})
         vas = d.pop("vastu", None) or {}
         vastu = VastuSpec(**{k: v for k, v in vas.items()
                              if k in VastuSpec.__dataclass_fields__})
@@ -512,11 +656,12 @@ class DesignSpec:
         kept.pop("rooms", None)
         # None must not clobber a non-Optional default
         for k in ("north_deg", "city_profile", "wet_grouping", "storeys",
-                  "style_pack", "spec_version", "corner_plot", "notes"):
+                  "style_pack", "spec_version", "corner_plot", "notes",
+                  "site_kind", "half_bhk", "unit_label"):
             if kept.get(k) is None:
                 kept.pop(k, None)
         return cls(rooms=rooms, adjacency=adjacency, entrance=entrance,
-                   vastu=vastu, **kept)
+                   vastu=vastu, unit_area=unit_area, **kept)
 
     # ---------------------------------------------------------------- schema
     @staticmethod
@@ -626,16 +771,61 @@ class DesignSpec:
             ["enabled", "strictness"],
         )
 
+        # NOTE: these eight are plain-typed with an EMPTY `required` list, not
+        # nullable unions. The strict-mode union budget is 16 across the whole
+        # schema and the rest of the spec already spends 12; encoding "not
+        # quoted" as an absent key rather than an explicit null keeps us inside
+        # it. `AreaQuote` defaults every field to None, so an absent key and a
+        # null mean the same thing on the way in.
+        unit_area = {
+            "type": "object",
+            "properties": {
+                "saleable_sqft": {"type": "number"},
+                "super_builtup_sqft": {"type": "number"},
+                "builtup_sqft": {"type": "number"},
+                "carpet_sqft": {"type": "number"},
+                "rera_carpet_sqft": {"type": "number"},
+                "balcony_sqft": {"type": "number"},
+                "loading_factor": {
+                    "type": "number",
+                    "description": "super built-up / carpet, typically 1.25-1.75"},
+                "quoted_as": {
+                    "type": "string",
+                    "enum": ["saleable", "super_builtup", "builtup", "carpet",
+                             "rera_carpet"],
+                    "description": "which figure the client actually quoted"},
+            },
+            "required": [],
+            "additionalProperties": False,
+            "description": "Apartment units only. Omit any figure the client "
+                           "did not quote. Empty for a plot-based house.",
+        }
+
         return obj(
             {
+                "site_kind": {
+                    "type": "string", "enum": list(SITE_KINDS),
+                    "description": "'plot' for an independent house on land; "
+                                   "'apartment_unit' for a flat in a tower, "
+                                   "which has NO plot and NO setbacks"},
                 "plot_width_ft": nullable({
                     "type": "number",
-                    "description": "plot dimension ALONG the road, in feet. "
-                                   "null if the client did not state it -- never guess."}),
+                    "description": "PLOT ONLY. Plot dimension ALONG the road, in "
+                                   "feet. null if not stated -- never guess. "
+                                   "Always null for an apartment unit."}),
                 "plot_depth_ft": nullable({
                     "type": "number",
-                    "description": "plot dimension AWAY from the road, in feet. "
-                                   "null if not stated -- never guess."}),
+                    "description": "PLOT ONLY. Plot dimension AWAY from the road, "
+                                   "in feet. null if not stated -- never guess."}),
+                "unit_area": unit_area,
+                "half_bhk": {"type": "boolean",
+                             "description": "true for '3.5 BHK' -- N bedrooms "
+                                            "plus a den/study too small to sell "
+                                            "as a bedroom"},
+                "unit_label": {"type": "string",
+                               "description": "the builder label verbatim if the "
+                                              "client used one, e.g. "
+                                              "'3 BHK + 2 T - TYPE 3 G'"},
                 "road_facing_side": nullable({
                     "type": "string", "enum": list(SIDES),
                     "description": "'east facing site' means road_facing_side='east'"}),

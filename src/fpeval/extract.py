@@ -18,7 +18,7 @@ from __future__ import annotations
 from anthropic import Anthropic
 from .imgclass import _b64
 
-MODEL = "claude-sonnet-5"
+MODEL = "claude-opus-5"
 
 TOOL = {
     "name": "plan_schedule",
@@ -80,15 +80,101 @@ Hard rules:
 If the image contains more than one distinct floor plan, say so in `notes` and transcribe only the largest."""
 
 
-def extract(path: str, client: Anthropic | None = None, model: str = MODEL) -> dict:
+def _best_tool_block(content) -> dict:
+    """Pick the richest tool_use block rather than the first.
+
+    Measured: the model occasionally emits an empty schedule alongside ~1200
+    output tokens, so `next(...)` could return {} while real content existed.
+    """
+    blocks = [b.input for b in content if b.type == "tool_use" and isinstance(b.input, dict)]
+    if not blocks:
+        return {}
+    return max(blocks, key=lambda d: len(d.get("rooms") or []))
+
+
+def extract(path: str, client: Anthropic | None = None, model: str = MODEL,
+            attempts: int = 3) -> dict:
+    """Transcribe a plan's schedule.
+
+    Sampling parameters (temperature/top_p) were REMOVED from the current models
+    and return a 400, so determinism cannot be bought with temperature=0. Measured
+    variance without it: the same image returned 14 rooms, then 0, then 0.
+
+    Two mitigations instead:
+      * retry while the schedule comes back empty (cheap, trivially detectable)
+      * `extract_consensus`, which runs twice and keeps only agreeing fields --
+        for a transcription task, two independent reads agreeing is a stronger
+        guarantee than a fixed seed would have been.
+    """
     c = client or Anthropic()
     data, mt = _b64(path)
-    r = c.messages.create(
-        model=model, max_tokens=4000, tools=[TOOL],
-        tool_choice={"type": "tool", "name": "plan_schedule"},
-        messages=[{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": mt, "data": data}},
-            {"type": "text", "text": PROMPT}]}])
-    out = next(b.input for b in r.content if b.type == "tool_use")
-    out["_usage"] = {"in": r.usage.input_tokens, "out": r.usage.output_tokens}
+    usage = {"in": 0, "out": 0, "attempts": 0}
+    out: dict = {}
+    for i in range(attempts):
+        r = c.messages.create(
+            model=model, max_tokens=4000, tools=[TOOL],
+            tool_choice={"type": "tool", "name": "plan_schedule"},
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": mt, "data": data}},
+                {"type": "text", "text": PROMPT}]}])
+        usage["in"] += r.usage.input_tokens
+        usage["out"] += r.usage.output_tokens
+        usage["attempts"] = i + 1
+        cand = _best_tool_block(r.content)
+        if len(cand.get("rooms") or []) > len(out.get("rooms") or []):
+            out = cand
+        if out.get("rooms"):
+            break
+    out.setdefault("rooms", [])
+    out.setdefault("notes", [])
+    out["_usage"] = usage
     return out
+
+
+def _room_key(r: dict) -> tuple:
+    return ((r.get("name") or "").strip().upper(),
+            (r.get("dim_primary") or "").strip(),
+            (r.get("dim_secondary") or "").strip())
+
+
+def extract_consensus(path: str, client: Anthropic | None = None,
+                      model: str = MODEL, runs: int = 2) -> dict:
+    """Extract `runs` times and keep only what every run agreed on.
+
+    Fields that disagree are dropped and recorded in `_disagreements`, so a
+    transcription the model is not stable about can never silently become ground
+    truth. This is the fourth checksum, independent of dual-unit, carpet-area
+    closure and plausibility.
+    """
+    c = client or Anthropic()
+    outs = [extract(path, client=c, model=model) for _ in range(runs)]
+    base = max(outs, key=lambda o: len(o.get("rooms") or []))
+    keysets = [{_room_key(r) for r in (o.get("rooms") or [])} for o in outs]
+    agreed = set.intersection(*keysets) if keysets else set()
+
+    kept, dropped = [], []
+    for r in base.get("rooms") or []:
+        (kept if _room_key(r) in agreed else dropped).append(r)
+
+    disagree = {"rooms_dropped": [r.get("name") for r in dropped]}
+    for field in ("carpet_sqft", "rera_carpet_sqft", "super_built_up_sqft"):
+        vals = {(o.get("areas") or {}).get(field) for o in outs}
+        vals.discard(None)
+        if len(vals) > 1:
+            disagree[field] = sorted(vals)
+            base.setdefault("areas", {})[field] = None
+    for field in ("width_ft", "depth_ft"):
+        vals = {(o.get("plot") or {}).get(field) for o in outs}
+        vals.discard(None)
+        if len(vals) > 1:
+            disagree[field] = sorted(vals)
+            base.setdefault("plot", {})[field] = None
+
+    base["rooms"] = kept
+    base["_disagreements"] = disagree
+    base["_consensus"] = {"runs": runs,
+                          "room_counts": [len(o.get("rooms") or []) for o in outs],
+                          "agreed": len(kept), "dropped": len(dropped)}
+    base["_usage"] = {k: sum((o["_usage"].get(k) or 0) for o in outs)
+                      for k in ("in", "out", "attempts")}
+    return base

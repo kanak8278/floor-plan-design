@@ -14,7 +14,7 @@ Usage
                      --with matplotlib)
   --corridor M      quantify unlabelled space on M plans
   --manifest        write out/eval_corpus/ + tests/eval_corpus.json
-  --manifest-n K    size of the persisted eval corpus (default 2000)
+  --manifest-n K    size of the persisted eval corpus (default 2500)
   --json PATH       dump the full report as JSON
 """
 from __future__ import annotations
@@ -447,13 +447,16 @@ def sweep_align(plans, workers) -> None:
 def write_manifest(plans, recs, n_keep: int, source_pkl: str) -> dict:
     """Persist a fixed, versioned eval corpus for downstream agents.
 
-    Size rationale: the full 17,000 Projects are ~1.1 GiB of JSON, which is not
-    something four concurrent agents should each hold in memory or re-read. A
-    2,000-plan slice keeps every measured rate inside +/-1.1% at 95% confidence
-    (worst case p=0.5), which is finer than any decision we make off these
-    numbers, and lands at ~130 MiB. The slice is the first `n_keep` clean plans
-    in file order -- deterministic, and file order is already unrelated to plan
-    content, so no extra shuffling is needed to avoid bias.
+    Size rationale: converting all 17,000 gives ~250 MiB of Project JSON plus
+    ~220 MiB of IR, which is not something four concurrent agents should each
+    hold in memory or re-read. A 2,500-plan slice keeps every measured rate
+    inside +/-2.0 percentage points at 95% confidence (worst case p=0.5, and
+    tighter for the near-1.0 rates we actually track), which is finer than any
+    decision made off these numbers, and lands at ~55 MiB. 2,500 also clears
+    the >=2,000 floor the cross-language verifier runs at, so the JS and Python
+    sides score the identical artefact set. The slice is the first `n_keep`
+    clean plans in file order -- deterministic, and file order is unrelated to
+    plan content, so no shuffling is needed to avoid bias.
     """
     import hashlib
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -504,7 +507,7 @@ def write_manifest(plans, recs, n_keep: int, source_pkl: str) -> dict:
     from fpeval import resplan as R
     man = {
         "schema_version": SCHEMA_VERSION,
-        "name": "resplan-eval-2k",
+        "name": "resplan-eval-2500",
         "description": "Fixed ResPlan -> IR -> OpenPlan3D Project evaluation corpus.",
         "source_pkl": os.path.relpath(source_pkl, REPO),
         "source_plans_total": len(plans),
@@ -599,7 +602,7 @@ def main() -> None:
     if m:
         out["adjacency"] = adjacency_report(plans[:min(m, len(plans))], workers)
     if flag("--manifest"):
-        man = write_manifest(subset, recs, int(opt("--manifest-n", 2000)), pkl)
+        man = write_manifest(subset, recs, int(opt("--manifest-n", 2500)), pkl)
         out["manifest"] = {k: v for k, v in man.items() if k != "plans"}
 
     jp = opt("--json")

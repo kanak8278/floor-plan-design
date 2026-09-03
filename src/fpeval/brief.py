@@ -424,6 +424,29 @@ BUDGETS: list[tuple[Optional[str], str]] = [
     ("premium", "We want a {b} finish."),
     (None, ""), (None, ""), (None, ""),
 ]
+# Measured off real Bengaluru builder unit sheets. These labels and this area
+# stack are how buyers actually talk, and none of it appears in western
+# datasets -- which is precisely why the synthetic set has to carry it.
+UNIT_LABEL_FORMS = [
+    "{b}BHK {t}T TYPE C{n}",
+    "{b} BHK + {t} T - TYPE {n} G",
+    "{b} BHK + {t} TOILETS + STUDY",
+    "{b}BHK + SR + ST + PDR",
+    "{b} BHK - {t}T",
+]
+# loading factor = super built-up / carpet. Measured market range 1.25-1.75.
+LOADING_RANGE = (1.25, 1.75)
+BUILDER_ROOM_WORDS = {
+    "pooja": ["PUJA", "POOJA ROOM", "puja room"],
+    "utility": ["UTILITY", "utility with a handwash", "UTILITY + HANDWASH"],
+    "sit_out": ["SITOUT", "sit-out", "PORCH", "PATIO"],
+    "store": ["ST (store)", "store room", "STORE"],
+    "study": ["STUDY", "study nook"],
+    "powder": ["PDR (powder room)", "PWD RM", "a powder room near the foyer"],
+    "servant": ["SR (servant room)", "servant room with toilet"],
+    "foyer": ["FOYER", "a proper foyer"],
+    "balcony": ["two balconies", "three balconies", "BALCONY x2"],
+}
 VASTU_PHRASES = [
     "It must be vastu compliant.",
     "Please make it as per vastu.",
@@ -464,8 +487,8 @@ class SyntheticBrief:
     """A brief plus the parameters it was sampled from.
 
     The ground truth is what makes this an eval set rather than a demo: spec
-    extraction can be scored on plot size, facing, bedroom count, storeys and
-    Vastu without any hand labelling.
+    extraction can be scored on plot size, facing, bedroom count, storeys,
+    Vastu, toilet count and site kind without any hand labelling.
     """
     brief: str
     plot_width_ft: Optional[int]
@@ -478,6 +501,14 @@ class SyntheticBrief:
     extras: list[str] = field(default_factory=list)
     underdetermined: list[str] = field(default_factory=list)
     register: str = "plain"
+    # apartment units have NO plot -- see DesignSpec.site_kind
+    site_kind: str = "plot"
+    toilets: int = 0
+    half_bhk: bool = False
+    unit_label: str = ""
+    saleable_sqft: Optional[int] = None
+    carpet_sqft: Optional[int] = None
+    rera_carpet_sqft: Optional[int] = None
 
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
@@ -488,8 +519,91 @@ class SyntheticBrief:
         return bool(self.underdetermined)
 
 
+def _sample_apartment(rng: random.Random, *, allow_underdetermined: bool = True
+                      ) -> SyntheticBrief:
+    """A buyer shopping a builder unit. There is no plot -- that is the point.
+
+    About a fifth of real Indian residential briefs are of this shape, and they
+    must not be forced into a plot-shaped spec: an apartment has no setbacks, no
+    ground coverage and no FAR of its own, so a fabricated plot would silently
+    invalidate every one of those checks. The bound is the quoted area stack.
+    """
+    beds = _weighted(rng, [(1, 0.10), (2, 0.38), (3, 0.42), (4, 0.10)])
+    half = rng.random() < 0.12
+    toilets = _weighted(rng, [(max(1, beds - 1), 0.35), (beds, 0.5),
+                              (beds + 1, 0.15)])
+    carpet = int(beds * rng.uniform(330, 420) + (60 if half else 0))
+    loading = rng.uniform(*LOADING_RANGE)
+    saleable = int(carpet * loading)
+    rera = int(carpet * rng.uniform(0.90, 0.98))
+    facing = _weighted(rng, FACINGS)
+    city = _weighted(rng, CITIES)
+    label = rng.choice(UNIT_LABEL_FORMS).format(
+        b=f"{beds}.5" if half else beds, t=toilets, n=rng.randint(1, 20))
+
+    missing: list[str] = []
+    if allow_underdetermined and rng.random() < 0.15:
+        missing = rng.choice([["facing"], ["area"], ["bhk"]])
+
+    bits = []
+    if "facing" not in missing:
+        bits.append(f"{facing} facing")
+    label_txt = label if "bhk" not in missing else "one of their units"
+    opening = rng.choice([
+        f"We are booking {label_txt} in a project in {city.title()}",
+        f"Looking at {label_txt} on the 7th floor of a tower in {city.title()}",
+        f"We have shortlisted {label_txt} in a gated community in {city.title()}",
+    ])
+    if bits:
+        opening += f", {' '.join(bits)}"
+    lines = [opening + "."]
+    if "area" not in missing:
+        lines.append(rng.choice([
+            f"The builder quotes {saleable} sq ft saleable, {carpet} sq ft "
+            f"carpet and {rera} sq ft RERA carpet.",
+            f"Saleable area is {saleable} sq ft with {carpet} sq ft carpet.",
+            f"They say {saleable} sq ft super built-up; carpet works out to "
+            f"about {carpet} sq ft.",
+        ]))
+    else:
+        lines.append("I don't have the area sheet with me yet.")
+    lines.append(rng.choice([
+        "We want to re-plan the interior layout without moving the structure.",
+        "The developer allows internal changes before slab casting.",
+        "Please re-work the internal layout for us.",
+    ]))
+    extras: list[str] = []
+    for cat, prob in (("pooja", 0.5), ("utility", 0.6), ("powder", 0.2),
+                      ("store", 0.25), ("study", 0.3), ("balcony", 0.5),
+                      ("foyer", 0.2)):
+        if rng.random() < prob:
+            extras.append(cat)
+    if extras:
+        lines.append("We need " + ", ".join(
+            rng.choice(BUILDER_ROOM_WORDS[c]) for c in extras) + ".")
+    vastu = rng.random() < 0.35
+    if vastu:
+        lines.append(rng.choice(VASTU_PHRASES))
+
+    return SyntheticBrief(
+        brief=" ".join(lines),
+        plot_width_ft=None, plot_depth_ft=None,      # correct: there is no plot
+        road_facing_side=facing if "facing" not in missing else None,
+        city=city, bedrooms=beds, storeys=1, vastu=vastu, extras=extras,
+        underdetermined=missing, register="apartment",
+        site_kind="apartment_unit", toilets=toilets, half_bhk=half,
+        unit_label=label if "bhk" not in missing else "",
+        saleable_sqft=saleable if "area" not in missing else None,
+        carpet_sqft=carpet if "area" not in missing else None,
+        rera_carpet_sqft=rera if "area" not in missing else None,
+    )
+
+
 def _sample_synthetic(rng: random.Random, *, allow_underdetermined: bool = True
                       ) -> SyntheticBrief:
+    if rng.random() < 0.20:
+        return _sample_apartment(rng,
+                                 allow_underdetermined=allow_underdetermined)
     w, d = _weighted(rng, [((a, b), wt) for a, b, wt in PLOTS])
     facing = _weighted(rng, FACINGS)
     city = _weighted(rng, CITIES)
@@ -498,6 +612,15 @@ def _sample_synthetic(rng: random.Random, *, allow_underdetermined: bool = True
     vastu = rng.random() < 0.45
     family = rng.choice(FAMILIES)
     budget, budget_tmpl = rng.choice(BUDGETS)
+
+    half = rng.random() < 0.08
+    toilets = _weighted(rng, [(max(1, (beds + 1) // 2), 0.45), (beds, 0.40),
+                              (beds + 1, 0.15)])
+    # ~30% of clients quote the builder-style label verbatim
+    unit_label = ""
+    if rng.random() < 0.30:
+        unit_label = rng.choice(UNIT_LABEL_FORMS).format(
+            b=f"{beds}.5" if half else beds, t=toilets, n=rng.randint(1, 20))
 
     extras: list[str] = []
     if rng.random() < 0.55:
@@ -514,6 +637,12 @@ def _sample_synthetic(rng: random.Random, *, allow_underdetermined: bool = True
         extras.append("store")
     if rng.random() < 0.15:
         extras.append("dining")
+    if rng.random() < 0.12:
+        extras.append("powder")
+    if rng.random() < 0.10:
+        extras.append("servant")
+    if half:
+        extras.append("study")
     if storeys > 1 and rng.random() < 0.30:
         extras.append("duplex")
 
@@ -530,10 +659,15 @@ def _sample_synthetic(rng: random.Random, *, allow_underdetermined: bool = True
     register = _weighted(rng, [("terse", 0.30), ("plain", 0.45),
                                ("verbose", 0.25)])
     extra_words = {
+        "powder": rng.choice(BUILDER_ROOM_WORDS["powder"]),
+        "servant": rng.choice(BUILDER_ROOM_WORDS["servant"]),
         "pooja": rng.choice(["pooja room", "puja room", "small mandir",
-                             "pooja space"]),
-        "utility": rng.choice(["utility", "wash area", "utility area behind the kitchen"]),
-        "sit_out": rng.choice(["sit-out", "portico", "front sit out", "verandah"]),
+                             "pooja space", "PUJA"]),
+        "utility": rng.choice(["utility", "wash area",
+                               "utility area behind the kitchen", "UTILITY",
+                               "UTILITY + HANDWASH"]),
+        "sit_out": rng.choice(["sit-out", "portico", "front sit out",
+                               "verandah", "SITOUT", "PORCH"]),
         "parking": rng.choice(["car parking", "covered car park",
                                "parking for one car", "two-wheeler and car parking"]),
         "study": rng.choice(["study room", "small study", "work-from-home corner"]),
@@ -544,7 +678,16 @@ def _sample_synthetic(rng: random.Random, *, allow_underdetermined: bool = True
 
     frag_plot = f"{plot_txt} site" if plot_txt else "our site"
     frag_face = f"{facing_txt} facing" if facing_txt else ""
-    frag_bhk = f"{bhk_txt}BHK" if bhk_txt else "a few bedrooms"
+    if not bhk_txt:
+        frag_bhk = "a few bedrooms"
+    elif unit_label:
+        frag_bhk = unit_label
+    elif half:
+        frag_bhk = f"{bhk_txt}.5 BHK"
+    else:
+        frag_bhk = rng.choice([f"{bhk_txt}BHK",
+                               f"{bhk_txt} BHK + {toilets} T",
+                               f"{bhk_txt} BHK with {toilets} toilets"])
     frag_storey = {1: "single floor", 2: "G+1", 3: "G+2"}[storeys]
     if "duplex" in extras and storeys == 2:
         frag_storey = "duplex"
@@ -615,6 +758,10 @@ def _sample_synthetic(rng: random.Random, *, allow_underdetermined: bool = True
         extras=extras,
         underdetermined=missing,
         register=register,
+        site_kind="plot",
+        toilets=toilets,
+        half_bhk=half,
+        unit_label=unit_label,
     )
 
 
@@ -659,6 +806,10 @@ def synthetic_distribution_report(n: int = 2000, seed: int = 0) -> dict:
         "underdetermined_rate": round(
             sum(bool(r.underdetermined) for r in recs) / n, 3),
         "register": tally("register"),
+        "site_kind": tally("site_kind"),
+        "half_bhk_rate": round(sum(r.half_bhk for r in recs) / n, 3),
+        "unit_label_rate": round(sum(bool(r.unit_label) for r in recs) / n, 3),
+        "toilets": tally("toilets"),
         "extras_rate": {k: round(v / n, 3) for k, v in
                         sorted(extras.items(), key=lambda kv: -kv[1])},
         "mean_chars": round(sum(len(r.brief) for r in recs) / n, 1),

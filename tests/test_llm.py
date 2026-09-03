@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 
 from fpeval.spec import (  # noqa: E402
     ROOM_CATEGORIES, BEDROOM_CATEGORIES, SIDES, ZONES,
-    Adjacency, DesignSpec, EntranceSpec, RoomSpec, VastuSpec,
+    Adjacency, AreaQuote, DesignSpec, EntranceSpec, RoomSpec, VastuSpec,
     bhk_programme, default_indian_spec,
 )
 from fpeval import llm as L  # noqa: E402
@@ -133,6 +133,32 @@ PROMPTS: list[dict] = [
                         "away from the entrance.",
          plot=(30, 40), facing="east", beds=3, storeys=None, vastu=None,
          cats=set()),
+    # ---------------- apartment units: NO plot exists ----------------
+    dict(id="a01", text="We have booked a 3 BHK + 2 T - TYPE 3 G unit in a "
+                        "tower in Bengaluru, east facing. Builder quotes 1450 "
+                        "sq ft saleable, 990 sq ft carpet, 940 sq ft RERA "
+                        "carpet. Please re-plan the interior: we want a PUJA, "
+                        "UTILITY and a PDR near the foyer.",
+         plot=None, facing="east", beds=3, storeys=1, vastu=None,
+         cats={"pooja", "utility", "powder"}, site_kind="apartment_unit",
+         no_plot_expected=True),
+    dict(id="a02", text="2BHK 2T TYPE C18 flat, 1150 sq ft saleable and 785 sq "
+                        "ft carpet, north facing, Pune. Need a utility with "
+                        "handwash and two balconies.",
+         plot=None, facing="north", beds=2, storeys=1, vastu=None,
+         cats={"utility", "balcony"}, site_kind="apartment_unit",
+         no_plot_expected=True),
+    dict(id="a03", text="Looking at a 3.5 BHK unit on the 9th floor in "
+                        "Hyderabad, west facing, 1820 sq ft super built-up. "
+                        "Vastu compliant layout please.",
+         plot=None, facing="west", beds=3, storeys=1, vastu=True,
+         cats=set(), site_kind="apartment_unit", no_plot_expected=True),
+    dict(id="a04", text="4BHK + SR + ST + PDR apartment in Chennai, saleable "
+                        "2400 sq ft, south facing. Servant room needs its own "
+                        "toilet.",
+         plot=None, facing="south", beds=4, storeys=1, vastu=None,
+         cats={"servant", "store", "powder"}, site_kind="apartment_unit",
+         no_plot_expected=True),
     # ---------------- deliberately underdetermined ----------------
     # These must produce clarifying questions and NOT an invented plot size.
     dict(id="u01", text="I want a 3BHK house with a pooja room. Vastu compliant.",
@@ -263,6 +289,100 @@ def test_advisories_are_not_errors():
     assert "no kitchen" in adv and "no living" in adv and "no bathroom" in adv
 
 
+def test_apartment_unit_needs_no_plot():
+    """An apartment has no plot; faking one would invalidate every site rule."""
+    s = DesignSpec(site_kind="apartment_unit", road_facing_side="east",
+                   unit_area=AreaQuote(saleable_sqft=1150, carpet_sqft=785,
+                                       rera_carpet_sqft=733,
+                                       quoted_as="saleable"),
+                   rooms=bhk_programme(2), entrance=EntranceSpec(side="east"))
+    assert s.validate() == []
+    assert s.plot_area_sqft is None
+    assert s.estimated_buildable_sqft() == 785      # carpet, not a fake plot
+
+
+def test_apartment_unit_rejects_a_fabricated_plot():
+    s = DesignSpec(site_kind="apartment_unit", plot_width_ft=30,
+                   plot_depth_ft=40,
+                   unit_area=AreaQuote(carpet_sqft=800), rooms=bhk_programme(2))
+    assert any("must not carry plot dimensions" in e for e in s.validate())
+
+
+def test_apartment_unit_without_an_area_is_underdetermined():
+    s = DesignSpec(site_kind="apartment_unit", rooms=bhk_programme(2))
+    assert any("no area quoted" in e for e in s.validate())
+
+
+@pytest.mark.parametrize("quote,expect", [
+    (AreaQuote(carpet_sqft=785), 785),
+    (AreaQuote(rera_carpet_sqft=733), 733),
+    (AreaQuote(builtup_sqft=880), 800),
+    (AreaQuote(super_builtup_sqft=1100, loading_factor=1.4), 785.71),
+    (AreaQuote(saleable_sqft=1150), 821.43),          # default 1.40 loading
+    (AreaQuote(), None),
+])
+def test_area_stack_resolves_to_carpet(quote, expect):
+    got = quote.resolved_carpet_sqft()
+    assert (got is None and expect is None) or abs(got - expect) < 0.02
+
+
+def test_area_stack_must_be_non_decreasing():
+    s = DesignSpec(site_kind="apartment_unit",
+                   unit_area=AreaQuote(carpet_sqft=900, builtup_sqft=800),
+                   rooms=bhk_programme(2))
+    assert any("non-decreasing" in e for e in s.validate())
+
+
+def test_implausible_loading_factor_is_rejected():
+    s = DesignSpec(site_kind="apartment_unit",
+                   unit_area=AreaQuote(saleable_sqft=1000, loading_factor=4.0),
+                   rooms=bhk_programme(2))
+    assert any("loading_factor" in e for e in s.validate())
+
+
+def test_bhk_label_full_carries_the_market_shorthand():
+    s = DesignSpec(rooms=bhk_programme(3, pooja=True), half_bhk=True,
+                   plot_width_ft=30, plot_depth_ft=50)
+    assert s.bhk_label_full == "3.5 BHK + 3T"
+    assert s.bhk_label == "3BHK"
+
+
+def test_builder_room_categories_exist():
+    """Vocabulary measured off real Indian builder plans, absent from ResPlan."""
+    for cat in ("powder", "handwash", "shaft", "patio", "servant", "foyer",
+                "sit_out", "pooja", "utility", "toilet", "store", "study"):
+        assert cat in ROOM_CATEGORIES, cat
+    assert ROOM_CATEGORIES["powder"].wet and ROOM_CATEGORIES["handwash"].wet
+    assert ROOM_CATEGORIES["patio"].outdoor
+
+
+def test_half_bhk_without_a_den_is_an_advisory_not_an_error():
+    s = DesignSpec(plot_width_ft=30, plot_depth_ft=40, road_facing_side="east",
+                   half_bhk=True, rooms=bhk_programme(3),
+                   entrance=EntranceSpec(side="east"))
+    assert s.validate() == []
+    assert any("half_bhk" in a for a in s.advisories())
+
+
+def test_bengaluru_coverage_matches_measured_bbmp():
+    """BBMP on a 1200 sqft plot: front 0.9 m, rear 0.7 m, one side 0.7 m,
+    stated coverage 75%. The heuristic must land on that, not on a guess."""
+    from fpeval.spec import coverage_for
+    assert abs(coverage_for("bengaluru", 1200) - 0.75) < 0.01
+    s = DesignSpec(plot_width_ft=30, plot_depth_ft=40, city_profile="bengaluru")
+    assert abs(s.estimated_buildable_sqft() - 900) < 1
+
+
+def test_tight_but_real_programmes_are_advisories_not_errors():
+    """A 2BHK on a 20x30 is tight and gets built all the time. The
+    impossibility check must not reject it -- only clearly unbuildable asks."""
+    s = DesignSpec(plot_width_ft=20, plot_depth_ft=30, road_facing_side="north",
+                   city_profile="chennai", rooms=bhk_programme(2),
+                   entrance=EntranceSpec(side="north"))
+    assert s.validate() == []
+    assert any("tight fit" in a for a in s.advisories())
+
+
 def test_bhk_programme_expands_hall_and_kitchen():
     rooms = bhk_programme(3, pooja=True, storeys=2)
     cats = [r.category for r in rooms]
@@ -289,7 +409,10 @@ def test_schema_is_strict_shaped():
         if isinstance(node, dict):
             if node.get("type") == "object":
                 assert node.get("additionalProperties") is False
-                assert set(node.get("required", [])) == set(node["properties"])
+                # Every object either requires all of its keys or none of them.
+                # "None" is the union-budget escape hatch used by unit_area.
+                req, props = set(node.get("required", [])), set(node["properties"])
+                assert req in (props, set()), node.get("required")
             # an enum must never be paired with a type union -- the API 400s
             if "enum" in node:
                 assert isinstance(node.get("type"), str), node
@@ -299,6 +422,31 @@ def test_schema_is_strict_shaped():
             for v in node:
                 walk(v)
     walk(sch)
+
+
+def test_schema_stays_inside_the_strict_grammar_budget():
+    """Measured API caps for strict tool use: 16 unions, 24 optional params.
+
+    The spec schema IS strict, so it has to fit. Exceeding either limit is a
+    hard 400, not a warning, and adding one nullable field is enough to do it.
+    """
+    def counts(node, acc=None):
+        acc = acc if acc is not None else {"unions": 0, "optional": 0}
+        if isinstance(node, dict):
+            if "anyOf" in node or isinstance(node.get("type"), list):
+                acc["unions"] += 1
+            if node.get("type") == "object":
+                acc["optional"] += len(set(node.get("properties", {}))
+                                       - set(node.get("required", [])))
+            for v in node.values():
+                counts(v, acc)
+        elif isinstance(node, list):
+            for v in node:
+                counts(v, acc)
+        return acc
+    c = counts(DesignSpec.to_json_schema())
+    assert c["unions"] <= 16, c
+    assert c["optional"] <= 24, c
 
 
 def test_schema_has_no_coordinate_fields():
@@ -314,12 +462,32 @@ def test_schema_covers_every_spec_field():
     assert fields <= props, fields - props
 
 
+def _schema_shaped(spec) -> dict:
+    """Serialise in exactly the schema's shape.
+
+    `unit_area` is plain-typed with an empty `required` list (the strict-mode
+    union budget is 16), so "not quoted" is encoded as an absent key, not an
+    explicit null. Everything else keeps its nulls.
+    """
+    d = spec.to_dict()
+    d.pop("spec_version", None)
+    d.pop("provenance", None)
+    d["unit_area"] = {k: v for k, v in d["unit_area"].items() if v is not None}
+    return d
+
+
 def test_generated_spec_validates_against_its_own_schema():
     """A spec we build ourselves must satisfy the schema we hand the model."""
     sch = DesignSpec.to_json_schema()
-    d = default_indian_spec().to_dict()
-    d.pop("spec_version"), d.pop("provenance")
-    assert L.validate_against_schema(d, sch) == []
+    assert L.validate_against_schema(_schema_shaped(default_indian_spec()),
+                                     sch) == []
+    unit = DesignSpec(
+        site_kind="apartment_unit",
+        unit_area=AreaQuote(saleable_sqft=1150, carpet_sqft=785,
+                            rera_carpet_sqft=733, quoted_as="saleable"),
+        road_facing_side="east", rooms=bhk_programme(2),
+        entrance=EntranceSpec(side="east"))
+    assert L.validate_against_schema(_schema_shaped(unit), sch) == []
 
 
 def test_minimal_schema_validator():
@@ -353,30 +521,6 @@ def test_patch_schema_shape():
     for name, e in L.OP_TABLE.items():
         missing = (set(e["required"]) | set(e["optional"])) - params
         assert not missing, (name, missing)
-
-
-def test_patch_schema_stays_inside_the_strict_grammar_budget():
-    """The measured API caps: 16 union-typed and 24 optional parameters.
-
-    The patch schema exceeds the optional cap, which is exactly why it is not
-    strict. The spec schema must stay under both, since it IS strict.
-    """
-    def counts(node, acc=None):
-        acc = acc if acc is not None else {"unions": 0, "optional": 0}
-        if isinstance(node, dict):
-            if "anyOf" in node or isinstance(node.get("type"), list):
-                acc["unions"] += 1
-            if node.get("type") == "object":
-                acc["optional"] += len(set(node.get("properties", {}))
-                                       - set(node.get("required", [])))
-            for v in node.values():
-                counts(v, acc)
-        elif isinstance(node, list):
-            for v in node:
-                counts(v, acc)
-        return acc
-    spec = counts(DesignSpec.to_json_schema())
-    assert spec["unions"] <= 16 and spec["optional"] <= 24, spec
 
 
 # ==========================================================================
@@ -679,7 +823,7 @@ def test_synthetic_briefs_are_nondegenerate():
     for token in ("bhk", "facing", "vastu", "pooja", "parking", "lakh"):
         assert token in joined, token
     # no template placeholders leaked
-    assert "{" not in joined and "none" not in joined
+    assert "{" not in joined and " none " not in joined
 
 
 def test_synthetic_distribution_matches_the_market_model():
@@ -688,13 +832,38 @@ def test_synthetic_distribution_matches_the_market_model():
     assert 0.38 < r["vastu_rate"] < 0.52
     beds = r["bedrooms"]
     assert max(beds, key=beds.get) == 3           # 3BHK is the modal Indian ask
-    assert set(r["register"]) == {"terse", "plain", "verbose"}
+    assert set(r["register"]) == {"terse", "plain", "verbose", "apartment"}
+    assert set(r["site_kind"]) == {"plot", "apartment_unit"}
+    assert 0.03 < r["half_bhk_rate"] < 0.15
     assert r["facing"]["east"] > r["facing"]["south"]
+
+
+def test_synthetic_set_contains_apartment_briefs_with_no_plot():
+    recs = B.synthetic_indian_brief_records(400, seed=8)
+    units = [r for r in recs if r.site_kind == "apartment_unit"]
+    assert 40 < len(units) < 130, len(units)      # ~20% of the set
+    for r in units:
+        assert r.plot_width_ft is None and r.plot_depth_ft is None
+        assert r.storeys == 1
+        assert "bhk" in r.brief.lower() or "unit" in r.brief.lower()
+        if "area" not in r.underdetermined:
+            assert r.carpet_sqft and r.saleable_sqft
+            assert 1.15 < r.saleable_sqft / r.carpet_sqft < 1.85
+
+
+def test_synthetic_set_carries_builder_vocabulary():
+    joined = " ".join(B.synthetic_indian_briefs(500, seed=9))
+    for token in ("TYPE", "PDR", "SR", "ST", "carpet", "RERA", "saleable",
+                  "SITOUT", "UTILITY", "PUJA", "STUDY", "BALCONY", ".5 BHK",
+                  " T"):
+        assert token in joined, token
 
 
 def test_synthetic_records_carry_scoreable_ground_truth():
     recs = B.synthetic_indian_brief_records(60, seed=2)
     for r in recs:
+        if r.site_kind == "apartment_unit":
+            continue
         assert (r.plot_width_ft is None) == ("plot" in r.underdetermined)
         assert (r.road_facing_side is None) == ("facing" in r.underdetermined)
         if r.plot_width_ft:
@@ -714,7 +883,7 @@ def test_synthetic_briefs_are_deterministic():
 def test_synthetic_plausibility_no_absurd_programmes():
     """The sampler must not ask for a 4BHK on a 600 sqft single-floor plot."""
     for r in B.synthetic_indian_brief_records(1500, seed=4):
-        if r.plot_width_ft is None:
+        if r.plot_width_ft is None or r.site_kind == "apartment_unit":
             continue
         buildable = r.plot_width_ft * r.plot_depth_ft * 0.6 * r.storeys
         assert buildable / r.bedrooms > 110, r
@@ -800,7 +969,24 @@ def score_extraction(spec, questions, truth) -> dict:
 
     out: dict = {"id": truth["id"], "failures": []}
 
-    if "plot" in und:
+    want_kind = truth.get("site_kind", "plot")
+    out["site_kind"] = spec.site_kind == want_kind
+    if not out["site_kind"]:
+        out["failures"].append(f"site_kind {spec.site_kind!r} != {want_kind!r}")
+
+    if truth.get("no_plot_expected"):
+        # An apartment has no plot. Fabricating one would silently invalidate
+        # every setback / coverage / FAR check downstream.
+        ok = got_plot == (None, None)
+        out["plot"] = ok
+        if not ok:
+            out["failures"].append(
+                f"fabricated a plot {got_plot} for an apartment unit")
+        area = spec.unit_area.resolved_carpet_sqft()
+        out["unit_area"] = area is not None
+        if area is None:
+            out["failures"].append("apartment unit with no resolvable carpet area")
+    elif "plot" in und:
         ok = got_plot == (None, None)
         out["plot"] = ok
         if not ok:
@@ -914,6 +1100,7 @@ def run_extraction_eval(model: str = EVAL_MODEL, workers: int = 8,
         "hard_failures": [(r["id"], r["hard_failure"]) for r in hard],
         "plot": rate("plot"), "facing": rate("facing"), "beds": rate("beds"),
         "storeys": rate("storeys"), "vastu": rate("vastu"), "cats": rate("cats"),
+        "site_kind": rate("site_kind"), "unit_area": rate("unit_area"),
         "all_fields_correct": (sum(1 for r in rows
                                    if not r["failures"] and "hard_failure" not in r),
                                len(rows)),
@@ -974,6 +1161,8 @@ def format_extraction_report(res: dict) -> str:
         f"  storeys                {pct(res['storeys'])}",
         f"  vastu flag             {pct(res['vastu'])}",
         f"  required categories    {pct(res['cats'])}",
+        f"  site_kind plot/unit    {pct(res['site_kind'])}",
+        f"  unit area resolvable   {pct(res['unit_area'])}",
         f"  every field correct    {pct(res['all_fields_correct'])}",
         f"  underdet. asked block. {pct(res['underdetermined_asked_blocking'])}",
         f"  determ. asked anything {pct(res['determined_any_question'])}",
