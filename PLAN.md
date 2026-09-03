@@ -44,13 +44,14 @@ scorer, sections/elevations, real DWG.
 │         │ project.ts mutation API               │ tool calls              │
 │         │ (beginUndoGroup / endUndoGroup)       ▼                         │
 │  ┌──────┴───────────────────────────────────────────────────────────┐    │
-│  │  Document = OpenPlan3D `Project` JSON  (the single source of     │    │
-│  │  truth for state AND history; the server never owns it)          │    │
+│  │  Project JSON = a PROJECTION of the document, for rendering and  │    │
+│  │  optimistic local edits. Authority lives in the service.          │    │
 │  └──────┬───────────────────────────────────────────────────────────┘    │
 └─────────┼────────────────────────────────────────────────────────────────┘
           │ same-origin /api/*   (SvelteKit proxy, no CORS, one deploy)
 ┌─────────▼────────────────────────────────────────────────────────────────┐
-│  Python service — STATELESS. Document posted in with every call.         │
+│  Python service — pure compute is STATELESS (generate / validate /      │
+│  render). The DOCUMENT is server-owned: one command log, one applier.    │
 │                                                                          │
 │   spec extraction (LLM) ──► DesignSpec ──► envelope ──► CP-SAT solver    │
 │                                                              │           │
@@ -75,6 +76,37 @@ Three invariants, each already load-bearing:
    lets a prompt-edit and a mouse-drag be the same operation on one substrate.
 
 ---
+
+### Where the document lives, and why that changed
+
+The service was designed stateless, with the browser owning the document and
+posting it in with every call. Pure compute still works that way and should:
+`generate`, `validate` and `render` are functions of their input, and keeping
+them stateless is what makes them cheap to scale and trivial to deploy.
+
+The **document** moved to the service, for three reasons that only appeared
+once a second actor started editing:
+
+1. **The browser does not own durable storage.** `localStorage` is
+   per-browser, quota-limited, and cleared with site data. `datastore.ts`
+   already has a `QuotaExceededError` branch that deletes the user's *other*
+   projects to save the current one — not a storage layer that should hold the
+   only copy of a design.
+2. **A human plus an agent need one serialisation point.** Without it you get
+   the failure this actually produced twice: the plan reading "Room 1" while
+   the chat insisted the room was the master bedroom.
+3. **Documents are not small.** Background images and custom entourage are
+   base64 data URLs *inside* the Project, so posting the whole thing per call
+   is unbounded on a traced site plan.
+
+"Stateless" in production normally means stateless *processes* with state in a
+database, which is what this is: `service/store.py` behind a `DocumentStore`
+interface, SQLite by default. The client still applies every edit locally so
+the canvas responds at pointer speed — but that is a *prediction*, reconciled
+against the service by state hash, and the cost of it being wrong is one
+repaint rather than a corrupted document.
+
+See `CHAT_AGENT_DESIGN.md` for the command algebra and the event log.
 
 ## 3. The tool surface — few tools, deep parameters
 
