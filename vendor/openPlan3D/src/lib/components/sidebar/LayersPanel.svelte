@@ -113,9 +113,14 @@
 
     return cats;
   });
+
+  // See PropertiesPanel: `docked` hands width and position to the parent.
+  let { docked = false }: { docked?: boolean } = $props();
 </script>
 
-<div class="w-56 bg-white border-l border-gray-200 flex flex-col overflow-hidden text-xs select-none">
+<div class={docked
+  ? 'w-full h-full bg-white flex flex-col overflow-hidden text-xs select-none'
+  : 'w-56 bg-white border-l border-gray-200 flex flex-col overflow-hidden text-xs select-none'}>
   <div class="px-3 py-2 border-b border-gray-100 font-semibold text-gray-700 text-sm flex items-center gap-1.5">
     🗂 Layers
   </div>

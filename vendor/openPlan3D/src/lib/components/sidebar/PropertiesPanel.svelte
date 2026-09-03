@@ -30,7 +30,11 @@
     return settings.units === 'imperial' ? 'in' : 'cm';
   }
 
-  let { is3D = false }: { is3D?: boolean } = $props();
+  // `docked` puts the panel inside the right-hand dock, where the parent
+  // owns the width and the position. Standalone it still floats itself, so
+  // nothing that mounts it directly has to change.
+  let { is3D = false, docked = false }:
+    { is3D?: boolean; docked?: boolean } = $props();
   let wallSideTab = $state<'interior' | 'exterior'>('interior');
   let selectedWall = $derived(floor?.walls?.find(w => w.id === selId) ?? null);
   let selectedDoor = $derived(floor?.doors?.find(d => d.id === selId) ?? null);
@@ -321,7 +325,16 @@
 </script>
 
 <!-- Right sidebar on md+; slides up as a bottom sheet on phones -->
-<div class="{is3D ? 'w-80' : 'w-64'} shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-y-auto p-3 fixed right-0 top-12 bottom-9 z-40 shadow-lg max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-h-[45vh] max-md:border-l-0 max-md:border-t max-md:rounded-t-xl max-md:shadow-2xl" class:hidden={!hasSelection}>
+{#if docked && !hasSelection}
+  <div class="p-4 text-xs text-gray-400 leading-relaxed">
+    Select a wall, door, room, or object on the plan to edit its properties.
+  </div>
+{/if}
+<div
+  class={docked
+    ? 'w-full h-full bg-white flex flex-col overflow-y-auto p-3'
+    : `${is3D ? 'w-80' : 'w-64'} shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-y-auto p-3 fixed right-0 top-12 bottom-9 z-40 shadow-lg max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-h-[45vh] max-md:border-l-0 max-md:border-t max-md:rounded-t-xl max-md:shadow-2xl`}
+  class:hidden={!hasSelection}>
   {#if selectedWall}
     <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
       <span class="w-6 h-6 bg-gray-200 rounded flex items-center justify-center text-xs">▭</span>

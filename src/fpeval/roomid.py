@@ -126,8 +126,11 @@ def reconcile_rooms(detected: Sequence[Room],
             continue
         rival = claimed.get(best)
         if rival is not None:
-            if abs(areas[best] - rival.area) <= best_gap:
-                continue                      # incumbent fits better
+            # Strictly better keeps the face; an exact tie goes to the later
+            # entry. See the note in the TypeScript twin: with `<=` a stale
+            # unnamed copy of a room beat the named one on every tie.
+            if abs(areas[best] - rival.area) < best_gap:
+                continue
             matched.discard(rival.id)
         claimed[best] = room
         matched.add(room.id)

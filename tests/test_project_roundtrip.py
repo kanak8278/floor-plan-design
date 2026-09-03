@@ -324,3 +324,65 @@ def test_v1_project_reports_its_loss_rather_than_hiding_it():
     assert report["idempotent"], report["diffs"]
     assert design_from_project(v1).storeys[0].site.setbacks_mm == {}
     assert _ground_storey().site.setbacks_mm != {}
+
+
+# --------------------------------------------------------------------------
+# the editor's own id conventions
+# --------------------------------------------------------------------------
+
+def _editor_project() -> dict:
+    """A Project shaped the way the *editor* writes one.
+
+    Floor ids are bare uids, not `floor-<plan id>`; `floor.rooms` is empty
+    because the editor derives rooms and persists only renamed ones. Every
+    other fixture in this file uses our own conventions, which is how the
+    adapter came to rename the editor's floor on every round trip without any
+    test noticing -- the same blind spot `ir_identity` had.
+    """
+    return {
+        "id": "abc123", "name": "Untitled Project",
+        "floors": [{
+            "id": "f9k2p1", "name": "Ground Floor", "level": 0,
+            "walls": [
+                {"id": "w0", "start": {"x": 0, "y": 0}, "end": {"x": 600, "y": 0},
+                 "thickness": 15, "height": 280, "color": "#444444"},
+                {"id": "w1", "start": {"x": 600, "y": 0}, "end": {"x": 600, "y": 400},
+                 "thickness": 15, "height": 280, "color": "#444444"},
+                {"id": "w2", "start": {"x": 600, "y": 400}, "end": {"x": 0, "y": 400},
+                 "thickness": 15, "height": 280, "color": "#444444"},
+                {"id": "w3", "start": {"x": 0, "y": 400}, "end": {"x": 0, "y": 0},
+                 "thickness": 15, "height": 280, "color": "#444444"},
+            ],
+            "rooms": [], "doors": [], "windows": [], "furniture": [],
+            "stairs": [], "columns": [], "guides": [], "measurements": [],
+            "annotations": [], "textAnnotations": [], "groups": [],
+        }],
+        "activeFloorId": "f9k2p1",
+        "createdAt": "2026-09-04T00:00:00.000Z",
+        "updatedAt": "2026-09-04T00:00:00.000Z",
+    }
+
+
+def test_the_editors_floor_id_is_not_renamed():
+    """Every later command names the floor, and `activeFloorId` has to keep
+    matching it. Renaming it on the way through would break selection and
+    every storey reference."""
+    proj = _editor_project()
+    back = to_project(design_from_project(proj))
+    assert back["floors"][0]["id"] == "f9k2p1"
+    assert back["activeFloorId"] == "f9k2p1"
+
+
+def test_an_editor_project_round_trips():
+    proj = _editor_project()
+    report = design_round_trip_report(proj)
+    assert report["idempotent"], report["diffs"]
+
+
+def test_a_python_built_plan_does_not_acquire_a_floor_id_override():
+    """`project_floor_id` is "" when it is derivable. Storing the derived
+    value would stop every solver plan round-tripping to itself."""
+    plan = _ground_storey()
+    assert plan.project_floor_id == ""
+    back = from_project(to_project(plan))
+    assert back.project_floor_id == ""

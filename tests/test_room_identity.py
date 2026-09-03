@@ -290,3 +290,44 @@ def test_minted_ids_match_across_languages():
     for (_, faces, _), got in zip(cases, json.loads(proc.stdout)):
         expected = [mint_room_id(centroid(f.polygon)) for f in faces]
         assert expected == [r["id"] for r in got["rooms"]]
+
+
+# --------------------------------------------------------------------------
+# the tie-break, which is contract and not detail
+# --------------------------------------------------------------------------
+
+def test_a_later_persisted_room_wins_an_exact_tie():
+    """`reconcile_rooms` documents that later entries win ties, and callers
+    depend on it: the browser passes last pass's on-screen rooms first and the
+    floor's *saved* rooms last, and the two have identical areas.
+
+    This was wrong for a while -- the comparison kept the incumbent on a tie --
+    and the symptom was that a room the assistant had just renamed went on
+    reading "Room 1" on the plan while the chat said otherwise. Exactly the
+    two-systems failure the shared document exists to prevent.
+    """
+    detected = [face("f0", BOX, ["w0", "w1", "w2", "w3"])]
+    stale = reconcile_rooms(detected, []).rooms[0]        # unnamed, anchored
+    saved = Room(id="room-saved", name="Master Bedroom",
+                 category="master_bedroom", wall_ids=list(stale.wall_ids),
+                 polygon=list(BOX), area=stale.area, anchor=stale.anchor)
+
+    after = reconcile_rooms(detected, [stale, saved])      # saved passed last
+    assert after.rooms[0].name == "Master Bedroom"
+    assert after.rooms[0].id == "room-saved"
+    assert [r.id for r in after.unmatched] == [stale.id]
+
+
+def test_a_strictly_better_fit_still_wins():
+    """The tie-break must not become "last one always wins" -- a room whose
+    recorded area actually matches the face should keep it."""
+    left = face("a", LEFT, ["w0", "w4"])
+    good = Room(id="room-good", name="Right fit", category="bedroom",
+                wall_ids=["w0", "w4"], polygon=list(LEFT),
+                area=int(polygon_area(LEFT)), anchor=P(1000, 1500))
+    wrong = Room(id="room-wrong", name="Wrong fit", category="bedroom",
+                 wall_ids=["w0", "w4"], polygon=list(BOX),
+                 area=int(polygon_area(BOX)), anchor=P(1000, 1500))
+    after = reconcile_rooms([left], [good, wrong])         # worse fit last
+    assert after.rooms[0].name == "Right fit"
+    assert [r.id for r in after.unmatched] == ["room-wrong"]

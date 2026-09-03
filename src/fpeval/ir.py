@@ -292,6 +292,12 @@ class Plan:
     presentation: Presentation = field(default_factory=Presentation)
     name: str = ""
     level: int = 0
+    # The id this storey has on the OpenPlan3D side. The editor mints bare uids
+    # ("f9k2p1") while our converters emit "floor-<plan id>", and a storey read
+    # from the editor has to be written back under the id the editor is still
+    # holding -- `activeFloorId` and every selection reference it. "" means
+    # derive it as "floor-<id>".
+    project_floor_id: str = ""
 
     def wall(self, wid: str) -> Optional[Wall]:
         return next((w for w in self.walls if w.id == wid), None)

@@ -213,6 +213,32 @@ check('mintRoomId is stable and position-dependent', () => {
     'distinct positions give distinct ids');
 });
 
+check('a later persisted room wins an exact tie', () => {
+  // The caller passes last pass's on-screen rooms first and the floor's saved
+  // rooms last, and the two have identical areas. Keeping the incumbent on a
+  // tie meant a room the assistant had just renamed kept reading "Room 1".
+  const walls = box();
+  const detected = detectRooms(walls);
+  const stale = reconcileRooms(detected, [], walls).rooms[0];
+  const saved: Room = { ...stale, id: 'room-saved', name: 'Master Bedroom' };
+  const after = reconcileRooms(detectRooms(walls), [stale, saved], walls);
+  eq(after.rooms[0].name, 'Master Bedroom', 'the saved name wins');
+  eq(after.rooms[0].id, 'room-saved', 'and the saved id with it');
+  eq(after.unmatched.map((r) => r.id), [stale.id], 'the stale copy is reported');
+});
+
+check('a strictly better fit still wins', () => {
+  const walls = boxDivided();
+  const faces = detectRooms(walls);
+  const half = reconcileRooms(faces, [], walls).rooms[0];
+  const good: Room = { ...half, id: 'room-good', name: 'Right fit' };
+  const wrong: Room = { ...half, id: 'room-wrong', name: 'Wrong fit',
+                        area: half.area * 4 };
+  const after = reconcileRooms(detectRooms(walls), [good, wrong], walls);
+  const owner = after.rooms.find((r) => r.id === 'room-good' || r.id === 'room-wrong');
+  eq(owner?.name, 'Right fit', 'the better area match keeps the face');
+});
+
 // The discriminating test: the rule we replaced must actually fail here.
 check('REGRESSION GUARD: the old wall-set rule loses the name on a split', () => {
   const walls = box();

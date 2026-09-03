@@ -1,4 +1,14 @@
 import { writable, derived, get } from 'svelte/store';
+// Every mutator below records a command as well as applying it locally. The
+// service owns the document; the local apply is a prediction that keeps the
+// canvas at pointer speed. See $lib/commands/bus.
+import { record, mm, pt, newId } from '$lib/commands/bus';
+import {
+  wallUpdateParams, doorUpdateParams, windowUpdateParams,
+  furnitureUpdateParams, stairUpdateParams, columnUpdateParams,
+  roomUpdateParams, entourageUpdateParams, textUpdateParams,
+  dimensionUpdateParams, backgroundParams, backgroundUpdateParams, gestureKey,
+} from '$lib/commands/fromStore';
 import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem } from '$lib/models/types';
 
 
@@ -200,11 +210,22 @@ function mutate(fn: (floor: Floor) => void, description?: string, coalesceKey?: 
   currentProject.set({ ...p });
 }
 
+/** Where a wall sat when its current drag began, so a coalesced
+ *  `move_wall_by` carries the whole displacement and not just the last frame. */
+const dragOrigin = new Map<string, Point>();
+
+/** Call when a wall drag ends so the next one measures from the new position. */
+export function endWallDrag(id?: string) {
+  if (id) dragOrigin.delete(id); else dragOrigin.clear();
+}
+
 export function addWall(start: Point, end: Point): string {
   const id = uid();
   mutate((f) => {
     f.walls.push({ id, start, end, thickness: 15, height: 280, color: '#444444' });
   }, 'Added wall');
+  record('add_wall', { wall_id: id, start: pt(start), end: pt(end),
+                       thickness_mm: mm(15), height_mm: mm(280) });
   // Onboarding tip
   import('$lib/stores/onboarding.svelte').then(m => m.triggerTip('first-wall', end.x > 400 ? 300 : end.x + 20, 120));
   return id;
@@ -216,6 +237,7 @@ export function removeWall(id: string) {
     f.doors = f.doors.filter((d) => d.wallId !== id);
     f.windows = f.windows.filter((w) => w.wallId !== id);
   }, 'Deleted wall');
+  record('remove_element', { element_id: id });
 }
 
 export function addDoor(wallId: string, position: number, doorType: Door['type'] = 'single'): string {
@@ -234,6 +256,8 @@ export function addDoor(wallId: string, position: number, doorType: Door['type']
   mutate((f) => {
     f.doors.push({ id, wallId, position, width, height, type: doorType, swingDirection: 'left', flipSide: false });
   }, `Added ${doorType} door`);
+  record('add_door', { opening_id: id, wall_id: wallId, at: position,
+                       door_type: doorType, width_mm: mm(width) });
   // Onboarding tip
   import('$lib/stores/onboarding.svelte').then(m => m.triggerTip('first-door', 300, 120));
   return id;
@@ -252,6 +276,9 @@ export function addWindow(wallId: string, position: number, windowType: import('
   mutate((f) => {
     f.windows.push({ id, wallId, position, width, height, sillHeight: 90, type: windowType });
   }, `Added ${windowType} window`);
+  record('add_window', { opening_id: id, wall_id: wallId, at: position,
+                         window_type: windowType, width_mm: mm(width),
+                         sill_mm: mm(90), head_mm: mm(90 + height) });
   return id;
 }
 
@@ -260,6 +287,8 @@ export function addFurniture(catalogId: string, position: Point): string {
   mutate((f) => {
     f.furniture.push({ id, catalogId, position, rotation: 0, scale: { x: 1, y: 1, z: 1 } });
   }, `Added ${catalogId}`);
+  record('add_furniture', { furniture_id: id, catalog_id: catalogId,
+                            position: pt(position) });
   // Onboarding tip
   import('$lib/stores/onboarding.svelte').then(m => m.triggerTip('first-furniture', position.x + 20, position.y + 20));
   return id;
@@ -282,6 +311,9 @@ export function moveFurniture(id: string, position: Point) {
     item.position = position;
     p.updatedAt = new Date();
     currentProject.set({ ...p });
+    // Called per pointer move; the bus collapses them into one command.
+    record('move_furniture', { furniture_id: id, position: pt(position) },
+           { coalesceKey: gestureKey('furniture', id, { position: 1 }) });
   }
 }
 
@@ -296,6 +328,13 @@ export function rotateFurniture(id: string, angle: number) {
     const item = f.furniture.find((fi) => fi.id === id);
     if (item) item.rotation = (item.rotation + angle) % 360;
   }, 'Rotated furniture');
+  const rotated = get(currentProject)?.floors
+    .find((f) => f.id === get(currentProject)?.activeFloorId)
+    ?.furniture.find((fi) => fi.id === id);
+  if (rotated) {
+    record('update_furniture', { furniture_id: id, rotation: rotated.rotation },
+           { coalesceKey: gestureKey('furniture', id, { rotation: 1 }) });
+  }
 }
 
 export function setFurnitureRotation(id: string, angle: number) {
@@ -303,6 +342,9 @@ export function setFurnitureRotation(id: string, angle: number) {
     const item = f.furniture.find((fi) => fi.id === id);
     if (item) item.rotation = ((angle % 360) + 360) % 360;
   });
+  record('update_furniture',
+         { furniture_id: id, rotation: ((angle % 360) + 360) % 360 },
+         { coalesceKey: gestureKey('furniture', id, { rotation: 1 }) });
 }
 
 export function scaleFurniture(id: string, scale: { x: number; y: number }) {
@@ -312,12 +354,23 @@ export function scaleFurniture(id: string, scale: { x: number; y: number }) {
       fi.scale = { x: Math.max(0.2, scale.x), y: Math.max(0.2, scale.y), z: fi.scale.z };
     }
   });
+  const scaled = get(currentProject)?.floors
+    .find((f) => f.id === get(currentProject)?.activeFloorId)
+    ?.furniture.find((fi) => fi.id === id);
+  if (scaled) {
+    record('update_furniture', { furniture_id: id,
+                                 scale_x: scaled.scale.x,
+                                 scale_y: scaled.scale.y,
+                                 scale_z: scaled.scale.z },
+           { coalesceKey: gestureKey('furniture', id, { scale: 1 }) });
+  }
 }
 
 export function removeFurniture(id: string) {
   mutate((f) => {
     f.furniture = f.furniture.filter((fi) => fi.id !== id);
   }, 'Deleted furniture');
+  record('remove_element', { element_id: id });
 }
 
 // Stairs
@@ -327,6 +380,10 @@ export function addStair(position: Point): string {
     if (!f.stairs) f.stairs = [];
     f.stairs.push({ id, position, rotation: 0, width: 100, depth: 300, riserCount: 14, direction: 'up', stairType: 'straight' });
   }, 'Added stair');
+  record('add_stair', { stair_id: id, position: pt(position), rotation: 0,
+                        width_mm: mm(100), depth_mm: mm(300),
+                        riser_count: 14, direction: 'up',
+                        stair_type: 'straight' });
   return id;
 }
 
@@ -336,6 +393,8 @@ export function updateStair(id: string, updates: Partial<Stair>) {
     const s = f.stairs.find((s) => s.id === id);
     if (s) Object.assign(s, updates);
   }, undefined, coalesceKeyFor('stair', id, updates));
+  record('update_stair', stairUpdateParams(id, updates),
+         { coalesceKey: gestureKey('stair', id, updates) });
 }
 
 export function removeStair(id: string) {
@@ -343,6 +402,7 @@ export function removeStair(id: string) {
     if (!f.stairs) return;
     f.stairs = f.stairs.filter((s) => s.id !== id);
   });
+  record('remove_element', { element_id: id });
 }
 
 export function moveStair(id: string, position: Point) {
@@ -355,6 +415,8 @@ export function moveStair(id: string, position: Point) {
     s.position = position;
     p.updatedAt = new Date();
     currentProject.set({ ...p });
+    record('move_stair', { stair_id: id, position: pt(position) },
+           { coalesceKey: gestureKey('stair', id, { position: 1 }) });
   }
 }
 
@@ -363,12 +425,15 @@ export function setBackgroundImage(bg: BackgroundImage | undefined) {
   mutate((f) => {
     f.backgroundImage = bg;
   });
+  record('set_background', backgroundParams(bg));
 }
 
 export function updateBackgroundImage(updates: Partial<BackgroundImage>) {
   mutate((f) => {
     if (f.backgroundImage) Object.assign(f.backgroundImage, updates);
   });
+  record('set_background', backgroundUpdateParams(updates),
+         { coalesceKey: gestureKey('background', '-', updates) });
 }
 
 // Column functions
@@ -378,6 +443,8 @@ export function addColumn(position: Point, shape: 'round' | 'square' = 'round'):
     if (!f.columns) f.columns = [];
     f.columns.push({ id, position, rotation: 0, shape, diameter: 30, height: 280, color: '#cccccc' });
   }, `Added ${shape} column`);
+  record('add_column', { column_id: id, position: pt(position), shape,
+                         size_mm: mm(30), height_mm: mm(280), rotation: 0 });
   return id;
 }
 
@@ -387,6 +454,8 @@ export function updateColumn(id: string, updates: Partial<Column>) {
     const c = f.columns.find((c) => c.id === id);
     if (c) Object.assign(c, updates);
   }, undefined, coalesceKeyFor('column', id, updates));
+  record('update_column', columnUpdateParams(id, updates),
+         { coalesceKey: gestureKey('column', id, updates) });
 }
 
 export function removeColumn(id: string) {
@@ -394,6 +463,7 @@ export function removeColumn(id: string) {
     if (!f.columns) return;
     f.columns = f.columns.filter((c) => c.id !== id);
   });
+  record('remove_element', { element_id: id });
 }
 
 export function moveColumn(id: string, position: Point) {
@@ -406,6 +476,8 @@ export function moveColumn(id: string, position: Point) {
     c.position = position;
     p.updatedAt = new Date();
     currentProject.set({ ...p });
+    record('move_column', { column_id: id, position: pt(position) },
+           { coalesceKey: gestureKey('column', id, { position: 1 }) });
   }
 }
 
@@ -425,6 +497,9 @@ export function addEntourageItem(defId: string, position: Point, width: number):
     if (!f.entourage) f.entourage = [];
     f.entourage.push({ id, defId, position, width, rotation: 0 });
   }, 'Added entourage');
+  record('add_entourage', { entourage_id: id, def_id: defId,
+                            position: pt(position), width_mm: mm(width),
+                            rotation: 0 });
   return id;
 }
 
@@ -438,6 +513,8 @@ export function moveEntourage(id: string, position: Point) {
     item.position = position;
     p.updatedAt = new Date();
     currentProject.set({ ...p });
+    record('move_entourage', { entourage_id: id, position: pt(position) },
+           { coalesceKey: gestureKey('entourage', id, { position: 1 }) });
   }
 }
 
@@ -451,6 +528,8 @@ export function resizeEntourage(id: string, width: number) {
     item.width = width;
     p.updatedAt = new Date();
     currentProject.set({ ...p });
+    record('update_entourage', { entourage_id: id, width_mm: mm(width) },
+           { coalesceKey: gestureKey('entourage', id, { width: 1 }) });
   }
 }
 
@@ -459,6 +538,8 @@ export function updateEntourageItem(id: string, updates: Partial<EntourageItem>)
     const e = f.entourage?.find((e) => e.id === id);
     if (e) Object.assign(e, updates);
   }, undefined, coalesceKeyFor('entourage', id, updates));
+  record('update_entourage', entourageUpdateParams(id, updates),
+         { coalesceKey: gestureKey('entourage', id, updates) });
 }
 
 /** Register an uploaded PNG as a reusable project-level entourage symbol. */
@@ -496,6 +577,7 @@ export function removeElement(id: string) {
     if (f.textAnnotations) f.textAnnotations = f.textAnnotations.filter((t) => t.id !== id);
     if (f.entourage) f.entourage = f.entourage.filter((e) => e.id !== id);
   }, 'Deleted element');
+  record('remove_element', { element_id: id });
 }
 
 /** Move a wall endpoint without creating an undo snapshot (for dragging) */
@@ -509,6 +591,9 @@ export function moveWallEndpoint(id: string, endpoint: 'start' | 'end', position
     w[endpoint] = position;
     p.updatedAt = new Date();
     currentProject.set({ ...p });
+    record('move_wall_endpoint',
+           { wall_id: id, endpoint, position: pt(position) },
+           { coalesceKey: gestureKey('wall', id, { [endpoint]: 1 }) });
   }
 }
 
@@ -517,6 +602,8 @@ export function updateWall(id: string, updates: Partial<Wall>) {
     const w = f.walls.find((w) => w.id === id);
     if (w) Object.assign(w, updates);
   }, undefined, coalesceKeyFor('wall', id, updates));
+  record('update_wall', wallUpdateParams(id, updates),
+         { coalesceKey: gestureKey('wall', id, updates) });
 }
 
 export function updateDoor(id: string, updates: Partial<Door>) {
@@ -524,6 +611,8 @@ export function updateDoor(id: string, updates: Partial<Door>) {
     const d = f.doors.find((d) => d.id === id);
     if (d) Object.assign(d, updates);
   }, undefined, coalesceKeyFor('door', id, updates));
+  record('update_opening', doorUpdateParams(id, updates),
+         { coalesceKey: gestureKey('door', id, updates) });
 }
 
 export function updateWindow(id: string, updates: Partial<Win>) {
@@ -531,6 +620,8 @@ export function updateWindow(id: string, updates: Partial<Win>) {
     const w = f.windows.find((w) => w.id === id);
     if (w) Object.assign(w, updates);
   }, undefined, coalesceKeyFor('window', id, updates));
+  record('update_opening', windowUpdateParams(id, updates),
+         { coalesceKey: gestureKey('window', id, updates) });
 }
 
 export function updateFurniture(id: string, updates: Partial<FurnitureItem>) {
@@ -538,6 +629,8 @@ export function updateFurniture(id: string, updates: Partial<FurnitureItem>) {
     const fi = f.furniture.find((fi) => fi.id === id);
     if (fi) Object.assign(fi, updates);
   }, undefined, coalesceKeyFor('furniture', id, updates));
+  record('update_furniture', furnitureUpdateParams(id, updates),
+         { coalesceKey: gestureKey('furniture', id, updates) });
 }
 
 export function updateRoom(id: string, updates: Partial<{ name: string; floorTexture: string; color: string; roomType: import('$lib/models/types').RoomCategory; labelOffset: import('$lib/models/types').Point | undefined }>) {
@@ -562,6 +655,17 @@ export function updateRoom(id: string, updates: Partial<{ name: string; floorTex
       }
     }
   }, undefined, coalesceKeyFor('room', id, updates));
+  // A label nudge is a coordinate, so it is a separate `direct` command; the
+  // rest of a room update is symbolic. See $lib/commands/fromStore.
+  const split = roomUpdateParams(id, updates);
+  if (split.room) {
+    record('update_room', split.room,
+           { coalesceKey: gestureKey('room', id, updates) });
+  }
+  if (split.label) {
+    record('move_room_label', split.label,
+           { coalesceKey: gestureKey('roomLabel', id, { offset: 1 }) });
+  }
 }
 
 export function addFloor(name?: string, copyCurrentLayout = false) {
@@ -570,16 +674,26 @@ export function addFloor(name?: string, copyCurrentLayout = false) {
   snapshot('Added floor');
   const level = p.floors.length;
   const floor: Floor = { id: uid(), name: name ?? `Floor ${level}`, level, walls: [], rooms: [], doors: [], windows: [], furniture: [], stairs: [], columns: [], guides: [], measurements: [], annotations: [], textAnnotations: [], groups: [] };
-  if (copyCurrentLayout) {
-    const cur = p.floors.find(f => f.id === p.activeFloorId);
-    if (cur) {
-      floor.walls = cur.walls.map(w => ({ ...w, id: uid() }));
-    }
+  const source = p.floors.find(f => f.id === p.activeFloorId);
+  // The ids the copy uses, computed here and sent with the command. Letting
+  // the service mint its own would leave the two sides permanently disagreeing
+  // about what the walls on this floor are called.
+  const idMap: Record<string, string> = {};
+  if (copyCurrentLayout && source) {
+    for (const w of source.walls) idMap[w.id] = uid();
+    floor.walls = source.walls.map(w => ({ ...w, id: idMap[w.id] }));
   }
   p.floors.push(floor);
   p.activeFloorId = floor.id;
   p.updatedAt = new Date();
   currentProject.set({ ...p });
+  record('add_storey', {
+    storey_id: floor.id, name: floor.name, level,
+    ...(copyCurrentLayout && source
+      ? { copy_from: source.id, id_map: idMap }
+      : {}),
+  });
+  record('set_active_storey', { storey_id: floor.id });
 }
 
 export function removeFloor(id: string) {
@@ -592,6 +706,7 @@ export function removeFloor(id: string) {
   }
   p.updatedAt = new Date();
   currentProject.set({ ...p });
+  record('remove_storey', { storey_id: id });
 }
 
 export function setActiveFloor(floorId: string) {
@@ -600,6 +715,7 @@ export function setActiveFloor(floorId: string) {
   if (p.floors.some((f) => f.id === floorId)) {
     p.activeFloorId = floorId;
     currentProject.set({ ...p });
+    record('set_active_storey', { storey_id: floorId });
   }
 }
 
@@ -609,6 +725,7 @@ export function updateProjectName(name: string) {
   p.name = name;
   p.updatedAt = new Date();
   currentProject.set({ ...p });
+  record('rename_design', { name });
 }
 
 export function loadProject(project: Project) {
@@ -663,6 +780,7 @@ export function duplicateDoor(id: string): string | null {
   mutate(f => {
     f.doors.push({ ...d, id: newId, position: newPos });
   });
+  record('duplicate_opening', { opening_id: id, new_opening_id: newId });
   return newId;
 }
 
@@ -679,6 +797,7 @@ export function duplicateWindow(id: string): string | null {
   mutate(f => {
     f.windows.push({ ...w, id: newId, position: newPos });
   });
+  record('duplicate_opening', { opening_id: id, new_opening_id: newId });
   return newId;
 }
 
@@ -694,6 +813,7 @@ export function duplicateFurniture(id: string): string | null {
   mutate(f => {
     f.furniture.push({ ...fi, id: newId, position: { x: fi.position.x + 30, y: fi.position.y + 30 } });
   });
+  record('duplicate_furniture', { furniture_id: id, new_furniture_id: newId });
   return newId;
 }
 
@@ -712,6 +832,14 @@ export function moveWallParallel(id: string, dx: number, dy: number) {
     }
     p.updatedAt = new Date();
     currentProject.set({ ...p });
+    // Per-frame during a drag. The bus keeps only the last one, but each
+    // carries a *cumulative* delta from where the wall was when the gesture
+    // started, so collapsing them cannot lose part of the movement.
+    const from = dragOrigin.get(id) ?? { x: w.start.x - dx, y: w.start.y - dy };
+    dragOrigin.set(id, from);
+    record('move_wall_by',
+           { wall_id: id, dx: mm(w.start.x - from.x), dy: mm(w.start.y - from.y) },
+           { coalesceKey: gestureKey('wallMove', id, { d: 1 }) });
   }
 }
 
@@ -757,6 +885,7 @@ export function splitWall(id: string, t: number): string | null {
   }
   p.updatedAt = new Date();
   currentProject.set({ ...p });
+  record('split_wall', { wall_id: id, at: t, new_wall_id: newId });
   return newId;
 }
 
@@ -772,6 +901,7 @@ export function duplicateWall(id: string): string | null {
   mutate(f => {
     f.walls.push({ ...w, id: newId, start: { x: w.start.x + 30, y: w.start.y + 30 }, end: { x: w.end.x + 30, y: w.end.y + 30 } });
   });
+  record('duplicate_wall', { wall_id: id, new_wall_id: newId });
   return newId;
 }
 
@@ -782,6 +912,7 @@ export function addGuide(orientation: 'horizontal' | 'vertical', position: numbe
     if (!f.guides) f.guides = [];
     f.guides.push({ id, orientation, position });
   });
+  record('add_guide', { guide_id: id, orientation, position: mm(position) });
   return id;
 }
 
@@ -791,6 +922,8 @@ export function moveGuide(id: string, position: number) {
     const g = f.guides.find(g => g.id === id);
     if (g) g.position = position;
   });
+  record('move_guide', { guide_id: id, position: mm(position) },
+         { coalesceKey: gestureKey('guide', id, { position: 1 }) });
 }
 
 export function removeGuide(id: string) {
@@ -798,6 +931,7 @@ export function removeGuide(id: string) {
     if (!f.guides) return;
     f.guides = f.guides.filter(g => g.id !== id);
   });
+  record('remove_element', { element_id: id });
 }
 
 // --- Measurements ---
@@ -807,6 +941,9 @@ export function addMeasurement(x1: number, y1: number, x2: number, y2: number): 
     if (!f.measurements) f.measurements = [];
     f.measurements.push({ id, x1, y1, x2, y2 });
   });
+  record('add_measurement', { measurement_id: id,
+                              start: { x: mm(x1), y: mm(y1) },
+                              end: { x: mm(x2), y: mm(y2) } });
   return id;
 }
 
@@ -815,6 +952,7 @@ export function removeMeasurement(id: string) {
     if (!f.measurements) return;
     f.measurements = f.measurements.filter(m => m.id !== id);
   });
+  record('remove_element', { element_id: id });
 }
 
 // --- Annotations ---
@@ -824,6 +962,11 @@ export function addAnnotation(x1: number, y1: number, x2: number, y2: number, of
     if (!f.annotations) f.annotations = [];
     f.annotations.push({ id, x1, y1, x2, y2, offset, label });
   });
+  record('add_dimension', { dimension_id: id,
+                            start: { x: mm(x1), y: mm(y1) },
+                            end: { x: mm(x2), y: mm(y2) },
+                            offset: mm(offset),
+                            ...(label ? { label } : {}) });
   return id;
 }
 
@@ -832,6 +975,7 @@ export function removeAnnotation(id: string) {
     if (!f.annotations) return;
     f.annotations = f.annotations.filter(a => a.id !== id);
   });
+  record('remove_element', { element_id: id });
 }
 
 export function updateAnnotation(id: string, updates: Partial<{ x1: number; y1: number; x2: number; y2: number; offset: number; label: string }>) {
@@ -841,6 +985,11 @@ export function updateAnnotation(id: string, updates: Partial<{ x1: number; y1: 
     if (!a) return;
     Object.assign(a, updates);
   }, undefined, coalesceKeyFor('annotation', id, updates));
+  const dim = dimensionUpdateParams(id, updates);
+  if (dim) {
+    record('update_dimension', dim,
+           { coalesceKey: gestureKey('dimension', id, updates) });
+  }
 }
 
 // --- Text Annotations ---
@@ -850,6 +999,8 @@ export function addTextAnnotation(x: number, y: number, text: string, fontSize =
     if (!f.textAnnotations) f.textAnnotations = [];
     f.textAnnotations.push({ id, x, y, text, fontSize, color, rotation });
   });
+  record('add_text', { text_id: id, position: { x: mm(x), y: mm(y) }, text,
+                       font_size: fontSize, color, rotation });
   return id;
 }
 
@@ -858,6 +1009,7 @@ export function removeTextAnnotation(id: string) {
     if (!f.textAnnotations) return;
     f.textAnnotations = f.textAnnotations.filter(t => t.id !== id);
   });
+  record('remove_element', { element_id: id });
 }
 
 export function updateTextAnnotation(id: string, updates: Partial<{ x: number; y: number; text: string; fontSize: number; color: string; rotation: number }>) {
@@ -867,6 +1019,16 @@ export function updateTextAnnotation(id: string, updates: Partial<{ x: number; y
     if (!t) return;
     Object.assign(t, updates);
   }, undefined, coalesceKeyFor('textAnnotation', id, updates));
+  // Moving a note is a coordinate, so it splits off as a `direct` command.
+  const split = textUpdateParams(id, updates);
+  if (split.text) {
+    record('update_text', split.text,
+           { coalesceKey: gestureKey('text', id, updates) });
+  }
+  if (split.move) {
+    record('move_text', split.move,
+           { coalesceKey: gestureKey('textMove', id, { position: 1 }) });
+  }
 }
 
 export function moveTextAnnotation(id: string, position: { x: number; y: number }) {
@@ -880,6 +1042,8 @@ export function moveTextAnnotation(id: string, position: { x: number; y: number 
   t.y = position.y;
   p.updatedAt = new Date();
   currentProject.set({ ...p });
+  record('move_text', { text_id: id, position: pt(position) },
+         { coalesceKey: gestureKey('textMove', id, { position: 1 }) });
 }
 
 // Layer visibility store (used by LayersPanel and FloorPlanCanvas)
@@ -893,6 +1057,10 @@ export function toggleFurnitureLock(id: string) {
     const fi = f.furniture.find((fi) => fi.id === id);
     if (fi) fi.locked = !fi.locked;
   });
+  const now = get(currentProject)?.floors
+    .find((f) => f.id === get(currentProject)?.activeFloorId)
+    ?.furniture.find((fi) => fi.id === id);
+  if (now) record('update_furniture', { furniture_id: id, locked: !!now.locked });
 }
 
 export function setFurnitureLocked(id: string, locked: boolean) {
@@ -900,6 +1068,7 @@ export function setFurnitureLocked(id: string, locked: boolean) {
     const fi = f.furniture.find((fi) => fi.id === id);
     if (fi) fi.locked = locked;
   });
+  record('update_furniture', { furniture_id: id, locked });
 }
 
 // --- Element Groups ---
@@ -915,6 +1084,7 @@ export function createGroup(elementIds: string[]): string | null {
     })).filter(g => g.elementIds.length >= 2);
     f.groups.push({ id, elementIds: [...elementIds] });
   });
+  record('group_elements', { group_id: id, element_ids: [...elementIds] });
   return id;
 }
 
@@ -923,13 +1093,21 @@ export function ungroup(groupId: string) {
     if (!f.groups) return;
     f.groups = f.groups.filter(g => g.id !== groupId);
   });
+  record('ungroup_elements', { group_id: groupId });
 }
 
 export function ungroupElements(elementIds: string[]) {
+  // One command per group dissolved: the vocabulary names a group, not a
+  // selection, so that the log says exactly what happened.
+  const affected = (get(currentProject)?.floors
+    .find((f) => f.id === get(currentProject)?.activeFloorId)?.groups ?? [])
+    .filter((g) => g.elementIds.some((eid) => elementIds.includes(eid)))
+    .map((g) => g.id);
   mutate((f) => {
     if (!f.groups) return;
     f.groups = f.groups.filter(g => !g.elementIds.some(eid => elementIds.includes(eid)));
   });
+  for (const gid of affected) record('ungroup_elements', { group_id: gid });
 }
 
 export function findGroupForElement(floor: Floor, elementId: string): ElementGroup | undefined {

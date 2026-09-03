@@ -161,7 +161,13 @@ export function reconcileFaces(
     const rival = claimedBy.get(best);
     if (rival) {
       const rivalGap = Math.abs(faces[best].area - (rival.area ?? 0) * 10000);
-      if (rivalGap <= bestGap) continue;         // incumbent is the better fit
+      // Strictly better keeps the face. An exact tie goes to the later
+      // entry, which is the documented contract and is load-bearing: the
+      // caller passes last pass's on-screen rooms first and the floor's saved
+      // rooms last, and the two have identical areas. With `<=` the stale
+      // unnamed copy won every tie, so a room the assistant had just renamed
+      // kept reading "Room 1" on the plan.
+      if (rivalGap < bestGap) continue;
       matched.delete(rival.id);
     }
     claimedBy.set(best, room);

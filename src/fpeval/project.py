@@ -277,6 +277,11 @@ def _presentation_json(pr: Presentation) -> dict[str, Any]:
     return out
 
 
+def _floor_id_of(st: Plan) -> str:
+    """The id this storey carries on the Project side."""
+    return st.project_floor_id or f"floor-{st.id}"
+
+
 def _floor_json(st: Plan, index: int) -> dict[str, Any]:
     doors: list[dict] = []
     windows: list[dict] = []
@@ -285,7 +290,7 @@ def _floor_json(st: Plan, index: int) -> dict[str, Any]:
         (windows if bucket == "windows" else doors).append(blob)
 
     floor: dict[str, Any] = {
-        "id": f"floor-{st.id}",
+        "id": _floor_id_of(st),
         "name": st.name or _derived_floor_name(st.level),
         "level": st.level,
         "walls": [_wall_json(w) for w in st.walls],
@@ -344,7 +349,7 @@ def to_project(x: Plan | Design, name: str | None = None) -> dict[str, Any]:
     storeys = design.storeys or []
     floors = [_floor_json(st, i) for i, st in enumerate(storeys)]
     active = design.active
-    active_floor_id = f"floor-{active.id}" if active else ""
+    active_floor_id = _floor_id_of(active) if active else ""
 
     src = (active.provenance.get("source", "?") if active else "?")
     return {
@@ -362,7 +367,7 @@ def to_project(x: Plan | Design, name: str | None = None) -> dict[str, Any]:
             "version": SIDECAR_VERSION,
             "design_id": design.id,
             "provenance": design.provenance,
-            "floors": {f"floor-{st.id}": _floor_sidecar(st) for st in storeys},
+            "floors": {_floor_id_of(st): _floor_sidecar(st) for st in storeys},
             # -- legacy flat keys, for readers pinned to sidecar version 1 --
             **_legacy_flat_sidecar(active),
         },
@@ -550,8 +555,9 @@ def _storey_ir(proj: dict[str, Any], fl: dict[str, Any]) -> Plan:
     st_rooms = side.get("stair_rooms", {})
     f_rooms = side.get("furniture_rooms", {})
 
+    storey_id = side.get("storey_id") or str(floor_id).replace("floor-", "")
     plan = Plan(
-        id=side.get("storey_id") or str(floor_id).replace("floor-", ""),
+        id=storey_id,
         walls=walls,
         openings=_openings_ir(fl, side),
         rooms=rooms,
@@ -592,6 +598,10 @@ def _storey_ir(proj: dict[str, Any], fl: dict[str, Any]) -> Plan:
                         color=c.get("color") or "#6b7280")
                  for c in fl.get("columns", [])],
         presentation=_presentation_ir(fl),
+        # "" when the floor id is exactly what we would derive, so a plan
+        # built in Python round-trips to itself. Anything else -- an editor
+        # uid like "f9k2p1" -- is an override and is kept verbatim.
+        project_floor_id=_norm(str(floor_id), f"floor-{storey_id}"),
         name=_explicit(side, "storey_name", fl.get("name"),
                        _derived_floor_name(int(fl.get("level", 0)))),
         level=int(fl.get("level", 0)),
