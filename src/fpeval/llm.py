@@ -700,6 +700,7 @@ def extract_spec(
 
 LEVEL_SPEC = "spec"
 LEVEL_GEOMETRY = "geometry"
+LEVEL_FURNITURE = "furniture"
 
 DOOR_TYPES = ("single", "double", "sliding", "french", "pocket", "bifold",
               "opening", "garage")
@@ -763,6 +764,54 @@ OP_TABLE: dict[str, dict[str, Any]] = {
         "level": LEVEL_SPEC, "required": ("value",), "optional": (),
         "editor": None, "doc": "Change the storey count, then re-solve.",
     },
+    # ---- furniture level ------------------------------------------------
+    # Symbolic placement only. "Add a table to the centre of the hall" is
+    # expressible; "put it at x=3200,y=1850" is not, and `_BANNED_PARAM_KEYS`
+    # already rejects `centre` as a coordinate word -- so the anchor vocabulary
+    # below IS the way to say it. Anchors and zone names are furnish.py's, so the
+    # relational placement solver resolves them against the real room polygon,
+    # door swings and clearances.
+    "place_item": {
+        "level": LEVEL_FURNITURE,
+        "required": ("room_id", "item", "anchor"),
+        "optional": ("prefer", "avoid", "of", "side", "count", "align",
+                     "clear_front_mm", "gap_mm", "abut", "avoid_window", "note"),
+        "editor": "addFurniture",
+        "doc": "place_item(room_id, item, anchor) -- anchor is one of "
+               "wall|corner|center|beside|facing|front_of|around|run. `prefer` "
+               "takes compass zones (SE, NE, ...). `of` names another item for "
+               "beside/facing/front_of. Coordinates are resolved by the solver.",
+    },
+    "remove_item": {
+        "level": LEVEL_FURNITURE, "required": ("item_id",), "optional": (),
+        "editor": "removeFurniture", "doc": "Remove one placed item.",
+    },
+    "move_item": {
+        "level": LEVEL_FURNITURE, "required": ("item_id", "anchor"),
+        "optional": ("prefer", "of", "side", "align", "clear_front_mm"),
+        "editor": "moveFurniture",
+        "doc": "Re-anchor an item symbolically; the solver recomputes where.",
+    },
+    "replace_item": {
+        "level": LEVEL_FURNITURE, "required": ("item_id", "item"), "optional": (),
+        "editor": "updateFurniture", "doc": "Swap one catalogue item for another.",
+    },
+    "furnish_room": {
+        "level": LEVEL_FURNITURE, "required": ("room_id",),
+        "optional": ("density", "add", "drop", "swap"),
+        "editor": None,
+        "doc": "Run the rule-based furnisher for one room. `density` is "
+               "sparse|normal|full; add/drop/swap patch the rule table.",
+    },
+    "set_kitchen_layout": {
+        "level": LEVEL_FURNITURE, "required": ("room_id",),
+        "optional": ("run", "hob_zone", "sink_zone", "fridge_zone",
+                     "breakfast_counter"),
+        "editor": None,
+        "doc": "set_kitchen_layout(room_id, run='L'|'U'|'I', hob_zone='SE', "
+               "sink_zone='NE') -- the counter run and appliance zones. The "
+               "600 mm hob/sink separation is enforced by the placer.",
+    },
     # ---- geometry level (mirrors OpenPlan3D's project store) -------------
     "update_wall": {
         "level": LEVEL_GEOMETRY, "required": ("wall_id",),
@@ -808,7 +857,14 @@ OP_TABLE: dict[str, dict[str, Any]] = {
     },
 }
 
+ANCHORS = ("wall", "corner", "center", "beside", "facing", "front_of",
+           "around", "run")
+ZONES = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+DENSITIES = ("sparse", "normal", "full")
+KITCHEN_RUNS = ("I", "L", "U")
+
 SPEC_OPS = tuple(k for k, v in OP_TABLE.items() if v["level"] == LEVEL_SPEC)
+FURNITURE_OPS = tuple(k for k, v in OP_TABLE.items() if v["level"] == LEVEL_FURNITURE)
 GEOMETRY_OPS = tuple(k for k, v in OP_TABLE.items() if v["level"] == LEVEL_GEOMETRY)
 
 # Anything smelling of an absolute coordinate. This is the enforcement point

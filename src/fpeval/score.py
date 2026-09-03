@@ -72,6 +72,8 @@ class Result:
     n_furniture: int = 0
     typology: str = ""
     scenario: Any = None
+    foyer: Any = None
+    site_notes: list[str] = field(default_factory=list)
     furnish_drops: int = 0
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
@@ -176,6 +178,15 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
     prog, warn = (spec_to_programme(spec, relaxed=relaxed)
                   if (track == "B" and spec is not None)
                   else truth_to_programme(t, relaxed=relaxed))
+
+    # A foyer is a DECISION, not a fixed part of the programme: it costs pure
+    # circulation area and only pays for itself above a threshold that depends on
+    # the typology. Decided here so the reason is recorded and overridable.
+    from .entrance import decide_foyer
+    from .envelope import RoomReq as _RR
+    _carpet_guess = sum(r.target_m2 for r in prog) or 60.0
+    _asked = True if "foyer" in (t.rooms_min or {}) or "foyer" in (t.rooms or {}) else None
+    res.foyer = decide_foyer("house_standard", _carpet_guess, asked=_asked)
     res.warnings = warn
     if not prog:
         res.error = "empty programme"
@@ -205,6 +216,12 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                         storeys=int(t.storeys or 1), bedrooms=beds,
                         kitchens=sum(1 for r in prog if r.category == "kitchen"),
                         has_two_living=sum(1 for r in prog if r.category == "living") >= 2)
+        res.foyer = decide_foyer(sc.key, sum(r.target_m2 for r in prog) or 60.0,
+                                 asked=_asked)
+        if res.foyer.wanted and not any(r.category == "foyer" for r in prog):
+            prog.append(_RR(id="foyer", name="Foyer", category="foyer",
+                            target_m2=4.0, weight=0.6))
+            warn.append(f"foyer added: {res.foyer.reason}")
         req_adj, forb_adj, soft_adj = TP.solver_pairs(prog, sc)
         res.typology = sc.key
         res.scenario = sc
@@ -252,6 +269,22 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         res.furnish_drops = len(fr.drops)
     except Exception as e:
         res.warnings.append(f"furnishing failed: {type(e).__name__}: {e}")
+
+    # Site elements: the gate is on the PLOT boundary, not in the room tiling,
+    # so nothing in the layout solver was ever going to place it. Plans that
+    # explicitly asked for a gate had none.
+    try:
+        from .entrance import place_site_elements
+        res.site_notes = place_site_elements(
+            plan, road_facing=facing,
+            want_gate=not is_unit,
+            want_driveway=not is_unit,
+            want_parking=(not is_unit) and bool(
+                {"parking"} & set((t.rooms_min or {}) | (t.rooms or {}))
+                or any("car" in m or "motorcycle" in m or "gate" in m
+                       for m in (t.must_place or []))))
+    except Exception as e:
+        res.warnings.append(f"site placement failed: {type(e).__name__}: {e}")
 
     res.plan = plan
     res.n_rooms = len(plan.rooms)
