@@ -474,12 +474,10 @@ def test_counter_run_policy_changes_the_kitchen():
 # ══════════════════════════════════════════════════════════ 5. solver corpus
 
 def test_solver_plans_have_zero_geometric_violations():
-    rows = []
     for key in SOLVER_CASES:
         plan = solver_case(key)
         out, rep = furnish(plan)
         a = audit(out)
-        rows.append((key, len(out.furniture), a))
         assert a["violations"]["outside_room"] == [], (key, a)
         assert a["violations"]["wall_overlap"] == [], (key, a)
         assert a["violations"]["item_overlap"] == [], (key, a)
@@ -488,7 +486,6 @@ def test_solver_plans_have_zero_geometric_violations():
         assert a["violations"]["unknown_catalog"] == [], (key, a)
         assert a["violations"]["no_room"] == [], (key, a)
         assert len(out.furniture) >= 15, (key, len(out.furniture))
-    return rows
 
 
 def test_solver_plans_get_their_required_items():
@@ -647,7 +644,6 @@ def test_resplan_corpus():
     assert st["n_items"] / max(1, st["n_plans"]) > 8, st
     # a required item is only excused by the size gate, so the rate must be high
     assert st["required_rate"] > 0.93, (st["required_rate"], st["required_n"])
-    return st
 
 
 # ══════════════════════════════════════════════════════════ 7. determinism
@@ -680,14 +676,9 @@ def test_determinism_same_process():
         "no RNG, so the seed must not move anything"
 
 
-def test_determinism_across_processes():
-    if PKL is None:
-        try:
-            import pytest
-            pytest.skip("ResPlan.pkl not on disk")
-        except ImportError:
-            return
-    idx = list(range(24))
+def cross_process_digests(n: int = 24) -> list[str]:
+    """Same corpus, three PYTHONHASHSEEDs, three fresh interpreters."""
+    idx = list(range(n))
     src = _CHILD % {"src": str(ROOT / "src"), "pkl": str(PKL), "idx": idx}
     outs = []
     for hs in ("0", "1", "12345"):
@@ -696,8 +687,18 @@ def test_determinism_across_processes():
                            text=True, env=env, cwd=str(ROOT))
         assert r.returncode == 0, r.stderr[-2000:]
         outs.append(r.stdout.strip())
+    return outs
+
+
+def test_determinism_across_processes():
+    if PKL is None:
+        try:
+            import pytest
+            pytest.skip("ResPlan.pkl not on disk")
+        except ImportError:
+            return
+    outs = cross_process_digests()
     assert len(set(outs)) == 1, outs
-    return outs[0]
 
 
 # ══════════════════════════════════════════════════════════ 8. sample SVGs
@@ -734,7 +735,7 @@ def _overlay(svg: str, plan: Plan) -> str:
     return svg.replace("</svg>", "".join(parts) + "</svg>")
 
 
-def test_writes_sample_svgs():
+def write_samples() -> list[Path]:
     OUT.mkdir(parents=True, exist_ok=True)
     written = []
     for key in SOLVER_CASES:
@@ -756,8 +757,11 @@ def test_writes_sample_svgs():
             p = OUT / f"resplan-{i:05d}.svg"
             p.write_text(svg)
             written.append(p)
-    assert written
     return written
+
+
+def test_writes_sample_svgs():
+    assert write_samples()
 
 
 # ══════════════════════════════════════════════════════════ standalone report
@@ -877,8 +881,10 @@ def main() -> int:
         print("  SKIPPED cross-process (needs ResPlan.pkl)")
     else:
         try:
-            dg = test_determinism_across_processes()
-            print(f"  ok   identical across 3 processes x PYTHONHASHSEED: {dg[:16]}")
+            dg = cross_process_digests()
+            assert len(set(dg)) == 1, dg
+            print("  ok   identical across 3 processes x PYTHONHASHSEED: "
+                  f"{dg[0][:16]}")
         except Exception as e:                                    # noqa: BLE001
             print(f"  FAIL cross-process: {e}")
             fails.append(f"determinism cross-process: {e}")
@@ -890,7 +896,7 @@ def main() -> int:
     print(f"  render.py draws furniture: {RENDER_DRAWS_FURNITURE} "
           f"(it does not; the overlay is composed in this test file)")
     try:
-        for p in test_writes_sample_svgs():
+        for p in write_samples():
             print(f"  wrote {p.relative_to(ROOT)}  {p.stat().st_size/1024:.1f} kB")
     except Exception as e:                                        # noqa: BLE001
         print(f"  FAIL svg: {e}")
