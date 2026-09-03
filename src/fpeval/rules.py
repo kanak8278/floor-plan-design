@@ -1055,6 +1055,142 @@ def check_typology(ctx: _Ctx) -> list[Finding]:
     return out
 
 
+
+# --------------------------------------------------- design / syntax / topology
+def check_design_quality(ctx: _Ctx) -> list[Finding]:
+    """The 14 architect's-red-pen checks in `design.py`."""
+    from . import design as D
+    from . import topology as TP
+    sc = _scenario_for(ctx)
+    fs = D.check(ctx.plan, adjacency=_adj(ctx), entry_rooms=ctx.entry_rooms,
+                 typology=sc, brief=ctx.brief)
+    return [Finding(f.rule_id, f.severity, f.weight, f.detail, f.element_ids)
+            for f in fs]
+
+
+def check_syntax(ctx: _Ctx) -> list[Finding]:
+    """Space-syntax configuration: is the living room actually the core?
+
+    Targets are measured off 400 real ResPlan plans (living is the core in 97%,
+    living_relative 2.53, privacy_gradient 0.39). Our own output sat at 3.3% /
+    1.01 / 1.02, i.e. no hierarchy at all, which is what these catch.
+    """
+    from . import syntax as SX
+    a = _adj(ctx)
+    meta = {r.id: (r.name, r.category or "") for r in ctx.rooms}
+    ent = (ctx.entry_rooms or [None])[0]
+    st = SX.analyse(a, meta, ent)
+    ctx.brief["_syntax"] = st          # so callers can read the metrics
+    return [Finding(rid, sev, w, det, ids) for rid, sev, w, det, ids in SX.check(st)]
+
+
+def check_bathroom_topology(ctx: _Ctx) -> list[Finding]:
+    """Classify every bathroom and compare against what the brief asked for.
+
+    "3BHK with all attached baths" and "3BHK with a common bath" are different
+    TOPOLOGIES, not different labels, so the brief's intent is checkable.
+    """
+    from . import topology as TP
+    out: list[Finding] = []
+    a = _adj(ctx)
+    cat_of = {r.id: (r.category or "") for r in ctx.rooms}
+    names = {r.id: r.name for r in ctx.rooms}
+    ent = (ctx.entry_rooms or [None])[0]
+    from .syntax import _bfs_depths as _bfs
+    depth = _bfs(a, ent) if ent in a else {}
+    beds = {i for i, c in cat_of.items() if c in TP.PRIVATE_CATS}
+
+    kinds: dict[str, str] = {}
+    for bid, c in cat_of.items():
+        if c != "bathroom":
+            continue
+        touching = {b for b in beds
+                    if bid in ctx.polys and b in ctx.polys
+                    and ctx.polys[bid].buffer(60).intersects(ctx.polys[b])}
+        t = TP.classify_bathroom(bid, names.get(bid, bid), set(a.get(bid, ())),
+                                 cat_of, depth=depth.get(bid),
+                                 adjacent_bedrooms=touching)
+        kinds[bid] = t.kind
+        if t.kind == "unreachable":
+            out.append(Finding("TOPO.BATH_UNREACHABLE", "error", 1.0,
+                               f"{t.name} has no door", [bid]))
+        elif t.kind == "shared_attached" and len(t.bedrooms) > 2:
+            out.append(Finding("TOPO.BATH_OVERSHARED", "error", 0.9,
+                               f"{t.name} opens off {len(t.bedrooms)} bedrooms; a "
+                               "shared bath serves two at most", [bid]))
+
+    want = ctx.brief.get("attached_bath")
+    if want is not None:
+        got = sum(1 for k in kinds.values() if k in ("attached", "common_attached"))
+        if got < int(want):
+            out.append(Finding(
+                "TOPO.ATTACHED_BATH_SHORTFALL", "error", 0.9,
+                f"brief asks for {want} attached bathroom(s); the plan realises "
+                f"{got} ({', '.join(sorted(set(kinds.values()))) or 'none'})",
+                list(kinds)))
+
+    # A household with bedrooms and no common-access toilet means guests use a
+    # bedroom's bath.
+    if beds and kinds and not any(
+            k in ("common", "common_attached", "powder", "detached")
+            for k in kinds.values()):
+        out.append(Finding(
+            "TOPO.NO_COMMON_BATH", "warn", 0.6,
+            "every bathroom is en-suite; there is no toilet a guest can use "
+            "without entering a bedroom", list(kinds)))
+    ctx.brief["_bath_kinds"] = kinds
+    return out
+
+
+def _scenario_for(ctx: _Ctx):
+    """Resolve the topology scenario once, from the brief or by inference."""
+    from . import topology as TP
+    key = ctx.brief.get("scenario")
+    if key and key in TP.SCENARIOS:
+        return TP.SCENARIOS[key]
+    beds = sum(1 for r in ctx.rooms if (r.category or "") in TP.PRIVATE_CATS)
+    kits = sum(1 for r in ctx.rooms if (r.category or "") == "kitchen")
+    livs = sum(1 for r in ctx.rooms if (r.category or "") == "living")
+    return TP.resolve(site_kind=str(ctx.brief.get("site_kind", "plot")),
+                      plot_sqft=ctx.brief.get("plot_area_sqft"),
+                      carpet_sqft=ctx.brief.get("carpet_sqft"),
+                      storeys=int(ctx.brief.get("habitable_floors", 1)),
+                      bedrooms=beds, kitchens=max(kits, 1),
+                      has_two_living=livs >= 2)
+
+
+def check_zoning(ctx: _Ctx) -> list[Finding]:
+    """Public / private / service should read as zones, not be interleaved."""
+    from . import topology as TP
+    out: list[Finding] = []
+    zones: dict[str, list[str]] = {}
+    for r in ctx.rooms:
+        z = TP.ZONE_OF.get(r.category or "")
+        if z and r.id in ctx.polys:
+            zones.setdefault(z, []).append(r.id)
+    for z in ("private", "public"):
+        ids = zones.get(z, [])
+        if len(ids) < 2:
+            continue
+        # A zone is coherent if its members form one touching cluster.
+        rem, comp = set(ids), []
+        while rem:
+            seed = rem.pop(); grp = {seed}; stack = [seed]
+            while stack:
+                u = stack.pop()
+                for v in list(rem):
+                    if ctx.polys[u].buffer(120).intersects(ctx.polys[v]):
+                        rem.discard(v); grp.add(v); stack.append(v)
+            comp.append(grp)
+        if len(comp) > 1:
+            out.append(Finding(
+                f"ZONE.{z.upper()}_FRAGMENTED", "warn", 0.5,
+                f"the {z} zone breaks into {len(comp)} separate clusters; related "
+                "functions should group and conflicting ones separate",
+                sorted(ids)))
+    return out
+
+
 def check_bylaws(ctx: _Ctx) -> list[Finding]:
     out: list[Finding] = []
     prof = ctx.profile
@@ -1347,6 +1483,10 @@ def validate(plan: Plan, brief: dict | None = None,
     fs += check_bylaws(ctx)
     fs += check_circulation(ctx)
     fs += check_typology(ctx)
+    fs += check_design_quality(ctx)
+    fs += check_bathroom_topology(ctx)
+    fs += check_zoning(ctx)
+    fs += check_syntax(ctx)
     if brief.get("vastu", True):
         _s, vf = vastu_score(plan, profile, ctx)
         fs += vf
