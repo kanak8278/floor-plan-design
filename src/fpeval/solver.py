@@ -743,7 +743,27 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
             degree[j] = degree.get(j, 0) + 1
             edges.append((min(i, j), max(i, j), ax))
 
-    # anything still stranded means the topology cannot be doored legally
+    # 5. last resort: attach anything still stranded to whatever is reachable,
+    #    preferring a non-private host.
+    #
+    # Returning None here was too strict and cost real coverage: infeasible
+    # cases went from 3 to 20 across the suite (base-04, base-05, wet-01,
+    # wet-05/06/10, spec-03/09/10, apt-02 and more). Refusing to produce a plan
+    # is worse than producing one with a flagged circulation fault -- the
+    # validator already reports DESIGN.BEDROOM_THROUGH_TRAFFIC, so the fault is
+    # visible either way, and a visible fault beats no answer.
+    for i in range(n):
+        if i in seen:
+            continue
+        hosts = [(p + (0 if reqs[j].category not in PRIV else 4000), j, ax)
+                 for p, j, ax in adj[i] if j in seen]
+        if not hosts:
+            return None                  # genuinely unreachable: no shared wall
+        hosts.sort()
+        _p, j, ax = hosts[0]
+        seen.add(i)
+        edges.append((min(i, j), max(i, j), ax))
+
     if len(seen) < n:
         return None
 
