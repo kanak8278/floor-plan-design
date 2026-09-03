@@ -77,6 +77,11 @@ class Example:
     expect_reason: str | None = None      # for infeasible: which group binds
     clarify_about: list[str] = field(default_factory=list)  # what must be asked
     source: str = "authored"
+    # Which tracks an example is meaningful on. Some assertions live purely in
+    # the prompt (a quoted built-up area, a semantic contradiction) and Truth has
+    # no field to carry them, so track A would score them as false passes.
+    tracks: tuple[str, ...] = ("A", "B")
+    note: str = ""
 
     def validate(self) -> list[str]:
         errs = []
@@ -119,6 +124,8 @@ def load_file(path: Path) -> list[Example]:
             expect_reason=e.get("expect_reason"),
             clarify_about=e.get("clarify_about", []),
             source=e.get("source", raw.get("source", "authored")),
+            tracks=tuple(e.get("tracks", ("A", "B"))),
+            note=e.get("note", ""),
         ))
     return out
 

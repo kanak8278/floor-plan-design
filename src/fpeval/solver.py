@@ -51,6 +51,13 @@ WIN_SILL, WIN_HEAD = 900, 2100
 DOOR_HEAD = 2100
 WALL_ID_MIN_OVERLAP = 100.0       # mm of shared centreline to count as bounding
 
+# Pairs NBC forbids outright. These were previously priced at penalty 9, which
+# Prim happily paid whenever a bathroom had no other available adjacency -- so the
+# solver emitted a door the validator then flagged, on 3 of 89 suite examples.
+# A code prohibition is not a cost: exclude the edge, and if that strands a room
+# the TOPOLOGY is wrong, so try the next one.
+NBC_FORBIDDEN = {frozenset(("kitchen", "bathroom"))}
+
 # Door-graph edge penalties. Prim minimises these, which yields a hub-and-spoke
 # plan through the living room / hall instead of a chain of bedrooms opening
 # into each other.
@@ -557,15 +564,22 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
 def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
                     reqs: Sequence[RoomReq], nominal: dict[int, tuple],
                     required: set[frozenset], forbidden: set[frozenset]
-                    ) -> list[tuple[int, int, str]]:
+                    ) -> list[tuple[int, int, str]] | None:
     """Prim from the entrance over penalised structural edges -> door set.
 
     Rooted at the entrance, so every room is reachable from the front door by
     construction; the door-width constraints above then keep it true.
+
+    Returns None when the entrance cannot reach every room without an
+    NBC-forbidden door. That is a property of the topology, not of the
+    dimensions, so the caller should move to the next candidate rather than
+    emit an illegal plan.
     """
     adj: dict[int, list[tuple[int, int, str]]] = {i: [] for i in range(n)}
     for (i, j), ax in pairs.items():
         key = frozenset((reqs[i].category, reqs[j].category))
+        if key in NBC_FORBIDDEN:
+            continue                    # code prohibition, not a penalty
         pen = _EDGE_PEN.get(key, _EDGE_PEN_DEFAULT)
         ids = frozenset((reqs[i].id, reqs[j].id))
         if ids in required:
@@ -587,6 +601,8 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
         seen.add(v)
         edges.append((min(u, v), max(u, v), ax))
         frontier.extend((q, v, k, a2) for q, k, a2 in adj[v] if k not in seen)
+    if len(seen) < n:
+        return None
     for (i, j), ax in pairs.items():
         if frozenset((reqs[i].id, reqs[j].id)) in required:
             e = (min(i, j), max(i, j), ax)
@@ -900,6 +916,8 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
         pairs = _structural_pairs(labels)
         doors = _spanning_doors(pairs, len(reqs), ent, reqs, nom,
                                 required, forbidden)
+        if doors is None:
+            continue                    # no legal door tree on this topology
         pins = _pinned_cuts(reuse, previous, pinned_wall_ids, nodes)
         mm = _build_model(nodes, root, reqs, targets, rect_mm, alw_mm, spec,
                           st.north_deg, doors, cutv, pins, gated=False)
@@ -1181,6 +1199,8 @@ def _diagnose(cands, reqs, targets, rect_mm, alw_mm, spec, st, required,
         labels, _ax = _label_rects(nodes, root)
         doors = _spanning_doors(_structural_pairs(labels), len(reqs), ent,
                                 reqs, nom, required, forbidden)
+        if doors is None:
+            continue
         pins = _pinned_cuts(reuse, previous, pinned_wall_ids, nodes)
         mm = _build_model(nodes, root, reqs, targets, rect_mm, alw_mm, spec,
                           st.north_deg, doors, cutv, pins, gated=True)

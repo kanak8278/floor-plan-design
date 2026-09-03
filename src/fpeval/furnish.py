@@ -32,17 +32,18 @@ Geometry notes that cost measurements to learn:
 from __future__ import annotations
 
 import copy
+import json
 import math
 import time
 from dataclasses import dataclass, field, asdict, replace
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Optional, Sequence
 
-from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
 from . import catalog, roomtypes
 from .envelope import VASTU_BEARING
-from .ir import Furniture, Opening, P, Plan, Room, Wall
+from .ir import Furniture, P, Plan, Room, Wall
 from .rules import bearing_deg, zone_of_bearing
 
 # ---------------------------------------------------------------- constants
@@ -198,10 +199,11 @@ RULES: dict[str, tuple[Spec, ...]] = {
         Spec("basin", "sink_b", "wall", clear_front=550, min_room_m2=2.2,
              optional=True, min_gap_to=(("wc", 150),)),
         Spec("shower", "shower", "corner", optional=True, min_room_m2=2.8,
-             clear_front=0, avoid_window=False,
-             note="900x900 corner tray. The catalogue calls it 2100 tall, but an "
-                  "Indian shower is a floor zone plus a wall head, so it does "
-                  "not count as a window blocker"),
+             clear_front=0,
+             note="900x900 corner cubicle. Exempting it from the window rule was "
+                  "tried and reverted: the catalogue item is 2100 tall, so 36 of "
+                  "6155 placements on ResPlan then stood a full-height enclosure "
+                  "across a window. A tray-only shower needs a shorter item"),
         Spec("washer_dryer", "washing_machine", "wall", optional=True,
              min_room_m2=6.0, level=1),
     ),
@@ -478,6 +480,22 @@ class FurnishReport:
             head = d.reason.split(";")[0].split("(")[0].strip()
             out[head] = out.get(head, 0) + 1
         return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    def fingerprint(self) -> str:
+        """Everything the solver decided, with wall-clock timings removed.
+
+        `ms` fields legitimately vary run to run, so a byte-identity check has
+        to be taken over the decisions, not over the whole report.
+        """
+        return json.dumps({
+            "plan_id": self.plan_id, "seed": self.seed, "density": self.density,
+            "policy_diff": list(self.policy_diff),
+            "placements": [asdict(p) for p in self.placements],
+            "drops": [asdict(d) for d in self.drops],
+            "rooms": [{k: v for k, v in asdict(r).items() if k != "ms"}
+                      for r in self.rooms],
+            "skipped": [list(s) for s in self.skipped],
+        }, sort_keys=True)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1136,9 +1154,13 @@ def _beside_cands(ref: _Placed, spec: Spec, w: float, d: float) -> list[_Cand]:
     sides = {"left": (-1.0,), "right": (1.0,), "both": (-1.0, 1.0)}[spec.side]
     for sgn in sides:
         off = ref.w / 2.0 + spec.gap + w / 2.0
-        back = (d - ref.d) / 2.0              # keep the back planes coincident
-        x = ref.cx + ux * sgn * off - fx * back
-        y = ref.cy + uy * sgn * off - fy * back
+        # Keep the two BACK planes coincident, not the two centres: the bed is
+        # 2000 deep and the nightstand 400, so the offset is +f*(d - ref.d)/2.
+        # The sign was inverted here and a render review caught it - the
+        # nightstands sat 1600 mm off the wall, level with the foot of the bed.
+        back = (d - ref.d) / 2.0
+        x = ref.cx + ux * sgn * off + fx * back
+        y = ref.cy + uy * sgn * off + fy * back
         out.append(_Cand(x, y, ref.rot, None, 0.0, "flush"))
     return _dedupe(out)
 
@@ -1288,9 +1310,8 @@ def _furnish_kitchen(ctx: _Ctx, specs: Sequence[Spec], pol: ResolvedPolicy,
             # A fridge or washing machine does not have to stand in the
             # platform run; Indian kitchens routinely put the fridge on the
             # opposite wall. Sink and hob do have to, so they get no fallback.
-            pl, why2 = _try_place(ctx, s2, placed, dims_override=(w, d, h),
-                                  anchor="wall")
-            why = why if pl is None else why
+            pl, _ = _try_place(ctx, s2, placed, dims_override=(w, d, h),
+                               anchor="wall")
         if pl is None:
             drops.append((spec, why))
         else:

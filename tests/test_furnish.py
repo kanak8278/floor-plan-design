@@ -28,7 +28,6 @@ import json
 import math
 import os
 import pickle
-import statistics
 import subprocess
 import sys
 import time
@@ -45,9 +44,9 @@ from fpeval import catalog, roomtypes                             # noqa: E402
 from fpeval.bylaws import BENGALURU                               # noqa: E402
 from fpeval.envelope import CityProfileAdapter, bhk_programme     # noqa: E402
 from fpeval.furnish import (                                      # noqa: E402
-    CIRC_MM, RULES, WINDOW_TALL_MARGIN, Spec, _openings_for, _poly,
-    audit, build_ctx, facing, footprint, furnish, required_keys,
-    resolve_policy, rot_for_normal, wall_mass, zone_score)
+    RULES, WINDOW_TALL_MARGIN, _openings_for, _poly, audit, build_ctx,
+    facing, footprint, furnish, required_keys, resolve_policy,
+    rot_for_normal, wall_mass, zone_score)
 from fpeval.ir import Opening, P, Plan, Room, Site, Wall          # noqa: E402
 from fpeval.project import from_project, to_project              # noqa: E402
 from fpeval.render import render                                  # noqa: E402
@@ -258,6 +257,41 @@ def test_sofa_faces_into_the_room():
     assert (v[0] * fx + v[1] * fy) / n > 0.3, "sofa must look inward"
 
 
+def test_beside_items_share_the_wall_plane():
+    """A nightstand must be flush with the same wall as the headboard.
+
+    Regression: the back-plane offset had its sign inverted, which put both
+    nightstands 1600 mm off the wall, level with the foot of the bed. Every
+    invariant test still passed - only looking at the drawing found it.
+    """
+    plan = rect_plan(4000, 4600)
+    out, rep = furnish(plan)
+    bed = item_of(out, "bed")
+    assert bed is not None, rep.text()
+    fx, fy = facing(bed.rotation)
+    bed_back = (bed.position.x - fx * bed.depth / 2.0,
+                bed.position.y - fy * bed.depth / 2.0)
+    mass = wall_mass(plan)
+    n = 0
+    for key in ("nightstand_a", "nightstand_b"):
+        ns = item_of(out, key)
+        if ns is None:
+            continue
+        n += 1
+        assert ns.rotation == bed.rotation, (key, ns.rotation, bed.rotation)
+        nb = (ns.position.x - fx * ns.depth / 2.0,
+              ns.position.y - fy * ns.depth / 2.0)
+        # coplanar with the headboard: zero component along the facing axis
+        along = (nb[0] - bed_back[0]) * fx + (nb[1] - bed_back[1]) * fy
+        assert abs(along) < 2.0, (key, along)
+        assert mass.distance(Point(nb)) < 2.0, (key, nb)
+        lateral = abs((ns.position.x - bed.position.x) * fy -
+                      (ns.position.y - bed.position.y) * fx)
+        assert abs(lateral - (bed.width + ns.width) / 2.0 - 50) < 2.0, \
+            (key, lateral)
+    assert n >= 1, "a 4.0x4.6 m bedroom must take at least one nightstand"
+
+
 def test_nothing_lands_in_the_door_swing():
     # door dead centre of the 3 m wall: the bed must slide off it, not sit on it
     plan = rect_plan(3200, 4400, door_at=0.5)
@@ -359,13 +393,18 @@ def test_input_plan_is_not_mutated():
 def test_locked_furniture_survives_and_blocks():
     from fpeval.ir import Furniture
     plan = rect_plan(3600, 4200)
+    # against the left wall, clear of the w2 window the fixture puts at 0.5
     plan.furniture = [Furniture(id="user-1", catalog_id="wardrobe",
-                                position=P(1800, 3800), rotation=180.0,
+                                position=P(400, 2100), rotation=270.0,
                                 width=1200, depth=600, height=2000,
                                 room_id="r0", locked=True)]
     out, rep = furnish(plan)
     assert any(f.id == "user-1" and f.locked for f in out.furniture)
     assert audit(out)["n_violations"] == 0, rep.text()
+    lock_fp = fp_of(plan.furniture[0])
+    for f in out.furniture:
+        if f.id != "user-1":
+            assert lock_fp.intersection(fp_of(f)).area <= 1e4, f
 
 
 # ══════════════════════════════════════════════════════════ 4. policy layering
@@ -542,7 +581,7 @@ def _corpus_run(n: int, verbose: bool = False) -> dict:
             t0 = time.perf_counter()
             out, rep = furnish(plan)
             lat.append((time.perf_counter() - t0) * 1000.0)
-        except Exception as e:                                    # noqa: BLE001
+        except Exception:                                         # noqa: BLE001
             furnish_fail += 1
             if furnish_fail <= 3 and verbose:
                 import traceback
@@ -624,7 +663,7 @@ h = hashlib.sha256()
 for i in %(idx)r:
     out, rep = furnish(convert(plans[i]))
     h.update(json.dumps(to_project(out), sort_keys=True).encode())
-    h.update(json.dumps(rep.to_dict(), sort_keys=True).encode())
+    h.update(rep.fingerprint().encode())
 print(h.hexdigest())
 """
 
@@ -635,8 +674,7 @@ def test_determinism_same_process():
         a, ra = furnish(plan)
         b, rb = furnish(plan)
         assert _digest(a) == _digest(b), key
-        assert json.dumps(ra.to_dict(), sort_keys=True) == \
-               json.dumps(rb.to_dict(), sort_keys=True), key
+        assert ra.fingerprint() == rb.fingerprint(), key
     plan = rect_plan(3600, 4200)
     assert _digest(furnish(plan)[0]) == _digest(furnish(plan, None, seed=7)[0]), \
         "no RNG, so the seed must not move anything"
