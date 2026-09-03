@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+tests/js/samples.json
+tests/js/node_modules/
+out/
