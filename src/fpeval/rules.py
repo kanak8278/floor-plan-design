@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
-from typing import Literal, Optional
+from dataclasses import dataclass, field, replace
+from typing import Literal, Optional, Any
 
 from shapely.geometry import Polygon, LineString, Point, MultiPolygon
 from shapely.ops import unary_union, polygonize
@@ -846,6 +846,215 @@ def buildable_polygon(plot: Polygon, band: PlotBand,
     return best, meta
 
 
+
+# --------------------------------------------------------------- circulation
+# These exist because a plan can satisfy every dimensional rule and still be
+# architecturally wrong. Measured on the generated suite: base-01 produced
+# LIVING -> BEDROOM 1 -> HALL -> BEDROOM 3 -> BATHROOM, so the only toilet was
+# reached by walking through two bedrooms, and a dead-end 89 sqft "Hall" sat in a
+# corner. Every dimensional rule passed. The cause is that a minimum spanning
+# tree over edge costs yields cheap CHAINS, when circulation wants a HUB -- so
+# these rules score the shape of the door graph, not the sizes of the rooms.
+
+_PRIVATE = {"bedroom", "master_bedroom"}
+_CIRC = {"living", "dining", "foyer", "passage", "hall"}
+_MAX_DEPTH_FROM_ENTRANCE = 3
+
+
+def _adj(ctx: _Ctx) -> dict[str, set[str]]:
+    a: dict[str, set[str]] = {r.id: set() for r in ctx.rooms}
+    for _oid, x, y in ctx.door_edges:     # (opening_id, room_a, room_b)
+        if x in a and y in a:
+            a[x].add(y); a[y].add(x)
+    return a
+
+
+def _cat(ctx: _Ctx, rid: str) -> str:
+    r = next((x for x in ctx.rooms if x.id == rid), None)
+    return (r.category if r else "") or ""
+
+
+def _reach_without(a: dict[str, set[str]], start: str, blocked: set[str]) -> set[str]:
+    seen, stack = set(), [start]
+    while stack:
+        u = stack.pop()
+        if u in seen or u in blocked:
+            continue
+        seen.add(u)
+        stack.extend(a.get(u, ()))
+    return seen
+
+
+def check_circulation(ctx: _Ctx) -> list[Finding]:
+    out: list[Finding] = []
+    a = _adj(ctx)
+    if not a:
+        return out
+    entries = [r for r in (ctx.entry_rooms or []) if r in a]
+    entry = entries[0] if entries else None
+    names = {r.id: r.name for r in ctx.rooms}
+
+    # 1. A bedroom must not be a corridor. If removing it disconnects rooms that
+    #    are not its own attached bath, traffic passes through someone's bedroom.
+    for rid, nb in a.items():
+        if _cat(ctx, rid) not in _PRIVATE or entry is None or rid == entry:
+            continue
+        reach = _reach_without(a, entry, {rid})
+        stranded = [q for q in a if q != rid and q not in reach]
+        own_bath = [q for q in stranded if _cat(ctx, q) == "bathroom"]
+        if len(stranded) > len(own_bath) or len(own_bath) > 1:
+            lost = ", ".join(names.get(q, q) for q in stranded[:4])
+            out.append(Finding(
+                "DESIGN.BEDROOM_THROUGH_TRAFFIC", "error", 1.0,
+                f"{names.get(rid, rid)} is the only route to {lost} — traffic "
+                f"passes through a bedroom", [rid] + stranded[:4]))
+
+    # 2. A bedroom with two or more bathroom doors. One attached bath is normal;
+    #    two means the second bathroom has no independent access.
+    for rid, nb in a.items():
+        if _cat(ctx, rid) not in _PRIVATE:
+            continue
+        baths = [q for q in nb if _cat(ctx, q) == "bathroom"]
+        if len(baths) > 1:
+            out.append(Finding(
+                "DESIGN.MULTIPLE_ATTACHED_BATHS", "error", 0.9,
+                f"{names.get(rid, rid)} has {len(baths)} bathrooms opening off it "
+                f"({', '.join(names.get(q, q) for q in baths)}); a second bath needs "
+                "its own access", [rid] + baths))
+
+    # 3. If the plan has exactly one bathroom it must be common -- reachable
+    #    without entering a bedroom. Otherwise the household shares a toilet
+    #    through a private room.
+    baths = [r.id for r in ctx.rooms if (r.category or "") == "bathroom"]
+    if len(baths) == 1 and entry is not None:
+        bedrooms = {r.id for r in ctx.rooms if (r.category or "") in _PRIVATE}
+        if baths[0] not in _reach_without(a, entry, bedrooms):
+            out.append(Finding(
+                "DESIGN.SOLE_BATH_VIA_BEDROOM", "error", 1.0,
+                f"the only bathroom ({names.get(baths[0], baths[0])}) cannot be "
+                "reached without walking through a bedroom", baths))
+
+    # 4. A circulation space that leads nowhere is leftover area with a label on
+    #    it, not a room. This is what the solver's filler cell produces.
+    for rid, nb in a.items():
+        if _cat(ctx, rid) not in _CIRC or rid == entry:
+            continue
+        if len(nb) <= 1:
+            out.append(Finding(
+                "DESIGN.DEAD_END_CIRCULATION", "warn", 0.6,
+                f"{names.get(rid, rid)} is circulation with {len(nb)} door(s) — "
+                "it leads nowhere and reads as leftover space", [rid]))
+
+    # 5. Depth from the front door. Four-plus doors deep means a warren.
+    if entry is not None:
+        depth, frontier, seen = {entry: 0}, [entry], {entry}
+        while frontier:
+            nxt = []
+            for u in frontier:
+                for v in a.get(u, ()):
+                    if v not in seen:
+                        seen.add(v); depth[v] = depth[u] + 1; nxt.append(v)
+            frontier = nxt
+        deep = [(k, d) for k, d in depth.items() if d > _MAX_DEPTH_FROM_ENTRANCE]
+        for rid, d in sorted(deep, key=lambda t: -t[1])[:4]:
+            out.append(Finding(
+                "DESIGN.TOO_DEEP", "warn", 0.5,
+                f"{names.get(rid, rid)} is {d} doors from the entrance "
+                f"(target <= {_MAX_DEPTH_FROM_ENTRANCE})", [rid]))
+    return out
+
+
+
+# ------------------------------------------------------------------ typology
+def check_typology(ctx: _Ctx) -> list[Finding]:
+    """Adjacency expectations that depend on the BUILDING, not on the room.
+
+    A kitchen opening into the living room is correct in an 1,100 sqft apartment
+    and wrong in a 4,000 sqft villa where the client is paying for a formal
+    living room. So the expectations come from `typology.py`, and the typology
+    comes from the brief (or is inferred when the brief does not say).
+    """
+    from . import typology as TY
+    out: list[Finding] = []
+    kind = ctx.brief.get("typology") or "auto"
+    beds = sum(1 for r in ctx.rooms if (r.category or "") in ("bedroom", "master_bedroom"))
+    kits = sum(1 for r in ctx.rooms if (r.category or "") == "kitchen")
+    livs = sum(1 for r in ctx.rooms if (r.category or "") == "living")
+    if kind == "auto":
+        kind = TY.infer(site_kind=str(ctx.brief.get("site_kind", "plot")),
+                        plot_sqft=ctx.brief.get("plot_area_sqft"),
+                        storeys=int(ctx.brief.get("habitable_floors", 1)),
+                        bedrooms=beds, kitchens=max(kits, 1),
+                        has_two_living=livs >= 2)
+    ty = TY.get(kind)
+    out.append(Finding("TYPO.ASSUMED", "warn", 0.05,
+                       f"typology taken as {ty.display}"
+                       + ("" if ctx.brief.get("typology") else " (inferred, not stated)"),
+                       []))
+
+    by_cat: dict[str, list[str]] = {}
+    for r in ctx.rooms:
+        by_cat.setdefault(r.category or "", []).append(r.id)
+    names = {r.id: r.name for r in ctx.rooms}
+    a = _adj(ctx)
+
+    def joined(ca: str, cb: str) -> bool:
+        return any(y in a.get(x, ()) for x in by_cat.get(ca, []) for y in by_cat.get(cb, []))
+
+    for rule in ty.expect:
+        ha, hb = by_cat.get(rule.a), by_cat.get(rule.b)
+        if not ha or not hb:
+            continue                          # the room is not in this plan
+        link = joined(rule.a, rule.b)
+        sev = "error" if rule.weight >= 0.9 else "warn"
+        if rule.relation in ("direct", "open", "near") and not link:
+            # `near` is satisfied by a shared boundary even with no door, so only
+            # flag it when the rooms do not touch at all.
+            if rule.relation == "near":
+                touch = any(
+                    ctx.polys[x].buffer(60).intersects(ctx.polys[y])
+                    for x in ha for y in hb
+                    if x in ctx.polys and y in ctx.polys)
+                if touch:
+                    continue
+            out.append(Finding(
+                "TYPO.MISSING_ADJACENCY", sev, rule.weight,
+                f"{ty.display}: {rule.a} and {rule.b} should be {rule.relation}"
+                + (f" — {rule.why}" if rule.why else ""),
+                (ha + hb)[:4]))
+        elif rule.relation == "separate" and link:
+            pair = next(((x, y) for x in ha for y in hb if y in a.get(x, ())), None)
+            out.append(Finding(
+                "TYPO.FORBIDDEN_ADJACENCY", sev, rule.weight,
+                f"{ty.display}: {names.get(pair[0], rule.a)} opens directly into "
+                f"{names.get(pair[1], rule.b)}"
+                + (f" — {rule.why}" if rule.why else ""),
+                list(pair) if pair else []))
+
+    # Entry sequence: each named stage that exists should come no later than the
+    # next one, measured as door-depth from the front door.
+    entries = [r for r in (ctx.entry_rooms or []) if r in a]
+    if entries and ty.entry_sequence:
+        depth, frontier, seen = {entries[0]: 0}, [entries[0]], {entries[0]}
+        while frontier:
+            nxt = []
+            for u in frontier:
+                for v in a.get(u, ()):
+                    if v not in seen:
+                        seen.add(v); depth[v] = depth[u] + 1; nxt.append(v)
+            frontier = nxt
+        stages = [(c, min((depth[i] for i in by_cat.get(c, []) if i in depth),
+                          default=None)) for c in ty.entry_sequence]
+        stages = [(c, d) for c, d in stages if d is not None]
+        for (c1, d1), (c2, d2) in zip(stages, stages[1:]):
+            if d1 > d2:
+                out.append(Finding(
+                    "TYPO.ENTRY_SEQUENCE", "warn", 0.5,
+                    f"{ty.display}: expected {c1} before {c2} on entry, but {c2} "
+                    f"is {d2} doors in and {c1} is {d1}", []))
+    return out
+
+
 def check_bylaws(ctx: _Ctx) -> list[Finding]:
     out: list[Finding] = []
     prof = ctx.profile
@@ -1120,17 +1329,40 @@ def vastu_score(plan: Plan, profile: CityProfile | None = None,
 # ------------------------------------------------------------------- entry ---
 
 def validate(plan: Plan, brief: dict | None = None,
-             profile: CityProfile | None = None) -> list[Finding]:
-    """All four families, most severe first."""
+             profile: CityProfile | None = None,
+             rules: Any = None) -> list[Finding]:
+    """All six families, most severe first, filtered by `rules`.
+
+    `rules` is a `policy.RuleConfig`. It exists because these families are not
+    the same kind of statement: GEO is arithmetic, NBC is law, VASTU is a client
+    preference, DESIGN and TYPO are domain judgement. A user who disagrees with
+    our judgement should be able to switch it off without losing the arithmetic.
+    Passing None keeps everything on, which is the safe default.
+    """
     profile = profile or BENGALURU
     brief = brief or {}
     ctx = _build_ctx(plan, brief, profile)
     fs = check_geometry(ctx)
     fs += check_nbc(ctx)
     fs += check_bylaws(ctx)
+    fs += check_circulation(ctx)
+    fs += check_typology(ctx)
     if brief.get("vastu", True):
         _s, vf = vastu_score(plan, profile, ctx)
         fs += vf
+
+    if rules is not None:
+        kept: list[Finding] = []
+        for f in fs:
+            if not rules.allows(f.rule_id):
+                continue
+            sev = rules.severity_for(f.rule_id, f.severity)
+            if sev == "off":
+                continue
+            if sev != f.severity:
+                f = replace(f, severity=sev)
+            kept.append(f)
+        fs = kept
     return sort_findings(fs)
 
 

@@ -117,13 +117,19 @@ def unit_envelope_ft(truth) -> tuple[float, float] | None:
 
 
 def _rescale_to_budget(prog, stmt) -> None:
+    # NOTE: the field is `budgets`. It was `room_budgets` here for three suite
+    # passes, which silently disabled rescaling: every plan was solved against
+    # nominal room-type midpoints instead. Large plots absorbed it; a 20x30 got a
+    # 70.9 m2 programme against a 40.7 m2 envelope and reported INFEASIBLE.
+    # getattr with a default hid the typo, so assert instead.
     """Replace nominal targets with the envelope's proportional budget.
 
     Room-type midpoints are generous by design (a bedroom range of 9-20 m2 gives
     14.5), and six of those exceed a 30x40's 83.6 m2 footprint. The envelope
     already allocates the available carpet area proportionally, so use it.
     """
-    budgets = {b.id: b for b in (getattr(stmt, "room_budgets", None) or [])}
+    assert hasattr(stmt, "budgets"), "AreaStatement lost its `budgets` field"
+    budgets = {b.id: b for b in (stmt.budgets or [])}
     for r in prog:
         b = budgets.get(r.id)
         if b is not None and getattr(b, "budget_m2", 0):
@@ -131,7 +137,7 @@ def _rescale_to_budget(prog, stmt) -> None:
 
 
 def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
-        spec: Any = None) -> Result:
+        spec: Any = None, policy=None) -> Result:
     res = Result(example_id=example.id, track=track)
     t = example.truth
 
@@ -158,8 +164,14 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                                 "no plot dimensions in ground truth"))
         return res
 
-    prog, warn = (spec_to_programme(spec) if (track == "B" and spec is not None)
-                  else truth_to_programme(t))
+    # Compact plots get the relaxed-width profile: a rectangular tiling cannot
+    # fit a 2BHK on 20x30 at NBC's 2400 mm, and those houses exist in reality.
+    plot_sqft = (t.plot_width_ft or 0) * (t.plot_depth_ft or 0)
+    relaxed = bool(getattr(policy, "relaxed_minima", False)) or (
+        0 < plot_sqft <= 800 and not is_unit)
+    prog, warn = (spec_to_programme(spec, relaxed=relaxed)
+                  if (track == "B" and spec is not None)
+                  else truth_to_programme(t, relaxed=relaxed))
     res.warnings = warn
     if not prog:
         res.error = "empty programme"
@@ -176,10 +188,12 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         stmt = compute_envelope(w_ft, d_ft,
                                 road_facing=facing, profile=prof, programme=prog)
         _rescale_to_budget(prog, stmt)
+        from .bridge import RELAXED_MAX_ASPECT
         sr = solve_layout(
             w_ft, d_ft,
             LayoutSpec(programme=prog,
                        entrance_room=next((r.id for r in prog if r.is_entrance), prog[0].id),
+                       max_aspect_hard=(RELAXED_MAX_ASPECT if relaxed else 2.8),
                        time_limit_s=time_limit_s),
             road_facing=facing, profile=prof,
             plan_id=f"{example.id}-{track}")

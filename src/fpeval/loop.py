@@ -152,7 +152,7 @@ def _solve(spec, w_ft, d_ft, facing, time_limit_s, plan_id):
         return None, "empty programme", warn, 0
     t0 = time.time()
     stmt = compute_envelope(w_ft, d_ft, road_facing=facing, profile=PROFILE, programme=prog)
-    budgets = {b.id: b for b in (getattr(stmt, "room_budgets", None) or [])}
+    budgets = {b.id: b for b in (getattr(stmt, "budgets", None) or [])}
     for r in prog:
         b = budgets.get(r.id)
         if b is not None and getattr(b, "budget_m2", 0):

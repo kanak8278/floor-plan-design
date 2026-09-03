@@ -125,8 +125,11 @@ def _dims(spec: Spec) -> tuple[int, int, int]:
 RULES: dict[str, tuple[Spec, ...]] = {
     "living": (
         Spec("sofa", "sofa", "wall", clear_front=750, align="center",
-             min_room_m2=8.0, away_from_door=700,
-             note="longest free run; 750 in front is one person edging past"),
+             min_room_m2=8.0, away_from_door=700, shrink_to=1400,
+             note="longest free run; 750 in front is one person edging past. "
+                  "Shrinks to 1400 (a loveseat) rather than leaving the room "
+                  "empty: measured 2.5% of ResPlan living rooms have no 2 m "
+                  "wall clear of a door swing"),
         Spec("tv_stand", "tv_stand", "facing", of="sofa", gap=2000, optional=True,
              min_room_m2=10.0, avoid_window=True, shrink_to=900,
              note="2.0 m is the shortest comfortable throw for a 43in panel"),

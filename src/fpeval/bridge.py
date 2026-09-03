@@ -33,6 +33,59 @@ SPEC_TO_CANON: dict[str, str] = {
 
 SQFT_M2 = 10.7639
 
+# NBC 2016 Part 3 sets 2400 mm as the minimum width of a habitable room and
+# 7.5 m2 as the minimum area. A rectangular tiling cannot fit a 2BHK on a 20x30
+# site under either: measured, the NBC minimum AREAS total 30.3 m2, internal
+# walls take ~4 m2, and the buildable tiling is 37.8 m2 -- within noise of
+# impossible. The solver's binding groups were `min_area` and `max_aspect_hard`,
+# not width, so relaxing width alone (my first attempt) changed nothing.
+#
+# Real 600 sqft Bengaluru houses are built with ~2100 mm rooms at 6.5-7 m2. This
+# profile builds them and DECLARES the deviation; it does not reinterpret NBC.
+RELAXED_MIN_WIDTH_MM: dict[str, int] = {
+    "living": 2100, "bedroom": 2100, "master_bedroom": 2400,
+    "dining": 2100, "study": 2100, "kitchen": 1650,
+}
+RELAXED_MIN_AREA_M2: dict[str, float] = {
+    "bedroom": 6.5, "master_bedroom": 8.0, "living": 7.0,
+    "dining": 6.0, "study": 5.5, "kitchen": 4.2, "bathroom": 2.2,
+}
+# Compact rooms are necessarily longer and thinner.
+RELAXED_MAX_ASPECT = 3.2
+
+
+def relaxed_note(prog) -> str | None:
+    """What was relaxed, in words, for printing on the sheet.
+
+    Printed because a relaxed plan is not NBC compliant and the sanctioning
+    authority has to be told which clause it deviates from.
+    """
+    w = sorted({r.category for r in prog if r.category in RELAXED_MIN_WIDTH_MM})
+    a = sorted({r.category for r in prog if r.category in RELAXED_MIN_AREA_M2})
+    if not (w or a):
+        return None
+    bits = []
+    if w:
+        bits.append("min width -> " + ", ".join(
+            f"{RELAXED_MIN_WIDTH_MM[c]}mm {c}" for c in w) + " (NBC 2400mm)")
+    if a:
+        bits.append("min area -> " + ", ".join(
+            f"{RELAXED_MIN_AREA_M2[c]}m2 {c}" for c in a) + " (NBC 7.5m2 habitable)")
+    return ("COMPACT-PLOT PROFILE, NOT NBC COMPLIANT: " + "; ".join(bits)
+            + f"; max aspect {RELAXED_MAX_ASPECT}. Deviation must be declared to "
+              "the sanctioning authority.")
+
+
+def _apply_relaxed(prog) -> None:
+    for r in prog:
+        w = RELAXED_MIN_WIDTH_MM.get(r.category)
+        if w is not None:
+            r.min_width_mm = w
+        a = RELAXED_MIN_AREA_M2.get(r.category)
+        if a is not None:
+            r.min_area_m2 = a
+        r.max_aspect = max(r.max_aspect or 0.0, RELAXED_MAX_ASPECT)
+
 
 def canon(category: str) -> str:
     if category in rt.T:
@@ -50,7 +103,8 @@ def _target_m2(key: str, given: float | None) -> float:
     return 9.0
 
 
-def spec_to_programme(spec: Any) -> tuple[list[RoomReq], list[str]]:
+def spec_to_programme(spec: Any, *, relaxed: bool = False
+                      ) -> tuple[list[RoomReq], list[str]]:
     """DesignSpec -> solver programme. Returns (programme, warnings).
 
     Rooms the solver cannot lay out are dropped with a warning rather than
@@ -82,10 +136,14 @@ def spec_to_programme(spec: Any) -> tuple[list[RoomReq], list[str]]:
             weight=1.0 if getattr(r, "priority", 3) <= 2 else 0.7,
             vastu_zone=zone, is_entrance=is_entrance,
         ))
+    if relaxed:
+        _apply_relaxed(prog)
+        warn.append(relaxed_note(prog) or "relaxed profile requested but nothing to relax")
     return prog, warn
 
 
-def truth_to_programme(truth: Any) -> tuple[list[RoomReq], list[str]]:
+def truth_to_programme(truth: Any, *, relaxed: bool = False
+                       ) -> tuple[list[RoomReq], list[str]]:
     """Suite ground truth -> solver programme, with no LLM in the path.
 
     Exists so engine failures can be measured separately from extraction
@@ -122,4 +180,7 @@ def truth_to_programme(truth: Any) -> tuple[list[RoomReq], list[str]]:
             prog.append(RoomReq(id=rid, name=f"{t.display} {i+1}" if n > 1 else t.display,
                                 category=key, target_m2=target, weight=1.0,
                                 vastu_zone=zone, is_entrance=(key == "living" and i == 0)))
+    if relaxed:
+        _apply_relaxed(prog)
+        warn.append(relaxed_note(prog) or "relaxed profile requested but nothing to relax")
     return prog, warn
