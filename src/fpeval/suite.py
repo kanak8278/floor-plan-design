@@ -58,6 +58,14 @@ class Truth:
     entrance_side: str | None = None
     # furnishing / outdoor items that must be placed (catalogue ids)
     must_place: list[str] = field(default_factory=list)
+    # Room-type pairs that must end up with a door between them. Needed for
+    # detailed briefs: "a balcony off the master bedroom" and "a balcony off the
+    # living room" are different plans, and nothing else in Truth could say so.
+    adjacent: list[list[str]] = field(default_factory=list)
+    # Pairs that must NOT have a door between them.
+    not_adjacent: list[list[str]] = field(default_factory=list)
+    # Which room each item belongs in: {"washer_dryer": "utility"}
+    place_in: dict[str, str] = field(default_factory=dict)
     area_quote_sqft: dict[str, float] = field(default_factory=dict)
     coverage_max: float | None = None
     far_max: float | None = None
@@ -91,6 +99,16 @@ class Example:
         for k in list(self.truth.rooms) + list(self.truth.rooms_min):
             if k not in rt.T:
                 errs.append(f"{self.id}: unknown room type '{k}'")
+        for pair in list(self.truth.adjacent) + list(self.truth.not_adjacent):
+            if len(pair) != 2:
+                errs.append(f"{self.id}: adjacency needs exactly two room types, got {pair}")
+                continue
+            for k in pair:
+                if k not in rt.T:
+                    errs.append(f"{self.id}: adjacency on unknown room type '{k}'")
+        for k in self.truth.place_in.values():
+            if k not in rt.T:
+                errs.append(f"{self.id}: place_in targets unknown room type '{k}'")
         for k, z in self.truth.vastu_zones.items():
             if k not in rt.T:
                 errs.append(f"{self.id}: vastu zone on unknown room type '{k}'")
@@ -116,6 +134,10 @@ def _truth(d: dict[str, Any]) -> Truth:
 
 def load_file(path: Path) -> list[Example]:
     raw = json.loads(path.read_text())
+    # The suite directory also holds SELECTION.json and similar metadata; a file
+    # with no `examples` key is not an example file.
+    if "examples" not in raw:
+        return []
     out = []
     for e in raw["examples"]:
         out.append(Example(

@@ -56,6 +56,7 @@ def label(ex, n_rooms: int) -> str:
 ap = argparse.ArgumentParser()
 ap.add_argument("--time-limit", type=float, default=10.0)
 ap.add_argument("--svg", action="store_true", help="also write SVGs for review")
+ap.add_argument("--set", default="paired")
 args = ap.parse_args()
 
 STATIC = Path("vendor/openPlan3D/static/fpeval")
@@ -63,7 +64,12 @@ STATIC.mkdir(parents=True, exist_ok=True)
 SVGDIR = Path("out/suite_svg"); SVGDIR.mkdir(parents=True, exist_ok=True)
 
 out, skipped, failed = [], [], []
-for ex in load_suite():
+_all = load_suite()
+if args.set == "paired":
+    import json as _j
+    _sel = set(_j.loads(Path("suite/SELECTION.json").read_text())["general_50"])
+    _all = [e for e in _all if e.id in _sel or e.id.startswith("det-")]
+for ex in _all:
     r = run(ex, track="A", time_limit_s=args.time_limit)
     if r.plan is None:
         (skipped if r.status == "skipped" else failed).append((ex.id, r.status))
