@@ -93,9 +93,53 @@ def canon(category: str) -> str:
     return SPEC_TO_CANON.get(category, "unknown")
 
 
+# Service rooms must not absorb surplus area. The room-type midpoint for a
+# bathroom is (2.8 + 8.0) / 2 = 5.4 m2, and proportional budget scaling then
+# inflated it further -- wet-02 ended up with four bathrooms at 6.8 m2 each,
+# 19% of the carpet area, against a measured real-plan norm of ~4% per bath.
+# Surplus belongs to the habitable rooms.
+SERVICE_TARGET_M2 = {
+    "bathroom": 4.0,   # real median 4.64, p25 3.82
+    "utility": 3.0,
+    "store": 2.5,
+    "shaft": 0.6,
+    "foyer": 4.0,
+    "pooja": 2.5,
+}
+SERVICE_TARGET_CAP_M2 = {
+    "bathroom": 6.0,   # p85-ish; a master bath with a tub may reach this
+    "utility": 5.0,
+    "store": 5.0,
+    "shaft": 2.0,
+    "foyer": 8.0,
+    "pooja": 5.0,
+}
+
+
+def cap_service_targets(prog) -> list[str]:
+    """Clamp service-room targets AND set a hard ceiling.
+
+    Clamping the target alone was not enough: the target is what the objective
+    aims at, not a bound, so CP-SAT still grew a bathroom to 9.4 m2 when there
+    was surplus. `max_area_m2` is the actual constraint.
+    """
+    notes = []
+    for r in prog:
+        cap = SERVICE_TARGET_CAP_M2.get(r.category)
+        if cap is None:
+            continue
+        r.max_area_m2 = cap
+        if r.target_m2 > cap:
+            notes.append(f"{r.id}: target {r.target_m2:.1f} -> {cap:.1f} m² (service cap)")
+            r.target_m2 = cap
+    return notes
+
+
 def _target_m2(key: str, given: float | None) -> float:
     if given:
         return given
+    if key in SERVICE_TARGET_M2:
+        return SERVICE_TARGET_M2[key]
     t = rt.get(key)
     if t and t.target_m2:
         lo, hi = t.target_m2

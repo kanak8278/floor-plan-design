@@ -203,6 +203,9 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         stmt = compute_envelope(w_ft, d_ft,
                                 road_facing=facing, profile=prof, programme=prog)
         _rescale_to_budget(prog, stmt)
+        from .bridge import cap_service_targets
+        for note in cap_service_targets(prog):
+            warn.append(note)
         from .bridge import RELAXED_MAX_ASPECT
         from . import topology as TP
         beds = sum(1 for r in prog if r.category in ("bedroom", "master_bedroom"))

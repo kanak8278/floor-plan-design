@@ -78,7 +78,8 @@ _EDGE_PEN = {
 }
 _EDGE_PEN_DEFAULT = 3
 
-CONSTRAINT_GROUPS = ("min_area", "min_clear_width", "max_aspect_hard",
+CONSTRAINT_GROUPS = (
+    "max_area","min_area", "min_clear_width", "max_aspect_hard",
                      "door_width", "pinned")
 
 
@@ -498,6 +499,7 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
     rects = {i: tuple(bounds[s] for s in labels[i]) for i in labels}
 
     groups: dict[str, list[Any]] = {k: [] for k in CONSTRAINT_GROUPS}
+    over_terms: list[Any] = []
 
     def gate(group: str):
         """Constraint-group literal, so an INFEASIBLE model can name the set
@@ -535,6 +537,22 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
         areav[i] = area
         amin = int(math.ceil(r.nbc_min_area_m2() * 1e6 / (GRID_MM ** 2)))
         add("min_area", m.Add(area >= amin))
+        # Service-room ceiling as a SOFT term, not a constraint.
+        #
+        # A hard `area <= amax` made wet-01, wet-02 and base-04 infeasible: on a
+        # tight tiling the surplus has to go somewhere, and refusing to let it
+        # go into a bathroom can leave no solution at all. A bathroom at 6.5 m2
+        # instead of 6.0 is a wart, not an impossibility. So overshoot is
+        # charged heavily in the objective and feasibility is preserved.
+        amax_m2 = getattr(r, "max_area_m2", None)
+        over_terms.append(None)
+        if amax_m2:
+            amax = int(math.floor(amax_m2 * 1e6 / (GRID_MM ** 2)))
+            if amax > amin:
+                over = m.NewIntVar(0, W * H, f"over{i}")
+                m.Add(over >= area - amax)
+                m.Add(over >= 0)
+                over_terms[-1] = over
 
         # hard aspect cap as a rational, so it stays linear
         num = int(round(spec.max_aspect_hard * 10))
@@ -591,7 +609,10 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
         if cid in cuts:
             add("pinned", m.Add(cuts[cid] == val))
 
-    m.Minimize(sum(obj))
+        # Service-room overshoot: priced at 3x the area-deviation weight, so it
+    # bites without ever making a plan impossible.
+    _over = sum(o for o in over_terms if o is not None)
+    m.Minimize(sum(obj) + 3 * int(round(spec.w_area * AREA_SCALE)) * _over)
 
     for cid, v in cuts.items():
         nv = nominal_cuts.get(cid)
