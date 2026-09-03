@@ -37,8 +37,8 @@ Three defects fixed relative to the first cut:
 from __future__ import annotations
 import math
 from typing import Any, Iterable
-from shapely.geometry import Polygon, LineString, MultiLineString, Point
-from shapely.ops import unary_union, polygonize, linemerge
+from shapely.geometry import Polygon, LineString, Point
+from shapely.ops import unary_union, linemerge
 from shapely.strtree import STRtree
 from shapely import affinity
 
@@ -58,7 +58,18 @@ SNAP_UNITS = 0.5          # coordinate-space snap grid (probed: 0.34% median are
 COLLINEAR_TOL_DEG = 1.0
 MIN_WALL_MM = 1.0         # shorter than this is a sliver, not a wall
 MIN_OPENING_MM = 300      # narrowest opening we will emit
+# Above this aspect ratio an opening polygon is a zero-thickness sliver, i.e. a
+# corrupt label rather than a real opening. Measured max on a real opening: 12.
+SLIVER_ASPECT = 50.0
 ROOM_WALL_TOL_MM = 30.0   # how far a wall centreline may sit off a room edge
+# Sub-wall-thickness jogs in the source room polygons are the dominant cause of
+# wall fragmentation (see `_align_axes`). Coordinates closer than this collapse
+# onto one support line. Tuned by sweep in tests/run_corpus.py --sweep-align.
+AXIS_CLUSTER_MM = 75.0    # ~1/3 wall thickness; knee of the sweep
+# Alignment may not make rooms double-claim space. Reverting on pure float
+# noise costs plans their wall-count fix for nothing, so only a material
+# increase in room-on-room overlap triggers a revert.
+ALIGN_OVERLAP_SLACK = 0.002
 # A wall merely *crossing* a room boundary overlaps the tolerance band by
 # ~2*tol; a wall *bounding* the room overlaps by a full edge length. This
 # threshold separates the two cases.
@@ -78,11 +89,15 @@ def new_degenerate_counters() -> dict[str, int]:
         "room_non_polygon": 0,
         "room_zero_area": 0,
         "room_snap_failed": 0,
+        "room_align_reverted": 0,
+        "plan_align_reverted": 0,
         "opening_non_polygon": 0,
         "opening_zero_area": 0,
         "opening_invalid": 0,
         "opening_obb_degenerate": 0,
         "opening_sub_min_width": 0,
+        "opening_wider_than_wall": 0,
+        "opening_sliver_polygon": 0,
         "wall_sliver_dropped": 0,
         "plot_non_polygon": 0,
     }
@@ -204,6 +219,129 @@ def _rooms_raw(plan: dict[str, Any], s: float,
 
 
 # --------------------------------------------------------------------------
+# axis alignment: collapse sub-wall-thickness jogs
+# --------------------------------------------------------------------------
+
+def _cluster_1d(weighted: dict[float, float], tol: float,
+                max_span: float) -> dict[float, float]:
+    """Single-linkage cluster of 1-D coordinates -> {value: representative}.
+
+    The representative of a cluster is its heaviest member, where weight is the
+    total length of axis-parallel room edges lying on that coordinate. That
+    keeps long walls exactly where the data put them and moves only the jogs.
+    `max_span` stops a staircase of evenly spaced coordinates (a discretised
+    diagonal wall) from chain-collapsing onto a single line.
+    """
+    vals = sorted(weighted)
+    out: dict[float, float] = {}
+    i = 0
+    while i < len(vals):
+        j = i + 1
+        while (j < len(vals) and vals[j] - vals[j - 1] <= tol
+               and vals[j] - vals[i] <= max_span):
+            j += 1
+        group = vals[i:j]
+        rep = max(group, key=lambda v: (weighted[v], -abs(v - group[0])))
+        for v in group:
+            out[v] = rep
+        i = j
+    return out
+
+
+def _align_axes(rooms_typed: list[tuple[str, Polygon]], mm: float, tol_mm: float,
+                deg: dict[str, int] | None = None) -> list[tuple[str, Polygon]]:
+    """Snap near-coincident axis-parallel support lines together.
+
+    Motivation, measured: ResPlan room polygons carry many sub-wall-thickness
+    steps (18.6% of raw room edges are shorter than one wall thickness, 11.7%
+    shorter than 50 mm). Each such jog forks one long wall into two walls on
+    *different* support lines plus a stub, so the wall count multiplies. This
+    -- not `linemerge` breaking at tees -- is the dominant fragmentation driver:
+    the collinear interval merge alone only takes the median from 48 to 47.
+
+    All rooms are rewritten against one shared coordinate vocabulary, so the
+    tiling stays watertight and rooms keep sharing their edges exactly.
+    """
+    deg = deg if deg is not None else new_degenerate_counters()
+    if tol_mm <= 0 or not rooms_typed:
+        return rooms_typed
+    tol = tol_mm / mm
+    max_span = 2.0 * tol
+
+    wx: dict[float, float] = {}   # x of vertical edges   -> total length
+    wy: dict[float, float] = {}   # y of horizontal edges -> total length
+    for _, poly in rooms_typed:
+        for ring in [poly.exterior] + list(poly.interiors):
+            cs = list(ring.coords)
+            for k in range(len(cs) - 1):
+                (ax, ay), (bx, by) = cs[k], cs[k + 1]
+                if ax == bx:
+                    wx[ax] = wx.get(ax, 0.0) + abs(by - ay)
+                elif ay == by:
+                    wy[ay] = wy.get(ay, 0.0) + abs(bx - ax)
+                else:
+                    wx.setdefault(ax, 0.0); wx.setdefault(bx, 0.0)
+                    wy.setdefault(ay, 0.0); wy.setdefault(by, 0.0)
+    mx = _cluster_1d(wx, tol, max_span)
+    my = _cluster_1d(wy, tol, max_span)
+
+    def fix(ring) -> list[tuple[float, float]]:
+        pts = [(mx.get(x, x), my.get(y, y)) for x, y in ring.coords]
+        ded = [pts[0]]
+        for p in pts[1:]:
+            if p != ded[-1]:
+                ded.append(p)
+        if ded[0] != ded[-1]:
+            ded.append(ded[0])
+        return ded
+
+    out: list[tuple[str, Polygon]] = []
+    for cat, poly in rooms_typed:
+        aligned = None
+        ext = fix(poly.exterior)
+        if len(ext) >= 4:
+            ints = [r for r in (fix(h) for h in poly.interiors) if len(r) >= 4]
+            try:
+                q = Polygon(ext, ints).buffer(0)
+                parts = [g for g in geoms(q)
+                         if isinstance(g, Polygon) and g.area > AREA_EPS]
+                if parts:
+                    cand = max(parts, key=lambda g: g.area)
+                    # A room narrower than the tolerance in one direction can be
+                    # crushed when its two bounding lines cluster together. Keep
+                    # the unaligned polygon in that case: losing a room from the
+                    # IR is far worse than one room re-fragmenting its walls.
+                    if cand.area >= 0.75 * poly.area:
+                        aligned = cand
+            except Exception:
+                aligned = None
+        if aligned is None:
+            deg["room_align_reverted"] += 1
+            aligned = poly
+        out.append((cat, aligned))
+
+    # Alignment must not make two rooms materially double-claim space. Safety
+    # net only: at tol=75 mm with ALIGN_OVERLAP_SLACK it fired on 0/1500 plans,
+    # because ResPlan's own tiling already carries the overlap we see (p99
+    # 2.3%, max 6.7% of room area, entirely inherited from the source).
+    if _overlap_frac(out) > _overlap_frac(rooms_typed) + ALIGN_OVERLAP_SLACK:
+        deg["plan_align_reverted"] = 1
+        return rooms_typed
+    return out
+
+
+def _overlap_frac(rooms_typed: list[tuple[str, Polygon]]) -> float:
+    tot = sum(p.area for _, p in rooms_typed)
+    if tot <= 0:
+        return 0.0
+    try:
+        u = unary_union([p for _, p in rooms_typed]).area
+    except Exception:
+        return 0.0
+    return max(0.0, (tot - u) / tot)
+
+
+# --------------------------------------------------------------------------
 # wall extraction: collinear interval merge
 # --------------------------------------------------------------------------
 
@@ -277,7 +415,8 @@ class WallIndex:
 
 
 def _extract_walls(rooms: list[Polygon], mm: float, thickness_mm: int,
-                   deg: dict[str, int] | None = None) -> WallIndex:
+                   deg: dict[str, int] | None = None,
+                   split_crossings: bool = True) -> WallIndex:
     deg = deg if deg is not None else new_degenerate_counters()
     idx = WallIndex()
     if not rooms:
@@ -326,7 +465,106 @@ def _extract_walls(rooms: list[Polygon], mm: float, thickness_mm: int,
             entries.append((lo, hi, wid))
         if entries:
             idx.groups[key] = (d, entries)
+    if split_crossings:
+        _split_at_crossings(idx, mm)
     return idx
+
+
+def _split_at_crossings(idx: WallIndex, mm: float) -> None:
+    """Split merged runs where two walls cross with no endpoint at the crossing.
+
+    Merging collinear runs across a **T**-junction is safe and preferred:
+    OpenPlan3D's `detectRooms` runs `splitWallsAtTJunctions`, which splits a
+    wall wherever another wall's *endpoint* lands on its interior.
+
+    An **X**-crossing (the `+` where four rooms meet) has no endpoint at the
+    crossing, so that pass cannot split it -- and the two faces either side
+    then merge into one. Measured on 2,000 Projects through the real
+    `detectRooms`: leaving crossings merged made it detect *fewer* rooms than
+    the IR contains on 3.35% of plans. Pre-splitting here is the fix, and it
+    costs only the handful of walls that actually cross.
+    """
+    walls = idx.walls
+    if len(walls) < 2:
+        return
+    lines = [LineString([w.start.as_tuple(), w.end.as_tuple()]) for w in walls]
+    tree = STRtree(lines)
+    ends = [(w.start.as_tuple(), w.end.as_tuple()) for w in walls]
+    eps = 1.0                      # mm; endpoints are integers
+    cuts: dict[int, set[float]] = {}
+
+    for i, li in enumerate(lines):
+        for j in tree.query(li):
+            j = int(j)
+            if j <= i:
+                continue
+            lj = lines[j]
+            try:
+                inter = li.intersection(lj)
+            except Exception:
+                continue
+            if inter.is_empty or inter.geom_type != "Point":
+                continue          # collinear overlaps already merged; skip
+            px, py = inter.x, inter.y
+            interior = True
+            for k in (i, j):
+                for ex, ey in ends[k]:
+                    if math.hypot(px - ex, py - ey) <= eps:
+                        interior = False
+                        break
+                if not interior:
+                    break
+            if not interior:
+                continue          # a tee: detectRooms handles it
+            for k in (i, j):
+                w = walls[k]
+                L = w.length
+                if L <= 0:
+                    continue
+                t = (((px - w.start.x) * (w.end.x - w.start.x)
+                      + (py - w.start.y) * (w.end.y - w.start.y)) / (L * L))
+                if eps / L < t < 1.0 - eps / L:
+                    cuts.setdefault(k, set()).add(t)
+    if not cuts:
+        return
+
+    new_walls: list[Wall] = []
+    remap: dict[str, list[str]] = {}
+    for k, w in enumerate(walls):
+        ts = sorted(cuts.get(k, ()))
+        pieces: list[tuple[tuple[int, int], tuple[int, int]]] = []
+        prev = (w.start.x, w.start.y)
+        for t in ts:
+            px = round(w.start.x + t * (w.end.x - w.start.x))
+            py = round(w.start.y + t * (w.end.y - w.start.y))
+            if (px, py) != prev:
+                pieces.append((prev, (px, py)))
+                prev = (px, py)
+        if prev != (w.end.x, w.end.y):
+            pieces.append((prev, (w.end.x, w.end.y)))
+        if not pieces:
+            pieces = [((w.start.x, w.start.y), (w.end.x, w.end.y))]
+        made = []
+        for a, b in pieces:
+            if math.hypot(b[0] - a[0], b[1] - a[1]) < MIN_WALL_MM:
+                continue
+            wid = f"w{len(new_walls)}"
+            new_walls.append(Wall(id=wid, start=P(*a), end=P(*b),
+                                  thickness=w.thickness, height=w.height))
+            made.append(wid)
+        remap[w.id] = made or []
+    idx.walls = new_walls
+    by_id = {w.id: w for w in new_walls}
+    # rebuild the support-line buckets so `_assign_room_walls` still resolves
+    for key, (d, entries) in list(idx.groups.items()):
+        rebuilt = []
+        for lo, hi, wid in entries:
+            for nwid in remap.get(wid, []):
+                w = by_id[nwid]
+                ta = _proj((w.start.x / mm, w.start.y / mm), d)
+                tb = _proj((w.end.x / mm, w.end.y / mm), d)
+                rebuilt.append((min(ta, tb), max(ta, tb), nwid))
+        idx.groups[key] = (d, sorted(rebuilt))
 
 
 def _line_base(key, d: tuple[float, float]) -> tuple[float, float]:
@@ -426,10 +664,19 @@ def _host_openings(plan: dict[str, Any], walls: list[Wall], mm: float,
 
             if host is None:
                 stats["unhosted_kind"][kind] = stats["unhosted_kind"].get(kind, 0) + 1
+                aspect = (obb[0] / obb[1]) if obb and obb[1] > 0 else None
+                sliver = aspect is not None and aspect > SLIVER_ASPECT
+                if sliver:
+                    deg["opening_sliver_polygon"] += 1
+                dmm, dang = _nearest_wall(gm, walls)
                 stats["unhosted"].append({
-                    "kind": kind, "reason": "no_wall_within_tolerance",
+                    "kind": kind,
+                    "reason": ("sliver_polygon" if sliver
+                               else "no_wall_within_tolerance"),
                     "centroid_units": [round(g.centroid.x, 3), round(g.centroid.y, 3)],
-                    "obb_aspect": round(obb[0] / obb[1], 3) if obb else None,
+                    "obb_aspect": round(aspect, 3) if aspect is not None else None,
+                    "nearest_wall_mm": None if dmm is None else round(dmm),
+                    "nearest_wall_angle_deg": None if dang is None else round(dang, 1),
                 })
                 continue
 
@@ -441,6 +688,18 @@ def _host_openings(plan: dict[str, Any], walls: list[Wall], mm: float,
             if width < MIN_OPENING_MM:
                 deg["opening_sub_min_width"] += 1
                 width = MIN_OPENING_MM
+            # The opening must sit inside the wall run we actually emit. Wall
+            # endpoints are rounded to integer mm and the width can have been
+            # raised to MIN_OPENING_MM, so both can push the opening a few mm
+            # past the end; clamp instead of shipping something OpenPlan3D
+            # would draw hanging off the wall.
+            wlen = w.length
+            if width > wlen:
+                deg["opening_wider_than_wall"] += 1
+                width = max(1, int(wlen))
+            half = 0.5 * width
+            centre = min(max(t * wlen, half), max(wlen - half, half))
+            t = centre / wlen if wlen > 0 else 0.5
             is_win = kind == "window"
             openings.append(Opening(
                 id=f"o{len(openings)}", kind=kind, wall_id=w.id,
@@ -518,6 +777,25 @@ def _host_by_proximity(gm: Polygon, obb, walls: list[Wall], mm: float,
         return None
     w, t = best
     return w, t, long_mm
+
+
+def _nearest_wall(gm: Polygon, walls: list[Wall]) -> tuple[float | None, float | None]:
+    """Diagnostic for an unhosted opening: distance to and angle off the closest
+    wall centreline. Lets the report say *why* something could not be hosted."""
+    c = gm.centroid
+    best = (None, None)
+    bd = float("inf")
+    for w in walls:
+        L = w.length
+        if L < MIN_WALL_MM:
+            continue
+        wx, wy = w.end.x - w.start.x, w.end.y - w.start.y
+        t = min(max(((c.x - w.start.x) * wx + (c.y - w.start.y) * wy) / (L * L), 0.0), 1.0)
+        d = math.hypot(c.x - (w.start.x + t * wx), c.y - (w.start.y + t * wy))
+        if d < bd:
+            bd = d
+            best = (d, math.degrees(math.atan2(wy, wx)) % 180.0)
+    return best
 
 
 # --------------------------------------------------------------------------
@@ -598,19 +876,25 @@ def _assign_room_walls(rooms_typed: list[tuple[str, Polygon]], idx: WallIndex,
 # entry point
 # --------------------------------------------------------------------------
 
-def convert(plan: dict[str, Any], merge_collinear: bool = True) -> Plan:
+def convert(plan: dict[str, Any], merge_collinear: bool = True,
+            align_mm: float | None = None) -> Plan:
     """ResPlan plan dict -> canonical IR Plan.
 
-    `merge_collinear=False` restores the pre-fix `linemerge` wall extraction. It
-    exists so the corpus runner can measure the wall-count fix and prove face
-    recovery does not regress; production callers should leave it True.
+    `merge_collinear=False` restores the pre-fix `linemerge` wall extraction and
+    `align_mm=0` disables the axis-alignment pass. Both exist so the corpus
+    runner can A/B the wall-count fix and prove face recovery does not regress;
+    production callers should leave them at their defaults.
     """
     mm = scale_mm_per_unit(plan)
     thickness = int(round(ASSUMED_WALL_MM))
     deg = new_degenerate_counters()
+    align = AXIS_CLUSTER_MM if align_mm is None else align_mm
     rooms_typed = _rooms_raw(plan, SNAP_UNITS, deg)
     if not rooms_typed:
         raise ValueError("no usable room polygons")
+    rooms_typed = _align_axes(rooms_typed, mm, align, deg)
+    if not rooms_typed:
+        raise ValueError("axis alignment collapsed every room")
     rooms_poly = [p for _, p in rooms_typed]
 
     if merge_collinear:
@@ -639,6 +923,7 @@ def convert(plan: dict[str, Any], merge_collinear: bool = True) -> Plan:
                     "opening_stats": ostats,
                     "degenerate": deg,
                     "wall_merge": "collinear_interval" if merge_collinear else "linemerge",
+                    "align_mm": align,
                     "stated_area_m2": plan.get("area")},
     )
 

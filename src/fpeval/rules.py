@@ -27,15 +27,15 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Iterable, Literal, Optional
+from typing import Literal, Optional
 
 from shapely.geometry import Polygon, LineString, Point, MultiPolygon
 from shapely.ops import unary_union, polygonize
 from shapely.prepared import prep
 
-from .ir import Plan, Wall, Opening, Room, P
-from .bylaws import (CityProfile, PlotBand, NBCMinima, VastuProfile, VastuRule,
-                     BENGALURU, DIRECTIONS, CENTRE, SQFT_M2)
+from .ir import Plan, Wall, Room
+from .bylaws import (CityProfile, PlotBand, VastuRule, BENGALURU,
+                     DIRECTIONS, CENTRE, SQFT_M2)
 
 Severity = Literal["error", "warn"]
 
@@ -49,7 +49,10 @@ ENVELOPE_SLOP_MM = 60          # wall-graph face union is grown by this before t
 OPENING_WIDTH_SLACK_MM = 20    # an opening may equal its wall length, not exceed
 DOOR_PROBE_MM = 25             # how far past a wall centreline we look for a room
 
-_PASSAGE_RE = re.compile(r"passage|corridor|hall\b|hallway|lobby|circulation", re.I)
+# NB: "hall" is deliberately absent. In Indian usage "Hall" is the living room,
+# not a corridor, so matching it would apply the 900 mm passage rule to the
+# largest habitable room in the plan.
+_PASSAGE_RE = re.compile(r"passage|corridor|hallway|lobby|circulation", re.I)
 _POOJA_RE = re.compile(r"pooja|puja|mandir|prayer", re.I)
 _STAIR_RE = re.compile(r"stair|staircase", re.I)
 _MASTER_RE = re.compile(r"master", re.I)
@@ -57,6 +60,14 @@ _WC_RE = re.compile(r"\bwc\b|water closet|toilet", re.I)
 
 HABITABLE = {"living", "bedroom"}
 NON_HABITABLE = {"balcony", "storage"}
+PRIVATE = {"bedroom", "bathroom"}       # must have a real door, never an arch
+# Shared boundary above which a doorless room is read as an open threshold
+# (open-plan kitchen, dining split, entry arch) instead of an isolated room.
+# 1200 mm is the narrowest arch that gets built: a door leaf is 900 mm, so a
+# lower bar would let a bare 1 m wall stub count as an opening. Measured: at
+# 2000 mm this rule called all 9 rooms of ResPlan plan 4849 landlocked because
+# its entry hall meets the living room across a 1563 mm arch.
+OPEN_THRESHOLD_MM = 1200
 
 
 # ------------------------------------------------------------------ finding ---
@@ -380,10 +391,13 @@ def check_geometry(ctx: _Ctx) -> list[Finding]:
                     f"wall envelope ({outside/1e6:.2f} m^2)",
                     [rid], outside / p.area, OUTSIDE_TOL_FRAC))
 
-    # walls
+    # Walls. A sub-100 mm wall cannot be built but it also does not make the
+    # plan illegal, so this is a `warn`: measured 11 such stubs (60-97 mm) in
+    # 200 verified ResPlan conversions, all artefacts of the 0.5-unit
+    # coordinate snap. Erroring on them would reject good plans.
     for w in plan.walls:
         if w.length < MIN_WALL_MM:
-            out.append(Finding("GEO.WALL_TOO_SHORT", "error", 0.5,
+            out.append(Finding("GEO.WALL_TOO_SHORT", "warn", 0.5,
                                f"wall {w.id} is {w.length:.0f} mm long",
                                [w.id], w.length, MIN_WALL_MM))
 
@@ -423,6 +437,26 @@ def _check_reachability(ctx: _Ctx) -> list[Finding]:
 
     Windows and bare wall adjacency do not count; that is the whole point of
     the rule (a bathroom you can only see into is a plan bug, not a style).
+
+    Two tiers, because the literal rule has a 10% false-positive rate on real
+    plans. Doors-only reachability is computed first; anything it strands is
+    then re-tested allowing *open thresholds* (>= `OPEN_THRESHOLD_MM` of shared
+    boundary) as edges. Severity is assigned from which tier a room fails:
+
+      error  landlocked - neither a door nor an open threshold, or
+             a bedroom/bathroom with no door of its own (privacy is not
+             satisfied by an arch, whatever the geometry allows);
+      warn   walkable but only across an unmodelled opening - an open-plan
+             kitchen or an entry arch - and balconies/stores in any case,
+             since they are usually entered through a unit the data calls a
+             window.
+
+    Measured across 300 ResPlan conversions: the literal doors-only rule
+    errored on 31 rooms in 10.3% of plans; every one inspected was either an
+    open-plan kitchen (148 kitchens have no door polygon at all) or a room
+    behind an arch (plan 4849's 1563 mm entry threshold stranded 7 rooms).
+    The two-tier version errors on 8 rooms in 2.67% of plans, all
+    bedrooms/bathrooms with no door edge - which is the finding we want.
     """
     out: list[Finding] = []
     if not ctx.polys:
@@ -445,28 +479,144 @@ def _check_reachability(ctx: _Ctx) -> list[Finding]:
             return out
         roots = [max(ctx.polys, key=lambda k: ctx.polys[k].area)]
 
-    seen = set(roots)
-    stack = list(roots)
-    while stack:
-        cur = stack.pop()
-        for nb in adj.get(cur, ()):
-            if nb not in seen:
-                seen.add(nb)
-                stack.append(nb)
+    def bfs(graph: dict[str, set[str]]) -> set[str]:
+        seen, stack = set(roots), list(roots)
+        while stack:
+            cur = stack.pop()
+            for nb in graph.get(cur, ()):
+                if nb not in seen:
+                    seen.add(nb)
+                    stack.append(nb)
+        return seen
+
+    door_seen = bfs(adj)
+    if len(door_seen) == len(ctx.polys):
+        return out
+
+    # Second tier: open thresholds as edges (see the docstring for the numbers).
+    focus = {rid for rid in ctx.polys if rid not in door_seen}
+    shared = _open_threshold_edges(ctx, focus)
+    wide = {rid: set() for rid in ctx.polys}
+    for (a, b), L in shared.items():
+        if L >= OPEN_THRESHOLD_MM:
+            wide[a].add(b)
+            wide[b].add(a)
+    both = {rid: adj.get(rid, set()) | wide.get(rid, set()) for rid in ctx.polys}
+    open_seen = bfs(both)
+
+    has_door = set()
+    for _oid, a, b in ctx.door_edges:
+        has_door.add(a)
+        has_door.add(b)
 
     cats = {r.id: r.category for r in ctx.rooms}
     names = {r.id: r.name for r in ctx.rooms}
     for rid in ctx.polys:
-        if rid in seen:
+        if rid in door_seen:
             continue
-        # Balconies and stores are routinely entered through a sliding unit the
-        # source data labels a window, so they warn instead of erroring.
-        soft = cats.get(rid) in NON_HABITABLE
+        widest = max((L for (a, b), L in shared.items() if rid in (a, b)),
+                     default=0.0)
+        if rid not in open_seen:
+            # Balconies and stores are routinely entered through a sliding unit
+            # the source data labels a window, so they only ever warn.
+            soft = cats.get(rid) in NON_HABITABLE
+            sev = "warn" if soft else "error"
+            wt = 0.6 if soft else 1.0
+            why = "landlocked: no door and no open threshold"
+        elif cats.get(rid) in PRIVATE and rid not in has_door:
+            # Privacy is not negotiable: a bedroom or bathroom needs a real
+            # door, so a doorless one stays an error even when it is walkable.
+            sev, wt, why = "error", 1.0, "a bedroom/bathroom must have a door"
+        else:
+            sev, wt = "warn", 0.6
+            why = (f"reached only across a {widest:.0f} mm open threshold "
+                   f"(no door modelled)")
         out.append(Finding(
-            "GEO.UNREACHABLE_ROOM", "warn" if soft else "error",
-            0.6 if soft else 1.0,
+            "GEO.UNREACHABLE_ROOM", sev, wt,
             f"room {names.get(rid, rid)!r} ({cats.get(rid)}) is not reachable "
-            f"from the entrance through doors", [rid]))
+            f"from the entrance through doors - {why}", [rid],
+            widest, float(OPEN_THRESHOLD_MM)))
+    return out
+
+
+def _poly_edges(p: Polygon) -> list[tuple[float, float, float, float]]:
+    rings = [p.exterior] + list(p.interiors)
+    out = []
+    for r in rings:
+        cs = list(r.coords)
+        for (ax, ay), (bx, by) in zip(cs, cs[1:]):
+            if ax != bx or ay != by:
+                out.append((ax, ay, bx, by))
+    return out
+
+
+def _shared_edge_len(ea, eb, tol: float) -> float:
+    """Length of boundary two rooms share, allowing `tol` of separation.
+
+    Pure segment arithmetic rather than `buffer().intersection()`: the buffered
+    version cost 2 ms/plan on its own (p99 9.8 ms, over the 10 ms budget) and
+    its shared length was only an estimate. This is exact for the 99.75% of
+    corpus edges that are axis-aligned and correct for the rest, and it is the
+    reason a doorless-room check can sit inside a generate/critique loop.
+    """
+    total = 0.0
+    for ax, ay, bx, by in ea:
+        dx, dy = bx - ax, by - ay
+        L = math.hypot(dx, dy)
+        if L < 1.0:
+            continue
+        ux, uy = dx / L, dy / L
+        nx, ny = -uy, ux
+        for cx, cy, ex, ey in eb:
+            fx, fy = ex - cx, ey - cy
+            M = math.hypot(fx, fy)
+            if M < 1.0:
+                continue
+            if abs(ux * fy - uy * fx) > 0.05 * M:      # not parallel (~3 deg)
+                continue
+            o1 = (cx - ax) * nx + (cy - ay) * ny
+            o2 = (ex - ax) * nx + (ey - ay) * ny
+            if abs(o1) > tol or abs(o2) > tol:
+                continue
+            t1 = (cx - ax) * ux + (cy - ay) * uy
+            t2 = (ex - ax) * ux + (ey - ay) * uy
+            lo = max(0.0, min(t1, t2))
+            hi = min(L, max(t1, t2))
+            if hi > lo:
+                total += hi - lo
+    return total
+
+
+def _open_threshold_edges(ctx: _Ctx, focus: set[str]) -> dict[tuple[str, str], float]:
+    """Shared boundary length, in mm, for every pair touching `focus`.
+
+    Only pairs with an endpoint in `focus` (the door-unreachable rooms) are
+    needed: any path from an unreachable room to the reachable set has at least
+    one such endpoint on every edge, so restricting the pair set is exact, not
+    an approximation. Cuts the work from n^2 to |focus| x n.
+    """
+    thick = max((w.thickness for w in ctx.plan.walls), default=200)
+    tol = thick * 1.5                # rooms inset to wall faces sit a wall apart
+    edges = {rid: _poly_edges(p) for rid, p in ctx.polys.items()}
+    bounds = {rid: p.bounds for rid, p in ctx.polys.items()}
+    out: dict[tuple[str, str], float] = {}
+    for u in focus:
+        bu = bounds.get(u)
+        if bu is None:
+            continue
+        for v in ctx.polys:
+            if v == u:
+                continue
+            key = (u, v) if u < v else (v, u)
+            if key in out:
+                continue
+            bv = bounds[v]
+            if (bu[2] + tol < bv[0] or bv[2] + tol < bu[0]
+                    or bu[3] + tol < bv[1] or bv[3] + tol < bu[1]):
+                continue
+            L = _shared_edge_len(edges[u], edges[v], tol)
+            if L > 0:
+                out[key] = L
     return out
 
 
@@ -676,8 +826,9 @@ def buildable_polygon(plot: Polygon, band: PlotBand,
         return Polygon([(minx + s_lo, lo_y), (maxx - s_hi, lo_y),
                         (maxx - s_hi, hi_y), (minx + s_lo, hi_y)])
 
-    cands = [rect(*sides)] if sides[0] == sides[1] else [rect(*sides), rect(*sides[::-1])]
-    best, best_out = None, None
+    cands = ([rect(*sides)] if sides[0] == sides[1]
+             else [rect(*sides), rect(sides[1], sides[0])])
+    best = None
     for c in cands:
         g = c.intersection(plot)
         if best is None or g.area > best.area:
@@ -867,6 +1018,8 @@ def _vastu_targets(ctx: _Ctx) -> list[tuple[str, str, tuple[float, float], list[
         if _STAIR_RE.search(r.name):
             tg.append(("stairs", r.name, pt, [r.id]))
             continue
+        if _is_passage(r):
+            continue          # circulation has no vastu zone preference here
         if master is not None and r.id == master.id:
             tg.append(("bedroom_master", r.name, pt, [r.id]))
         elif r.category == "bedroom":
@@ -904,7 +1057,9 @@ def vastu_score(plan: Plan, profile: CityProfile | None = None,
     findings: list[Finding] = []
     num = den = 0.0
     for key, label, pt, eids in _vastu_targets(ctx):
-        rules = [r for r in vp.rules if key in r.applies_to]
+        # weight 0 disables a rule outright - that is how a client switches off
+        # a preference they do not hold, without editing code.
+        rules = [r for r in vp.rules if key in r.applies_to and r.weight > 0]
         for rule in rules:
             b = bearing_deg(pt[0] - cx, pt[1] - cy, north)
             in_c = centre_box.contains(Point(pt))
@@ -932,7 +1087,7 @@ def vastu_score(plan: Plan, profile: CityProfile | None = None,
     bs = min(1.0, max(0.0, 1.0 - max(0.0, occ - cap) / max(1e-9, 1.0 - cap)))
     num += vp.brahmasthan_weight * bs
     den += vp.brahmasthan_weight
-    if bs < 0.5:
+    if bs < 0.5 and vp.brahmasthan_weight > 0:
         findings.append(Finding(
             "VASTU.BRAHMASTHAN", "warn", round(vp.brahmasthan_weight * (1 - bs), 3),
             f"central ninth (Brahmasthan) is {100*occ:.0f}% built over; "

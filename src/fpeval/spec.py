@@ -30,7 +30,7 @@ from typing import Any, Optional
 SPEC_VERSION = "1.0"
 
 SQFT_PER_M2 = 10.763910416709722
-MM2_PER_SQFT = 92_903_040  # (304.8 mm)^2
+MM2_PER_SQFT = 92_903.04    # (304.8 mm)^2 -- mm^2 in one square foot
 MM_PER_FT = 304.8
 
 # --------------------------------------------------------------------------
@@ -94,9 +94,14 @@ HABITABLE_CATEGORIES = frozenset(k for k, v in ROOM_CATEGORIES.items() if v.habi
 BEDROOM_CATEGORIES = frozenset({"bedroom", "master_bedroom", "guest_bedroom"})
 
 # Heuristic only. The authoritative bye-law tables live in bylaws.py (not ours).
-# `coverage` is the fraction of the plot that survives setbacks, measured off
-# typical small-plot residential setbacks; used purely for the
-# "is this programme physically impossible" check.
+# `coverage` is the fraction of the plot that survives setbacks; used purely for
+# the "is this programme physically impossible" check.
+#
+# Coverage is NOT constant in plot size, and getting that wrong produces false
+# rejections. Indian bye-laws relax setbacks sharply on small plots (a 20x30 in
+# Bengaluru keeps far more than 60% of its area; a 50x80 keeps less), so a flat
+# 0.60 wrongly rejected a perfectly ordinary 2BHK on a 600 sqft plot. The tier
+# multipliers below correct for that.
 CITY_PROFILES: dict[str, dict[str, float]] = {
     "generic_in":  {"coverage": 0.60, "far": 1.75},
     "bengaluru":   {"coverage": 0.60, "far": 1.75},
@@ -112,6 +117,22 @@ CITY_PROFILES: dict[str, dict[str, float]] = {
     "lucknow":     {"coverage": 0.60, "far": 1.75},
     "coimbatore":  {"coverage": 0.60, "far": 1.50},
 }
+
+# (plot area upper bound in sqft, coverage multiplier relative to the city value)
+COVERAGE_TIERS: tuple[tuple[float, float], ...] = (
+    (800, 1.33),     # <=800 sqft: minimal setbacks, ~0.80 of a 0.60 city
+    (1500, 1.17),    # 800-1500 sqft: ~0.70
+    (2500, 1.03),    # 1500-2500 sqft: ~0.62
+    (float("inf"), 0.97),
+)
+
+
+def coverage_for(city_profile: str, plot_area_sqft: float) -> float:
+    base = CITY_PROFILES.get(city_profile,
+                             CITY_PROFILES["generic_in"])["coverage"]
+    mult = next(m for cap, m in COVERAGE_TIERS if plot_area_sqft <= cap)
+    return min(base * mult, 0.85)
+
 
 STYLE_PACKS = (
     "default_in", "south_in_contemporary", "kerala_traditional",
@@ -285,8 +306,7 @@ class DesignSpec:
         area = self.plot_area_sqft
         if area is None:
             return None
-        prof = CITY_PROFILES.get(self.city_profile, CITY_PROFILES["generic_in"])
-        return area * prof["coverage"] * max(self.storeys, 1)
+        return area * coverage_for(self.city_profile, area) * max(self.storeys, 1)
 
     def required_min_sqft(self) -> float:
         """Sum of minimum areas of non-optional rooms, outdoor excluded."""
@@ -471,14 +491,16 @@ class DesignSpec:
         """Build from the LLM's JSON. Tolerant of missing keys, strict on types."""
         d = dict(d or {})
         rooms = [
-            RoomSpec(**{k: v for k, v in (r or {}).items()
+            RoomSpec(**{k: v for k, v in r.items()
                         if k in RoomSpec.__dataclass_fields__})
             for r in d.pop("rooms", []) or []
+            if isinstance(r, dict) and r.get("id") and r.get("category")
         ]
         adjacency = [
-            Adjacency(**{k: v for k, v in (a or {}).items()
+            Adjacency(**{k: v for k, v in a.items()
                          if k in Adjacency.__dataclass_fields__})
             for a in d.pop("adjacency", []) or []
+            if isinstance(a, dict) and a.get("a") and a.get("b")
         ]
         ent = d.pop("entrance", None) or {}
         entrance = EntranceSpec(**{k: v for k, v in ent.items()
@@ -509,15 +531,28 @@ class DesignSpec:
         rejects unions).
         """
         def nullable(base: dict) -> dict:
+            """Optionality as an explicit null, in the encoding the API accepts.
+
+            Measured against Anthropic strict tool use: `type: ["string",
+            "null"]` is accepted, but pairing a type union with `enum` is
+            rejected ("Enum value 'north' does not match declared type"). So an
+            enum becomes `anyOf: [<enum>, null]` and everything else a type
+            union.
+            """
             if not strict:
                 return base
-            t = base.get("type")
             out = dict(base)
-            if isinstance(t, str):
-                out["type"] = [t, "null"]
-            if "enum" in out and None not in out["enum"]:
-                out["enum"] = list(out["enum"]) + [None]
-            return out
+            desc = out.pop("description", None)
+            if "enum" in out:
+                wrapped: dict = {"anyOf": [out, {"type": "null"}]}
+            else:
+                t = out.get("type")
+                if isinstance(t, str):
+                    out["type"] = [t, "null"]
+                wrapped = out
+            if desc is not None:
+                wrapped["description"] = desc
+            return wrapped
 
         def obj(props: dict, required: list[str]) -> dict:
             return {
