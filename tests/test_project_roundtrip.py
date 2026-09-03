@@ -386,3 +386,29 @@ def test_a_python_built_plan_does_not_acquire_a_floor_id_override():
     assert plan.project_floor_id == ""
     back = from_project(to_project(plan))
     assert back.project_floor_id == ""
+
+
+def test_a_default_constructed_design_round_trips():
+    """The class of bug this catches, four times over.
+
+    Every other fixture in this file sets every field, so none of them noticed
+    that `name`, `description`, `created_at` and `updated_at` all came back as
+    the *derived* default rather than as empty. A `Design` built the way the
+    code actually builds one -- `Design.single(plan)`, most fields untouched --
+    is the case that matters, because it is the one the solver, the converter,
+    and `Document.from_plan` all produce.
+    """
+    plan = Plan(id="g", level=0, walls=_rect_walls("w", 6000, 4000))
+    design = Design.single(plan)
+    back = design_from_project(to_project(design))
+    assert back.to_dict() == design.to_dict()
+
+
+def test_a_document_survives_the_projection_it_is_stored_as():
+    """`service/store.py` persists a design as its Project projection, so a
+    round trip that is not an identity means a restart changes the document."""
+    from fpeval.document import Document, state_hash
+    plan = Plan(id="g", level=0, walls=_rect_walls("w", 6000, 4000))
+    doc = Document.from_plan(plan, name="Test")
+    back = design_from_project(to_project(doc.design))
+    assert state_hash(back) == state_hash(doc.design)

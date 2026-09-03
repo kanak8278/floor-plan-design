@@ -104,6 +104,17 @@ def _derived_room_class(category: str) -> str:
     return t.op3d_room_type if t else CATEGORY_TO_ROOMTYPE.get(category, "indoor")
 
 
+EPOCH = "1970-01-01T00:00:00.000Z"
+
+
+def _derived_design_name(design_id: str) -> str:
+    return f"ResPlan {design_id}"
+
+
+def _derived_description(source: str) -> str:
+    return f"Converted from {source}"
+
+
 def _derived_floor_name(level: int) -> str:
     return "Ground Floor" if level == 0 else f"Floor {level}"
 
@@ -354,12 +365,12 @@ def to_project(x: Plan | Design, name: str | None = None) -> dict[str, Any]:
     src = (active.provenance.get("source", "?") if active else "?")
     return {
         "id": f"proj-{design.id}",
-        "name": name or design.name or f"ResPlan {design.id}",
-        "description": design.description or f"Converted from {src}",
+        "name": name or design.name or _derived_design_name(design.id),
+        "description": design.description or _derived_description(src),
         "floors": floors,
         "activeFloorId": active_floor_id,
-        "createdAt": design.created_at or "1970-01-01T00:00:00.000Z",
-        "updatedAt": design.updated_at or "1970-01-01T00:00:00.000Z",
+        "createdAt": design.created_at or EPOCH,
+        "updatedAt": design.updated_at or EPOCH,
         "customEntourage": [{"id": d.id, "name": d.name, "dataUrl": d.data_url,
                              "aspect": d.aspect}
                             for d in design.custom_entourage],
@@ -611,6 +622,15 @@ def _storey_ir(proj: dict[str, Any], fl: dict[str, Any]) -> Plan:
     return plan
 
 
+def _source_of(proj: dict[str, Any], active_floor_id: Any) -> str:
+    """The provenance source `to_project` would have written into
+    `description`, so the read side can recognise its own default."""
+    side = (proj.get(SIDECAR) or {})
+    per_floor = (side.get("floors") or {}).get(str(active_floor_id)) or {}
+    prov = per_floor.get("provenance") or side.get("provenance") or {}
+    return str(prov.get("source", "?"))
+
+
 def design_from_project(proj: dict[str, Any]) -> Design:
     """The lossless read: every storey, every field, every layer."""
     side = proj.get(SIDECAR) or {}
@@ -625,18 +645,26 @@ def design_from_project(proj: dict[str, Any]) -> Design:
     if not active_id and storeys:
         active_id = storeys[0].id
 
+    design_id = (side.get("design_id")
+                 or str(proj.get("id", "")).replace("proj-", ""))
     return Design(
-        id=side.get("design_id") or str(proj.get("id", "")).replace("proj-", ""),
+        id=design_id,
         storeys=storeys,
         active_storey_id=active_id,
-        name=proj.get("name") or "Untitled",
-        description=proj.get("description") or "",
+        # Normalised against what we would have derived, like every other
+        # derived default in this module. Storing the derived value instead is
+        # how `Document` round-trips stopped hashing equal -- and my fixtures
+        # all set these fields, so none of them noticed. See
+        # `test_a_default_constructed_design_round_trips`.
+        name=_norm(proj.get("name") or "", _derived_design_name(design_id)),
+        description=_norm(proj.get("description") or "",
+                          _derived_description(_source_of(proj, active_floor))),
         custom_entourage=[EntourageDef(id=d["id"], name=d["name"],
                                        data_url=d["dataUrl"],
                                        aspect=float(d["aspect"]))
                           for d in (proj.get("customEntourage") or [])],
-        created_at=str(proj.get("createdAt") or ""),
-        updated_at=str(proj.get("updatedAt") or ""),
+        created_at=_norm(str(proj.get("createdAt") or ""), EPOCH),
+        updated_at=_norm(str(proj.get("updatedAt") or ""), EPOCH),
         provenance=dict(side.get("provenance", {})),
     )
 

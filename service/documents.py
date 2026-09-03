@@ -15,9 +15,10 @@ Why that has to be server-side rather than posted in with each call:
     converting a posted copy each time relocates the divergence into the
     conversion rather than removing it.
 
-Storage is a process-local dict for now. Everything a database would need is
-already in `Document` -- `to_dict()`, snapshots, and a verifiable log -- so
-swapping in SQLite is a persistence layer, not a redesign.
+Storage lives in `service/store.py` behind a `DocumentStore` interface. SQLite
+is the deployable default; `FPEVAL_DB=:memory:` keeps a run diskless. Nothing in
+this module knows which it has, so a multi-instance deployment on Postgres is a
+new class there and no change here.
 """
 from __future__ import annotations
 
@@ -39,14 +40,26 @@ from fpeval.document import Document, feed                      # noqa: E402
 from fpeval.rules import validate as validate_plan              # noqa: E402
 from fpeval.bylaws import BENGALURU                             # noqa: E402
 
+from service.store import DocumentStore, open_store                # noqa: E402
+
 router = APIRouter()
 
-# design_id -> Document. Process-local; see the module docstring.
-DOCUMENTS: dict[str, Document] = {}
-# design_id -> chat transcript, as Anthropic message dicts.
-TRANSCRIPTS: dict[str, list[dict]] = {}
+# One store for the process. Opened lazily so importing this module -- which
+# `tests/` does -- neither creates a database file nor fails on a bad URL.
+_STORE: Optional[DocumentStore] = None
 
-MAX_DOCUMENTS = 200         # a soft cap so a long-running dev server cannot grow forever
+
+def store() -> DocumentStore:
+    global _STORE
+    if _STORE is None:
+        _STORE = open_store()
+    return _STORE
+
+
+def set_store(new: Optional[DocumentStore]) -> None:
+    """Swap the store. Tests use this to run against `MemoryStore`."""
+    global _STORE
+    _STORE = new
 
 
 # --------------------------------------------------------------------------
@@ -79,16 +92,19 @@ class CommandsIn(BaseModel):
 
 
 def _doc(design_id: str) -> Document:
-    doc = DOCUMENTS.get(design_id)
+    doc = store().load(design_id)
     if doc is None:
         raise HTTPException(404, f"no design {design_id!r}")
     return doc
 
 
-def _findings_json(design_id: str) -> list[dict[str, Any]]:
+def _maybe_doc(design_id: str) -> Optional[Document]:
+    return store().load(design_id) if design_id else None
+
+
+def _findings_json(doc: Optional[Document]) -> list[dict[str, Any]]:
     """Validator findings for the active storey, cheap enough to send every
     time -- the rules engine runs in about 2.4 ms."""
-    doc = DOCUMENTS.get(design_id)
     plan = doc.design.active if doc else None
     if plan is None or not plan.walls:
         return []
@@ -114,7 +130,7 @@ def _sync_reply(design_id: str, doc: Document, events, rejected,
         "hash": doc.hash,
         "events": [e.to_dict() for e in events],
         "rejected": [r.to_dict() for r in rejected],
-        "findings": _findings_json(design_id),
+        "findings": _findings_json(doc),
     }
     if projection:
         out["projection"] = doc.projection()
@@ -143,7 +159,7 @@ def adopt(body: AdoptIn) -> dict[str, Any]:
     # discarded the command log while keeping the transcript, so the assistant
     # remembered edits the document no longer had. It read as the model
     # hallucinating; it was the service losing state.
-    existing = DOCUMENTS.get(design_id)
+    existing = store().load(design_id)
     if existing is not None and not body.replace:
         return _adopted_state(design_id, existing, reattached=True)
 
@@ -152,15 +168,13 @@ def adopt(body: AdoptIn) -> dict[str, Any]:
     except Exception as e:
         raise HTTPException(400, f"could not read that project: "
                                  f"{type(e).__name__}: {e}")
-    if len(DOCUMENTS) >= MAX_DOCUMENTS:
-        for stale in list(DOCUMENTS)[:len(DOCUMENTS) - MAX_DOCUMENTS + 1]:
-            DOCUMENTS.pop(stale, None)
-            TRANSCRIPTS.pop(stale, None)
-    DOCUMENTS[design_id] = doc
-    # A replaced document gets a fresh transcript: a conversation about a
-    # document that no longer exists is worse than no conversation.
-    TRANSCRIPTS[design_id] = [] if body.replace else TRANSCRIPTS.setdefault(
-        design_id, [])
+    if existing is not None:
+        # An explicit replace. `store.replace` drops the log and the
+        # conversation together -- see its docstring; that rule belongs to the
+        # store, not to whichever caller remembers to clean up.
+        store().replace(design_id, doc)
+    else:
+        store().create(design_id, doc)
     return _adopted_state(design_id, doc, reattached=False)
 
 
@@ -179,7 +193,7 @@ def _adopted_state(design_id: str, doc: Document,
         "rooms": [{"id": r.id, "name": r.name, "category": r.category,
                    "area_m2": round(r.area_m2, 2)}
                   for r in (doc.design.active.rooms if doc.design.active else [])],
-        "findings": _findings_json(design_id),
+        "findings": _findings_json(doc),
     }
 
 
@@ -192,7 +206,7 @@ def get_design(design_id: str, since: int = 0) -> dict[str, Any]:
         "hash": doc.hash,
         "events": [e.to_dict() for e in doc.events_since(since)],
         "projection": doc.projection(),
-        "findings": _findings_json(design_id),
+        "findings": _findings_json(doc),
     }
 
 
@@ -205,11 +219,16 @@ def post_commands(design_id: str, body: CommandsIn) -> dict[str, Any]:
     happen; half-applying it silently would be worse.
     """
     doc = _doc(design_id)
+    before = doc.seq
     cmds = [Command(op=c.op, params=c.params, source=c.source,  # type: ignore[arg-type]
                     id=c.id or "", storey_id=c.storey_id,
                     description=c.description)
             for c in body.commands]
     events, rejected = doc.apply_batch(cmds)
+    # Persist only what this batch appended. Rewriting the whole log on every
+    # drag would make a long session quadratic.
+    store().save_commands(design_id, doc,
+                          [e for e in doc.log if e.seq > before])
     # Send the projection back only when something was refused: that is when
     # the client's optimistic state and the document can have parted company.
     return _sync_reply(design_id, doc, events, rejected,
@@ -228,6 +247,9 @@ def get_events(design_id: str, since: int = 0) -> dict[str, Any]:
 def undo(design_id: str) -> dict[str, Any]:
     doc = _doc(design_id)
     event = doc.undo()
+    # Undo rebuilds rather than inverting, so storage has to be rewound to
+    # match or a reload would resurrect the undone command.
+    store().truncate_after(design_id, doc.seq, doc)
     return {"design_id": design_id, "seq": doc.seq, "hash": doc.hash,
             "undone": event.to_dict() if event else None,
             "projection": doc.projection(),
@@ -257,11 +279,16 @@ def vocabulary() -> dict[str, Any]:
 @router.get("/api/designs")
 def list_designs() -> dict[str, Any]:
     return {"designs": [
-        {"design_id": k, "seq": v.seq, "hash": v.hash,
-         "name": v.design.name,
-         "storeys": len(v.design.storeys),
-         "messages": len(TRANSCRIPTS.get(k, []))}
-        for k, v in DOCUMENTS.items()]}
+        {"design_id": r.design_id, "seq": r.seq, "hash": r.hash,
+         "name": r.name, "updated_at": r.updated_at, "messages": r.messages}
+        for r in store().list()]}
+
+
+@router.delete("/api/designs/{design_id}")
+def delete_design(design_id: str) -> dict[str, Any]:
+    _doc(design_id)
+    store().delete(design_id)
+    return {"design_id": design_id, "deleted": True}
 
 
 # --------------------------------------------------------------------------
@@ -289,7 +316,7 @@ def chat(body: ChatIn) -> dict[str, Any]:
     import os
 
     design_id = body.design_id or ""
-    if design_id not in DOCUMENTS:
+    if _maybe_doc(design_id) is None:
         if not body.project:
             raise HTTPException(
                 400, "no such design, and no project was sent to adopt")
@@ -297,7 +324,7 @@ def chat(body: ChatIn) -> dict[str, Any]:
         design_id = adopted["design_id"]
 
     doc = _doc(design_id)
-    transcript = TRANSCRIPTS.setdefault(design_id, [])
+    transcript = store().load_transcript(design_id)
 
     if not (os.environ.get("ANTHROPIC_API_KEY")
             or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
@@ -312,14 +339,25 @@ def chat(body: ChatIn) -> dict[str, Any]:
     from fpeval.agent import run_turn
 
     t0 = time.time()
+    before = doc.seq
     try:
         result = run_turn(
             doc, transcript, body.message,
             last_seen_seq=body.seq,
-            findings_fn=lambda: _plan_findings(design_id),
+            findings_fn=lambda: _plan_findings(doc),
         )
     except Exception as e:                        # never lose the document
+        # The turn may have applied commands before it failed. Persist those
+        # and the transcript so far: a crashed turn must not silently roll back
+        # edits the user has already been shown.
+        store().save_commands(design_id, doc,
+                              [e2 for e2 in doc.log if e2.seq > before])
+        store().save_transcript(design_id, transcript)
         raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+    store().save_commands(design_id, doc,
+                          [e for e in doc.log if e.seq > before])
+    store().save_transcript(design_id, transcript)
 
     return {
         "design_id": design_id,
@@ -329,7 +367,7 @@ def chat(body: ChatIn) -> dict[str, Any]:
         "hash": doc.hash,
         "events": [e.to_dict() for e in result.events],
         "rejected": [r.to_dict() for r in result.rejected],
-        "findings": _findings_json(design_id),
+        "findings": _findings_json(doc),
         "steps": result.steps,
         "usage": result.usage,
         "ms": round(1000 * (time.time() - t0)),
@@ -337,9 +375,8 @@ def chat(body: ChatIn) -> dict[str, Any]:
     }
 
 
-def _plan_findings(design_id: str) -> list[Any]:
+def _plan_findings(doc: Optional[Document]) -> list[Any]:
     """Finding objects (not JSON) for the agent's own tool."""
-    doc = DOCUMENTS.get(design_id)
     plan = doc.design.active if doc else None
     if plan is None or not plan.walls:
         return []
@@ -354,7 +391,7 @@ def transcript(design_id: str) -> dict[str, Any]:
     """The conversation, for reloading the pane after a refresh."""
     _doc(design_id)
     out = []
-    for m in TRANSCRIPTS.get(design_id, []):
+    for m in store().load_transcript(design_id):
         role = m.get("role")
         if role == "system":
             continue                       # operator state, not conversation
