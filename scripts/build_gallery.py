@@ -19,7 +19,7 @@ for raw in plans:
     if key in seen or not (5 <= len(ir.rooms) <= 12): continue
     seen.add(key)
     p = to_project(ir)
-    p["id"] = f"fp-{ir.id}"
+    p["id"] = f"fpeval-rp-{ir.id}"
     p["name"] = f"ResPlan {ir.id} — {nb}BHK, {len(ir.rooms)} rooms"
     p["_meta"] = {"rooms": len(ir.rooms), "bedrooms": nb, "walls": len(ir.walls),
                   "openings": len(ir.openings),

@@ -8,15 +8,28 @@
   let filter = 'all';
 
   const KEY = 'floorplan_projects';
+  // Everything fpeval has ever written, including the legacy prefixes from
+  // earlier runs, so a stale generation cannot survive a reload.
+  const GENERATED = ['fpeval-', 'sx-', 'fp-', 'b-', 'demo-', 'proj-'];
+  let purged = 0;
 
   onMount(async () => {
     try {
       const load = async (f) => { try { return await (await fetch(f)).json(); } catch { return []; } };
       [suite, resplan] = await Promise.all([load('/fpeval/suite.json'), load('/fpeval/projects.json')]);
       const all = JSON.parse(localStorage.getItem(KEY) || '{}');
+      // PURGE every plan we have ever generated before seeding. The old code
+      // merged, so each regeneration left the previous one behind and the list
+      // filled with superseded duplicates under four different id prefixes.
+      // Anything the user drew themselves is untouched.
+      let removed = 0;
+      for (const k of Object.keys(all)) {
+        if (GENERATED.some((pre) => k.startsWith(pre))) { delete all[k]; removed++; }
+      }
       for (const p of [...suite, ...resplan]) all[p.id] = JSON.stringify(p);
       localStorage.setItem(KEY, JSON.stringify(all));
-      status = `${suite.length} generated suite plans + ${resplan.length} converted ResPlan plans loaded into this browser.`;
+      purged = removed;
+      status = `${suite.length} generated + ${resplan.length} converted plans loaded` + (removed ? `, ${removed} superseded plan(s) purged.` : '.');
       ok = true;
     } catch (e) { status = 'Failed: ' + e; }
   });
@@ -45,6 +58,16 @@
   <div class="status" class:ok>{status}</div>
 
   <div class="tabs">
+    <button class="danger" on:click={() => {
+      const all = JSON.parse(localStorage.getItem(KEY) || '{}');
+      let n = 0;
+      for (const k of Object.keys(all)) {
+        if (GENERATED.some((pre) => k.startsWith(pre))) { delete all[k]; n++; }
+      }
+      localStorage.setItem(KEY, JSON.stringify(all));
+      suite = []; resplan = [];
+      status = `cleared ${n} generated plan(s); anything you drew yourself is untouched`;
+    }}>Clear generated</button>
     <button class:active={tab === 'suite'} on:click={() => tab = 'suite'}>Generated ({suite.length})</button>
     <button class:active={tab === 'resplan'} on:click={() => tab = 'resplan'}>ResPlan ({resplan.length})</button>
   </div>
@@ -106,6 +129,8 @@
   .tabs{display:flex;gap:8px;margin-bottom:14px}
   .tabs button{padding:7px 14px;border:1px solid #262c37;background:#151922;color:#9aa3af;border-radius:8px;cursor:pointer;font:inherit}
   .tabs button.active{background:#1e293b;color:#dbeafe;border-color:#3b82f6}
+  .tabs button.danger{margin-left:auto;border-color:#7f1d1d;color:#fca5a5}
+  .tabs button.danger:hover{background:#3f1414}
   .filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
   .filters button{padding:3px 9px;border:1px solid #262c37;background:#12161e;color:#8b93a1;border-radius:99px;cursor:pointer;font:12px inherit}
   .filters button.on{background:#1e293b;color:#93c5fd;border-color:#3b82f6}

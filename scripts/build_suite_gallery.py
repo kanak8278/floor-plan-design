@@ -75,7 +75,7 @@ for ex in _all:
         (skipped if r.status == "skipped" else failed).append((ex.id, r.status))
         continue
     pj = to_project(r.plan)
-    pj["id"] = f"sx-{ex.id}"
+    pj["id"] = f"fpeval-sx-{ex.id}"
     pj["name"] = label(ex, r.n_rooms)
     pj["description"] = ex.prompt[:220]
     pj["_meta"] = {

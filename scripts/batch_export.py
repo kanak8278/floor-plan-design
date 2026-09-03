@@ -10,7 +10,7 @@ for raw in plans[:N*2]:
     try:
         ir = convert(raw)
     except Exception: continue
-    p = to_project(ir); p["id"] = f"b-{ir.id}"
+    p = to_project(ir); p["id"] = f"fpeval-b-{ir.id}"
     p["_expect"] = {"rooms": len(ir.rooms), "walls": len(ir.walls),
                     "doors": sum(1 for o in ir.openings if o.kind != "window"),
                     "windows": sum(1 for o in ir.openings if o.kind == "window"),
