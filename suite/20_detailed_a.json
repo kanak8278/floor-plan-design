@@ -1,0 +1,282 @@
+{
+  "group": "detailed briefs A — locations, balconies, washrooms",
+  "note": "Prompts a client actually gives once they have thought about it: which room faces where, which balcony hangs off what, which toilet is attached and which is common. Ground truth uses `adjacent` so 'a balcony off the master bedroom' is checkable rather than merely stated.",
+  "examples": [
+    {
+      "id": "det-01",
+      "prompt": "30x40 east facing site, 3BHK. Master bedroom in the south-west corner with an attached bathroom and a balcony opening off it towards the east. Two smaller bedrooms on the north side sharing a common bathroom in the passage. Kitchen in the south-east with a utility behind it where the washing machine goes. Hall in the middle-north so it connects everything.",
+      "features": ["plot", "bhk", "facing", "vastu", "attached_bath", "common_bath", "balcony", "utility", "hall", "furniture"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "east", "rooms": {"bedroom": 3}, "attached_bath": 1,
+                "rooms_min": {"bathroom": 2, "balcony": 1, "utility": 1, "kitchen": 1, "living": 1},
+                "adjacent": [["balcony", "master_bedroom"], ["utility", "kitchen"]],
+                "vastu_zones": {"master_bedroom": "SW", "kitchen": "SE"},
+                "place_in": {"washer_dryer": "utility"},
+                "must_place": ["bed_queen", "wardrobe", "counter", "stove", "sink_k"]}
+    },
+    {
+      "id": "det-02",
+      "prompt": "40x60 north facing, 3BHK. I want two balconies: one common balcony off the living room facing the road, and one private balcony off the master bedroom at the back. Utility next to the kitchen with washing machine and space for the gas cylinder.",
+      "features": ["plot", "bhk", "facing", "balcony", "utility", "hall", "furniture"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "road_facing": "north", "rooms": {"bedroom": 3},
+                "rooms_min": {"balcony": 2, "utility": 1, "living": 1, "kitchen": 1},
+                "adjacent": [["balcony", "living"], ["balcony", "master_bedroom"],
+                             ["utility", "kitchen"]],
+                "place_in": {"washer_dryer": "utility"},
+                "must_place": ["washer_dryer", "sofa", "television"]}
+    },
+    {
+      "id": "det-03",
+      "prompt": "30x50, 3BHK. Every bedroom gets its own attached toilet, and I also want a small common powder room near the entrance for guests so nobody walks into a bedroom.",
+      "features": ["plot", "bhk", "attached_bath", "common_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "rooms": {"bedroom": 3}, "attached_bath": 3,
+                "rooms_min": {"bathroom": 4},
+                "not_adjacent": [["bathroom", "kitchen"]]}
+    },
+    {
+      "id": "det-04",
+      "prompt": "40x60 site, 4BHK. Two bedrooms upstairs share one bathroom between them, entered from each bedroom, no door to the passage. The other two bedrooms have their own attached bathrooms.",
+      "features": ["plot", "bhk", "attached_bath", "multifloor", "stairs"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "storeys": 2, "rooms": {"bedroom": 4}, "attached_bath": 2,
+                "rooms_min": {"bathroom": 3, "stair": 1}}
+    },
+    {
+      "id": "det-05",
+      "prompt": "30x40 east facing 3BHK. The hall must be the biggest room and everything should open off it. Kitchen south-east opening into the dining side of the hall. No bedroom door should open directly into the hall where guests sit.",
+      "features": ["plot", "bhk", "facing", "hall", "dining", "kitchen_layout", "vastu"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "east", "rooms": {"bedroom": 3},
+                "rooms_min": {"living": 1, "kitchen": 1},
+                "adjacent": [["kitchen", "living"]],
+                "vastu_zones": {"kitchen": "SE"}}
+    },
+    {
+      "id": "det-06",
+      "prompt": "2BHK flat, 1353 sq ft super built up, 873 carpet. Master bedroom with attached toilet and a balcony. Second bedroom with the common toilet next to it. Living cum dining with a second balcony. Kitchen with a utility balcony behind for the washing machine.",
+      "features": ["apartment_unit", "area_quote", "bhk", "balcony", "utility", "attached_bath", "hall", "dining"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 2},
+                "attached_bath": 1,
+                "rooms_min": {"bathroom": 2, "balcony": 2, "utility": 1, "living": 1},
+                "area_quote_sqft": {"super_builtup_sqft": 1353, "carpet_sqft": 873},
+                "adjacent": [["balcony", "master_bedroom"], ["utility", "kitchen"]],
+                "place_in": {"washer_dryer": "utility"}},
+      "source": "Brigade Lakecrest TYPE C18, verified against the drawing"
+    },
+    {
+      "id": "det-07",
+      "prompt": "30x40, 3BHK. Bedrooms all on the west side away from the morning sun, hall and kitchen on the east. One common bathroom off the passage between the bedrooms, plus an attached one for the master.",
+      "features": ["plot", "bhk", "facing", "attached_bath", "common_bath", "hall"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "attached_bath": 1,
+                "rooms_min": {"bathroom": 2},
+                "vastu_zones": {"bedroom": "W"}}
+    },
+    {
+      "id": "det-08",
+      "prompt": "50x80 villa, 4BHK. Formal living at the front for guests, separate family lounge at the back for us. Dining as its own room between the family lounge and the kitchen. Bedrooms upstairs, none opening into the formal living.",
+      "features": ["plot", "bhk", "hall", "dining", "multifloor", "stairs", "corner_plot"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 50, "plot_depth_ft": 80,
+                "storeys": 2, "rooms": {"bedroom": 4},
+                "rooms_min": {"living": 2, "dining": 1, "kitchen": 1, "stair": 1},
+                "adjacent": [["dining", "kitchen"]],
+                "not_adjacent": [["living", "bedroom"]],
+                "coverage_max": 0.65, "far_max": 2.25}
+    },
+    {
+      "id": "det-09",
+      "prompt": "30x40, 3BHK, and the utility must be a proper enclosed area off the kitchen with the washing machine, a wash basin and space to hang clothes, not just a balcony.",
+      "features": ["plot", "bhk", "utility", "kitchen_layout", "furniture"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "rooms_min": {"utility": 1},
+                "adjacent": [["utility", "kitchen"]],
+                "place_in": {"washer_dryer": "utility"},
+                "must_place": ["washer_dryer"]}
+    },
+    {
+      "id": "det-10",
+      "prompt": "40x60 north facing, 3BHK with a pooja room in the north-east that does not share a wall with any bathroom, and a balcony off the living room on the north side.",
+      "features": ["plot", "bhk", "facing", "pooja", "vastu", "balcony", "hall"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "road_facing": "north", "rooms": {"bedroom": 3},
+                "rooms_min": {"pooja": 1, "balcony": 1},
+                "adjacent": [["balcony", "living"]],
+                "not_adjacent": [["pooja", "bathroom"]],
+                "vastu_enabled": true, "vastu_zones": {"pooja": "NE"}}
+    },
+    {
+      "id": "det-11",
+      "prompt": "20x30 compact 2BHK. No balcony, no utility room, just a small sitout at the front. One common bathroom between the two bedrooms accessed from the passage.",
+      "features": ["plot", "bhk", "sitout", "common_bath", "budget"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 20, "plot_depth_ft": 30,
+                "rooms": {"bedroom": 2, "bathroom": 1},
+                "rooms_min": {"sitout": 1}, "budget_band": "economy",
+                "attached_bath": 0}
+    },
+    {
+      "id": "det-12",
+      "prompt": "30x50, 3BHK. Master bedroom with attached bath AND a walk-in wardrobe area. Other two bedrooms share a common bath. Balcony off the master only.",
+      "features": ["plot", "bhk", "attached_bath", "common_bath", "balcony", "store"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "rooms": {"bedroom": 3}, "attached_bath": 1,
+                "rooms_min": {"bathroom": 2, "balcony": 1, "store": 1},
+                "adjacent": [["balcony", "master_bedroom"]],
+                "must_place": ["bed_queen", "wardrobe"]}
+    },
+    {
+      "id": "det-13",
+      "prompt": "3 BHK plus 3 toilets plus study, around 1310 sq ft carpet. Pooja near the foyer, study off the living, one balcony off the living. Utility behind the kitchen.",
+      "features": ["apartment_unit", "area_quote", "bhk", "study", "pooja", "balcony", "utility"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 3},
+                "rooms_min": {"bathroom": 3, "study": 1, "pooja": 1, "balcony": 1,
+                              "utility": 1, "foyer": 1},
+                "area_quote_sqft": {"carpet_sqft": 1310},
+                "adjacent": [["balcony", "living"], ["utility", "kitchen"]]},
+      "source": "the 3BHK+3T+STUDY unit plan, verified"
+    },
+    {
+      "id": "det-14",
+      "prompt": "40x60 site, 3BHK single floor. Two balconies, both facing the rear garden, one off the master and one off the second bedroom. Kitchen with a separate dry store.",
+      "features": ["plot", "bhk", "balcony", "store", "garden", "kitchen_layout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "storeys": 1, "rooms": {"bedroom": 3},
+                "rooms_min": {"balcony": 2, "store": 1},
+                "adjacent": [["balcony", "master_bedroom"], ["store", "kitchen"]]}
+    },
+    {
+      "id": "det-15",
+      "prompt": "30x40, 3BHK. I want the toilet doors positioned so that no toilet is visible from the dining table or the hall seating.",
+      "features": ["plot", "bhk", "common_bath", "dining", "hall"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "rooms_min": {"bathroom": 2, "dining": 1},
+                "not_adjacent": [["bathroom", "dining"]]}
+    },
+    {
+      "id": "det-16",
+      "prompt": "50x80, 5BHK villa. Ground floor: formal living, dining, kitchen with utility and dry store, one guest bedroom with attached bath, powder room off the foyer. First floor: four bedrooms, master with attached bath and a large balcony, others sharing two bathrooms.",
+      "features": ["plot", "bhk", "multifloor", "stairs", "attached_bath", "common_bath", "balcony", "utility", "store", "hall", "dining"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 50, "plot_depth_ft": 80,
+                "storeys": 2, "rooms": {"bedroom": 5},
+                "rooms_min": {"bathroom": 4, "utility": 1, "store": 1, "balcony": 1,
+                              "living": 1, "dining": 1, "stair": 1, "foyer": 1},
+                "adjacent": [["balcony", "master_bedroom"], ["utility", "kitchen"]],
+                "coverage_max": 0.65, "far_max": 2.25}
+    },
+    {
+      "id": "det-17",
+      "prompt": "30x40 west facing, 3BHK. Because it is west facing, put the bedrooms on the east and north, and keep the kitchen and utility on the west side where the afternoon heat is less of a problem.",
+      "features": ["plot", "bhk", "facing", "utility", "kitchen_layout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "west", "rooms": {"bedroom": 3},
+                "rooms_min": {"utility": 1},
+                "adjacent": [["utility", "kitchen"]],
+                "vastu_zones": {"kitchen": "W"}}
+    },
+    {
+      "id": "det-18",
+      "prompt": "40x60, 4BHK. One bathroom must be a common one opening off the passage so guests never enter a bedroom, and every bedroom still gets its own attached bath.",
+      "features": ["plot", "bhk", "attached_bath", "common_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 4}, "attached_bath": 4,
+                "rooms_min": {"bathroom": 5}}
+    },
+    {
+      "id": "det-19",
+      "prompt": "1BHK studio flat, 529 sq ft carpet. Open kitchen along one wall of the living area, one bathroom, one small balcony off the living. No separate dining.",
+      "features": ["apartment_unit", "area_quote", "bhk", "kitchen_layout", "balcony"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 1, "bathroom": 1},
+                "rooms_min": {"kitchen": 1, "living": 1, "balcony": 1},
+                "area_quote_sqft": {"carpet_sqft": 529},
+                "adjacent": [["balcony", "living"], ["kitchen", "living"]]}
+    },
+    {
+      "id": "det-20",
+      "prompt": "30x40 G+1 duplex, 3BHK. Ground floor has the hall, kitchen with utility, a common toilet and the staircase rising from the hall. All three bedrooms upstairs, master with attached bath and balcony.",
+      "features": ["plot", "bhk", "multifloor", "duplex", "stairs", "utility", "attached_bath", "balcony", "hall"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 2, "rooms": {"bedroom": 3}, "attached_bath": 1,
+                "rooms_min": {"bathroom": 2, "utility": 1, "stair": 1, "balcony": 1,
+                              "living": 1},
+                "adjacent": [["stair", "living"], ["utility", "kitchen"],
+                             ["balcony", "master_bedroom"]]}
+    },
+    {
+      "id": "det-21",
+      "prompt": "30x50, 3BHK for my parents and us. Parents' bedroom on the ground floor near the pooja room with an attached bathroom they can reach without stairs. Our two bedrooms can be anywhere.",
+      "features": ["plot", "bhk", "pooja", "attached_bath", "family"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "storeys": 1, "rooms": {"bedroom": 3}, "attached_bath": 1,
+                "rooms_min": {"pooja": 1, "bathroom": 2},
+                "family": "parents + couple"}
+    },
+    {
+      "id": "det-22",
+      "prompt": "40x60, 3BHK. Balconies: one big one off the hall for evening sitting, and a small utility balcony off the kitchen only for the washing machine and drying. Nothing off the bedrooms.",
+      "features": ["plot", "bhk", "balcony", "utility", "hall", "kitchen_layout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3},
+                "rooms_min": {"balcony": 1, "utility": 1, "living": 1},
+                "adjacent": [["balcony", "living"], ["utility", "kitchen"]],
+                "not_adjacent": [["balcony", "bedroom"]],
+                "place_in": {"washer_dryer": "utility"}}
+    },
+    {
+      "id": "det-23",
+      "prompt": "30x40 east facing, 3BHK, strictly Vastu. Kitchen south-east with the cooking platform facing east, sink in the north-east corner of the kitchen. Master bedroom south-west. Pooja north-east. Toilets north-west only.",
+      "features": ["plot", "bhk", "facing", "vastu", "pooja", "kitchen_layout", "furniture", "common_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "east", "rooms": {"bedroom": 3},
+                "rooms_min": {"pooja": 1, "bathroom": 2},
+                "vastu_enabled": true, "vastu_strictness": "strict",
+                "vastu_zones": {"kitchen": "SE", "master_bedroom": "SW",
+                                "pooja": "NE", "bathroom": "NW"},
+                "must_place": ["stove", "sink_k", "counter"]}
+    },
+    {
+      "id": "det-24",
+      "prompt": "40x60 corner site, 3BHK. Because it is a corner plot I want the main gate on the side road and a small pedestrian gate on the front road. Sitout at the entrance under a portico.",
+      "features": ["plot", "bhk", "corner_plot", "gate", "sitout", "porch", "parking"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "corner_plot": true, "rooms": {"bedroom": 3},
+                "rooms_min": {"sitout": 1},
+                "must_place": ["fence_gate", "driveway"]}
+    },
+    {
+      "id": "det-25",
+      "prompt": "30x40, 3BHK. Utility next to the kitchen with the washing machine, and I want the bathrooms stacked with the kitchen on one plumbing line down the west wall to keep costs sensible.",
+      "features": ["plot", "bhk", "utility", "attached_bath", "budget", "kitchen_layout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3},
+                "rooms_min": {"utility": 1, "bathroom": 2},
+                "adjacent": [["utility", "kitchen"]],
+                "place_in": {"washer_dryer": "utility"}, "budget_band": "economy"}
+    }
+  ]
+}

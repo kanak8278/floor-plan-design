@@ -16,10 +16,15 @@ ap.add_argument("--track", default="A", choices=["A", "B"])
 ap.add_argument("--limit", type=int, default=0)
 ap.add_argument("--time-limit", type=float, default=10.0)
 ap.add_argument("--only", default="")
+ap.add_argument("--set", default="", help="all | paired (50 general + 50 detailed)")
 ap.add_argument("--out", default="out/suite")
 args = ap.parse_args()
 
 exs = load_suite()
+if args.set == "paired":
+    import json as _j
+    sel = set(_j.loads(Path("suite/SELECTION.json").read_text())["general_50"])
+    exs = [e for e in exs if e.id in sel or e.id.startswith("det-")]
 if args.only:
     exs = [e for e in exs if args.only in e.id]
 if args.limit:

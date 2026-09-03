@@ -343,6 +343,29 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                                     f"{cov:.3f} vs cap {t.coverage_max}"))
     res.carpet_sqft = round(sum(r.area for r in plan.rooms) / 1e6 * SQFT_M2)
 
+    # ---- adjacency the brief demands -----------------------------------
+    if t.adjacent or t.not_adjacent or t.place_in:
+        from .rules import _build_ctx, _adj
+        _ctx = _build_ctx(plan, {}, BENGALURU)
+        _a = _adj(_ctx)
+        _cat = {r.id: (r.category or "") for r in plan.rooms}
+        def _joined(ca, cb):
+            xs = [i for i, c in _cat.items() if c == ca]
+            ys = [i for i, c in _cat.items() if c == cb]
+            return any(y in _a.get(x, ()) for x in xs for y in ys)
+        for ca, cb in t.adjacent:
+            res.checks.append(Check(f"adj:{ca}~{cb}", _joined(ca, cb),
+                                    "no door between them"))
+        for ca, cb in t.not_adjacent:
+            res.checks.append(Check(f"noadj:{ca}~{cb}", not _joined(ca, cb),
+                                    "they are doored together"))
+        for item, room_cat in t.place_in.items():
+            hosts = {i for i, c in _cat.items() if c == room_cat}
+            ok = any(f.catalog_id == item and f.room_id in hosts
+                     for f in plan.furniture)
+            res.checks.append(Check(f"in:{item}@{room_cat}", ok,
+                                    f"{item} is not in a {room_cat}"))
+
     # ---- must_place: catalogue ids the brief demands ---------------------
     if t.must_place:
         placed = {f.catalog_id for f in plan.furniture}
