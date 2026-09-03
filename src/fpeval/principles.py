@@ -44,14 +44,15 @@ PRINCIPLES: tuple[Principle, ...] = (
         "circulation, plus at most one more to its own bathroom. Private rooms "
         "should sit deeper in the plan than public ones.",
         ("SYNTAX.PRIVATE_ROOM_INTEGRATED", "SYNTAX.NO_PRIVACY_GRADIENT",
-         "DESIGN.BEDROOM_THROUGH_TRAFFIC", "DESIGN.MULTIPLE_ATTACHED_BATHS")),
+         "DESIGN.BEDROOM_THROUGH_TRAFFIC", "DESIGN.MULTIPLE_ATTACHED_BATHS",
+         "DESIGN.BEDROOM_OFF_LIVING", "DESIGN.TOO_DEEP")),
     Principle(
         "P.ZONING",
         "Group public, private and service rooms into contiguous zones. Do not "
         "interleave a bedroom between two service rooms, or scatter bedrooms "
         "across opposite ends of the plan.",
         ("ZONE.PRIVATE_FRAGMENTED", "ZONE.PUBLIC_FRAGMENTED",
-         "DESIGN.BEDROOMS_SCATTERED")),
+         "DESIGN.BEDROOMS_SCATTERED", "DESIGN.DEAD_END_CIRCULATION")),
     Principle(
         "P.ARRIVAL",
         "Arrival is a sequence: sitout or porch, then a foyer, then the hall. "
@@ -180,6 +181,14 @@ def prompt_block(scenario_key: str = "house_standard", *, vastu: bool = True,
     return "\n".join(lines)
 
 
+# Families exempt from needing a principle. GEO is arithmetic -- "rooms must not
+# overlap" is not design advice, it is a validity condition. The declarative
+# BYLAW checks report an UNDECLARED brief field, which is paperwork, not design.
+EXEMPT_PREFIXES = ("GEO.", "TYPO.ASSUMED", "BYLAW.SITE_UNSPECIFIED",
+                   "BYLAW.UNIT_NOT_A_SITE", "BYLAW.MAX_FLOORS_UNCHECKED",
+                   "BYLAW.RWH_UNDECLARED", "BYLAW.ROAD_WIDTH_UNDECLARED")
+
+
 def audit(known_rule_ids: set[str]) -> dict[str, list[str]]:
     """Principles citing unknown checks, and checks no principle mentions.
 
@@ -193,5 +202,7 @@ def audit(known_rule_ids: set[str]) -> dict[str, list[str]]:
             cited.add(rid)
             if rid not in known_rule_ids:
                 dangling.append(f"{p.id} -> {rid}")
+    orphans = sorted(r for r in (known_rule_ids - cited)
+                     if not r.startswith(EXEMPT_PREFIXES))
     return {"principles_citing_unknown_checks": sorted(dangling),
-            "checks_with_no_principle": sorted(known_rule_ids - cited)}
+            "checks_with_no_principle": orphans}
