@@ -461,7 +461,7 @@ export const COMMANDS: Record<CommandOp, CommandSpec> = {
     required: ["room_id"],
     optional: ["name", "category", "room_class", "floor_texture", "color"],
     editor: 'updateRoom',
-    doc: 'Relabel or restyle a room. Never geometry -- a room is a face of the wall graph, so it changes when walls do.',
+    doc: 'Relabel or retype a room. Never geometry -- a room is a face of the wall graph, so it changes when walls do. Use `category` for what the room IS (bedroom, kitchen, pooja: the 18-type taxonomy every rule reads). `room_class` is only OpenPlan3D\'s four-value floor-rendering bucket (indoor/outdoor/garage/utility) and is derived from `category` unless you override it, which you almost never should.',
   },
   'update_stair': {
     family: 'symbolic',

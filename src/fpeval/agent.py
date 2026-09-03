@@ -372,7 +372,10 @@ def run_turn(
                 system=system,
                 messages=transcript,
                 tools=TOOLS,
-                thinking={"type": "adaptive"},
+                # `display` defaults to "omitted" on Opus 5, which streams
+                # empty thinking blocks -- the pane would show a long pause
+                # and nothing else. The summary is what the user reads.
+                thinking={"type": "adaptive", "display": "summarized"},
                 output_config={"effort": effort},
             ) as stream:
                 resp = stream.get_final_message()
@@ -435,3 +438,197 @@ def run_turn(
     return TurnResult(reply=reply or "(no reply)", events=ctx.events,
                       rejected=ctx.rejected, steps=steps, usage=usage,
                       stopped_early=stopped)
+
+
+# --------------------------------------------------------------------------
+# streaming
+# --------------------------------------------------------------------------
+#
+# The pane needs three different things from a turn, and they arrive on
+# different schedules: the reasoning summary (early, incrementally), the tool
+# activity (in bursts), and the prose (last). A single blocking call gives the
+# user a spinner for fifteen seconds and then a wall of text.
+#
+# So `stream_turn` yields typed dicts and `run_turn` above is the blocking
+# convenience built on the same code path -- one implementation, so the two
+# cannot disagree about what a turn does.
+#
+# One deliberate omission: `apply_commands` does NOT emit a tool row. Its
+# effects are already emitted as `change` events, and rendering both shows the
+# same edit twice. Since it is the tool the agent reaches for most, dropping
+# the duplicate is most of the noise gone.
+
+TOOL_LABELS = {
+    "get_plan": "Read the plan",
+    "get_findings": "Read code findings",
+    "apply_commands": "Applied changes",
+}
+
+
+def stream_turn(
+    doc: Document,
+    transcript: list[dict],
+    message: str,
+    *,
+    last_seen_seq: int = 0,
+    findings_fn: Optional[Callable[[], list[Any]]] = None,
+    client: Any = None,
+    model: str = MODEL,
+    max_steps: int = MAX_STEPS,
+    effort: str = "high",
+):
+    """Yield the turn as it happens.
+
+    Event shapes, all with a `type`:
+
+      {"type": "thinking", "delta": str}          reasoning summary, incremental
+      {"type": "thinking_end", "seconds": float}
+      {"type": "tool", "name": str, "label": str, "state": "start"|"done",
+       "detail": str}                             read-only tools only
+      {"type": "change", "event": {...}}          a command landed
+      {"type": "rejected", "op": str, "reason": str}
+      {"type": "text", "delta": str}              the reply, incremental
+      {"type": "done", "seq": int, "hash": str, "steps": int,
+       "usage": {...}, "seconds": float}
+      {"type": "error", "message": str}
+
+    The caller is responsible for persisting; this function only mutates `doc`
+    and `transcript`.
+    """
+    import anthropic
+
+    client = client or anthropic.Anthropic()
+    ctx = ToolContext(doc=doc, findings_fn=findings_fn or (lambda: []))
+
+    system = [{
+        "type": "text",
+        "text": SYSTEM.format(catalogue=catalogue(SYMBOLIC)),
+        "cache_control": {"type": "ephemeral"},
+    }]
+
+    transcript.append({"role": "user", "content": message})
+    transcript.append({
+        "role": "system",
+        "content": turn_context(doc, last_seen_seq, ctx.findings_fn()),
+    })
+
+    usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    started = time.time()
+    steps = 0
+    seen_events = 0
+
+    while steps <= max_steps:
+        think_started: Optional[float] = None
+        try:
+            with client.messages.stream(
+                model=model,
+                max_tokens=MAX_TOKENS,
+                system=system,
+                messages=transcript,
+                tools=TOOLS,
+                thinking={"type": "adaptive", "display": "summarized"},
+                output_config={"effort": effort},
+            ) as stream:
+                for ev in stream:
+                    kind = getattr(ev, "type", "")
+                    if kind == "content_block_start":
+                        block = getattr(ev, "content_block", None)
+                        if getattr(block, "type", "") == "thinking":
+                            think_started = time.time()
+                    elif kind == "content_block_delta":
+                        delta = getattr(ev, "delta", None)
+                        dtype = getattr(delta, "type", "")
+                        if dtype == "thinking_delta":
+                            text = getattr(delta, "thinking", "") or ""
+                            if text:
+                                yield {"type": "thinking", "delta": text}
+                        elif dtype == "text_delta":
+                            text = getattr(delta, "text", "") or ""
+                            if text:
+                                yield {"type": "text", "delta": text}
+                    elif kind == "content_block_stop" and think_started is not None:
+                        yield {"type": "thinking_end",
+                               "seconds": round(time.time() - think_started, 1)}
+                        think_started = None
+                resp = stream.get_final_message()
+        except anthropic.APIStatusError as exc:
+            yield {"type": "error", "message": f"{exc.status_code}: {exc}"}
+            return
+        except Exception as exc:
+            yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+            return
+
+        u = resp.usage
+        usage["input"] += getattr(u, "input_tokens", 0) or 0
+        usage["output"] += getattr(u, "output_tokens", 0) or 0
+        usage["cache_read"] += getattr(u, "cache_read_input_tokens", 0) or 0
+        usage["cache_write"] += getattr(u, "cache_creation_input_tokens", 0) or 0
+
+        transcript.append({"role": "assistant", "content": resp.content})
+
+        if resp.stop_reason == "refusal":
+            detail = getattr(resp, "stop_details", None)
+            cat = getattr(detail, "category", None) if detail else None
+            yield {"type": "error",
+                   "message": f"declined ({cat or 'unspecified'})"}
+            return
+
+        calls = [b for b in resp.content if getattr(b, "type", "") == "tool_use"]
+        if not calls:
+            break
+
+        results = []
+        for call in calls:
+            name = str(call.name)
+            writes = name == "apply_commands"
+            if not writes:
+                yield {"type": "tool", "name": name, "state": "start",
+                       "label": TOOL_LABELS.get(name, name), "detail": ""}
+            try:
+                out = _run_tool(name, dict(call.input or {}), ctx)
+                results.append({"type": "tool_result", "tool_use_id": call.id,
+                                "content": out})
+                if not writes:
+                    yield {"type": "tool", "name": name, "state": "done",
+                           "label": TOOL_LABELS.get(name, name),
+                           "detail": _tool_detail(name, out)}
+            except Exception as exc:
+                results.append({"type": "tool_result", "tool_use_id": call.id,
+                                "is_error": True,
+                                "content": f"{type(exc).__name__}: {exc}"})
+                if not writes:
+                    yield {"type": "tool", "name": name, "state": "done",
+                           "label": TOOL_LABELS.get(name, name),
+                           "detail": f"failed: {exc}"}
+
+        # A write tool speaks through its effects, which are what the user
+        # actually needs to see and keep.
+        for event in ctx.events[seen_events:]:
+            yield {"type": "change", "event": event.to_dict()}
+        seen_events = len(ctx.events)
+        for r in ctx.rejected:
+            yield {"type": "rejected", "op": r.command.op,
+                   "reason": r.errors[0] if r.errors else "refused"}
+        ctx.rejected.clear()
+
+        transcript.append({"role": "user", "content": results})
+        steps += 1
+
+    yield {"type": "done", "seq": doc.seq, "hash": doc.hash, "steps": steps,
+           "usage": usage, "seconds": round(time.time() - started, 1),
+           "stopped_early": steps > max_steps}
+
+
+def _tool_detail(name: str, output: str) -> str:
+    """A few words of result, for the collapsed row. Not the whole output --
+    that is what the plan and the findings badges are for."""
+    if name == "get_findings":
+        if output.startswith("No findings"):
+            return "clean"
+        n = len([l for l in output.splitlines() if l.strip()])
+        return f"{n} finding{'s' if n != 1 else ''}"
+    if name == "get_plan":
+        rooms = next((l for l in output.splitlines() if l.startswith("ROOMS (")),
+                     "")
+        return rooms[len("ROOMS ("):-1] + " rooms" if rooms else ""
+    return ""

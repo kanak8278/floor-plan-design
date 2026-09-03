@@ -22,6 +22,7 @@ new class there and no change here.
 """
 from __future__ import annotations
 
+import json
 import sys
 import time
 import uuid
@@ -405,3 +406,86 @@ def transcript(design_id: str) -> dict[str, Any]:
         if text.strip():
             out.append({"role": role, "text": text.strip()})
     return {"design_id": design_id, "messages": out}
+
+
+# --------------------------------------------------------------------------
+# streaming chat
+# --------------------------------------------------------------------------
+
+@router.post("/api/chat/stream")
+def chat_stream(body: ChatIn):
+    """The same turn as `/api/chat`, delivered as it happens.
+
+    Server-sent events rather than a WebSocket: the traffic is one-directional
+    within a turn, SSE survives the SvelteKit proxy unchanged, and there is no
+    connection state to reconcile if the tab reloads mid-turn.
+
+    Not `EventSource` on the client, though -- that cannot POST, and the turn
+    needs a body. The client reads the response stream directly.
+    """
+    from fastapi.responses import StreamingResponse
+
+    design_id = body.design_id or ""
+    if _maybe_doc(design_id) is None:
+        if not body.project:
+            raise HTTPException(
+                400, "no such design, and no project was sent to adopt")
+        adopted = adopt(AdoptIn(project=body.project,
+                                design_id=design_id or None))
+        design_id = adopted["design_id"]
+
+    doc = _doc(design_id)
+    transcript = store().load_transcript(design_id)
+
+    def sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+    def generate():
+        import os
+        if not (os.environ.get("ANTHROPIC_API_KEY")
+                or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+            yield sse({"type": "error",
+                       "message": "No Anthropic credential is set on the "
+                                  "design service. Export ANTHROPIC_API_KEY "
+                                  "in the shell that starts uvicorn."})
+            return
+
+        from fpeval.agent import stream_turn
+
+        before = doc.seq
+        yield sse({"type": "start", "design_id": design_id, "seq": before})
+        try:
+            for ev in stream_turn(
+                doc, transcript, body.message,
+                last_seen_seq=body.seq,
+                findings_fn=lambda: _plan_findings(doc),
+            ):
+                if ev.get("type") == "done":
+                    # Persist before announcing completion: a client that
+                    # reloads the instant it sees `done` must find the edits.
+                    store().save_commands(
+                        design_id, doc,
+                        [e for e in doc.log if e.seq > before])
+                    store().save_transcript(design_id, transcript)
+                    ev = {**ev, "findings": _findings_json(doc),
+                          "projection": doc.projection()
+                          if doc.seq > before else None}
+                yield sse(ev)
+        except Exception as e:                      # never lose the document
+            store().save_commands(design_id, doc,
+                                  [e2 for e2 in doc.log if e2.seq > before])
+            store().save_transcript(design_id, transcript)
+            yield sse({"type": "error",
+                       "message": f"{type(e).__name__}: {e}"})
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            # Nginx and friends buffer text/event-stream by default, which
+            # turns a stream into one delivery at the end.
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

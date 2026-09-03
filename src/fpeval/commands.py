@@ -537,8 +537,12 @@ _add(CommandSpec(
     op="update_room", family=SYMBOLIC,
     required=("room_id",),
     optional=("name", "category", "room_class", "floor_texture", "color"),
-    doc="Relabel or restyle a room. Never geometry -- a room is a face of the "
-        "wall graph, so it changes when walls do.",
+    doc="Relabel or retype a room. Never geometry -- a room is a face of the "
+        "wall graph, so it changes when walls do. Use `category` for what the "
+        "room IS (bedroom, kitchen, pooja: the 18-type taxonomy every rule "
+        "reads). `room_class` is only OpenPlan3D's four-value floor-rendering "
+        "bucket (indoor/outdoor/garage/utility) and is derived from `category` "
+        "unless you override it, which you almost never should.",
     editor="updateRoom",
     summary=lambda p, b, a: _update_room_summary(p, b, a),
 ))
@@ -994,6 +998,18 @@ _POSITIVE_MM = {
 
 def _check_enums(op: str, p: dict) -> list[str]:
     errs: list[str] = []
+    # `room_class` and `category` are easy to confuse -- one is what the room
+    # is, the other is how its floor is drawn -- and an author who confuses
+    # them gets a bare enum error that does not say what to do instead.
+    # Observed live: an agent spent two commands on room_class='bedroom'.
+    rc = p.get("room_class")
+    if rc is not None and rc not in ROOM_CLASSES and _rt.get(str(rc)):
+        errs.append(
+            f"{op}: room_class={rc!r} is a room *type*, not one of "
+            f"{ROOM_CLASSES}. Set category={rc!r} instead -- room_class is "
+            "only OpenPlan3D's floor-rendering bucket and is derived from "
+            "category on its own.")
+        p = {k: v for k, v in p.items() if k != "room_class"}
     for key, allowed in _ENUM_PARAMS.items():
         v = p.get(key)
         # `direction` is a compass bearing on move_wall_parallel and up/down on

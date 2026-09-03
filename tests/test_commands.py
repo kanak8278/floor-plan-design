@@ -556,3 +556,36 @@ def test_adopting_a_project_gives_every_room_an_anchor():
     assert adopted.design.active.rooms[0].name == "Hall"
     assert all(r.anchor is not None for r in adopted.design.active.rooms)
     assert adopted.seq == 0            # a fresh log over an existing design
+
+
+def test_room_class_confusion_gets_an_actionable_error():
+    """Observed live: the agent wanted to set the room's *type* and reached
+    for `room_class`, burning two commands on a bare enum error that did not
+    say what to use instead. `category` is the 18-type taxonomy every rule
+    reads; `room_class` is only OpenPlan3D's four-value floor bucket."""
+    doc = box_doc()
+    rid = doc.design.active.rooms[0].id
+    res = doc.apply(Command(op="update_room", source="agent",
+                            params={"room_id": rid, "room_class": "bedroom"}))
+    assert not res.ok
+    msg = " ".join(res.errors)
+    assert "category='bedroom'" in msg, msg
+    assert "room *type*" in msg
+
+
+def test_a_real_room_class_override_still_works():
+    """The param is not useless -- the editor's own room-type dropdown sets
+    it, and a user marking a room as outdoor must still get through."""
+    doc = box_doc()
+    rid = doc.design.active.rooms[0].id
+    res = doc.apply(Command(op="update_room",
+                            params={"room_id": rid, "room_class": "outdoor"}))
+    assert res.ok, res.errors
+    assert doc.design.active.rooms[0].room_class == "outdoor"
+
+
+def test_the_generated_catalogue_explains_the_difference():
+    """The catalogue *is* the prompt, so this is where the model learns it."""
+    text = catalogue(SYMBOLIC)
+    assert "18-type taxonomy" in text
+    assert "floor-rendering bucket" in text

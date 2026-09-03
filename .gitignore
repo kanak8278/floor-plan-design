@@ -11,3 +11,9 @@ node_modules/
 corpus/out/
 corpus/india/raw/
 tests/js/.generated/
+
+# The design database is runtime state, not source.
+data/*.db
+data/*.db-shm
+data/*.db-wal
+out/

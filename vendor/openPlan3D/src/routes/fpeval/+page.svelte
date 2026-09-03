@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
   // Typed because the file declares `lang="ts"`: without these, svelte-check
   // reports implicit-any on every `_meta` read and the real errors get lost in
@@ -23,7 +23,7 @@
     failed_checks?: string[];
     prompt?: string;
   }
-  interface GalleryPlan { id: string; _meta?: PlanMeta }
+  interface GalleryPlan { id: string; name?: string; _meta?: PlanMeta }
 
   let status = 'Loading…';
   let ok = false;
