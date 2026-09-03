@@ -156,3 +156,43 @@ def verify(extraction: dict, *, min_dual_checked: int = 4,
                "plot_area_m2": round(plot_mm2 / 1e6, 1) if plot_mm2 else None,
                "coverage": round(room_mm2 / plot_mm2, 3) if (plot_mm2 and room_mm2) else None},
     )
+
+def parse_any(s: str | None) -> tuple[int, int] | None:
+    """Parse a dimension pair in ANY printed unit, metric or imperial.
+
+    Needed because a large share of builder plans are feet-inches ONLY -- e.g.
+    Divyasree Shettigere prints "MASTER BEDROOM 12'0\" X 13'0\"" with no metric
+    second unit and a footer stating "All dimensions are in feet and inches".
+    Testing only `parse_mm` recorded those plans as having no dimensions at all.
+    """
+    ft = parse_ft(s)
+    if ft:
+        return (round(ft[0]), round(ft[1]))
+    return parse_mm(s)
+
+
+def verification_tier(rooms: list[dict], areas: dict | None) -> str:
+    """How strongly can this plan be checked?
+
+      A  dual units + a printed area figure   -> two independent checksums
+      B  single unit + a printed area figure  -> one independent checksum
+      C  neither                              -> unverifiable, must be refused
+
+    Tier B is genuinely usable; treating it as unverifiable discarded most of the
+    builder corpus.
+    """
+    dual = sum(1 for r in rooms
+               if parse_mm(r.get("dim_primary")) and parse_ft(r.get("dim_secondary")))
+    any_dim = sum(1 for r in rooms
+                  if parse_any(r.get("dim_primary")) or parse_any(r.get("dim_secondary")))
+    a = areas or {}
+    has_area = any(a.get(k) for k in ("carpet_sqft", "carpet_sqm", "rera_carpet_sqft",
+                                      "built_up_sqft", "super_built_up_sqft",
+                                      "super_built_up_sqm"))
+    if dual >= 4 and has_area:
+        return "A"
+    if dual >= 4:
+        return "A-"          # dual units but no area total
+    if any_dim >= 4 and has_area:
+        return "B"
+    return "C"

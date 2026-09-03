@@ -39,6 +39,9 @@ TOOL = {
                 "super_built_up_sqft": {"type": ["number", "null"]},
                 "super_built_up_sqm": {"type": ["number", "null"]},
                 "carpet_sqft": {"type": ["number", "null"]},
+                "rera_carpet_sqft": {"type": ["number", "null"],
+                    "description": "RERA CARPET AREA if printed separately -- the legally defined figure."},
+                "saleable_sqft": {"type": ["number", "null"]},
                 "carpet_sqm": {"type": ["number", "null"]},
                 "balcony_sqft": {"type": ["number", "null"]},
                 "balcony_sqm": {"type": ["number", "null"]},
@@ -69,7 +72,8 @@ Hard rules:
 1. Copy every dimension string character-for-character, including the unit as written ("3.84m x 3.81m", "4000X3500", "12'7\"x12'6\""). Do not convert, round, or normalise.
 2. Most plans print each room's size TWICE — once in metres or millimetres and once in feet-inches. Put the first in `dim_primary` and the second in `dim_secondary`. Both matter; they are used to cross-check each other.
 3. If a value is not printed, return null. NEVER derive it from the other unit, from the drawing scale, or from what looks reasonable. A null is correct; a guess is a defect that silently corrupts the dataset.
-4. Transcribe the area legend (SUPER BUILT-UP / CARPET / BALCONY) exactly, keeping sq.ft and sq.m separate.
+4. Transcribe the area legend exactly, keeping every figure separate: SALEABLE, SUPER BUILT-UP, BUILT-UP, CARPET, RERA CARPET, BALCONY. Keep sq.ft and sq.m distinct.
+   Many plans print dimensions in feet-inches ONLY, with a footer such as "All dimensions are in feet and inches". That is normal: put the single printed string in `dim_primary` and leave `dim_secondary` null. Do not invent a metric equivalent.
 5. Include every labelled space: rooms, toilets, balconies, utility, passage, foyer, sitout, pooja, and outdoor areas.
 6. Put anything rotated, overlapping, cropped or illegible in `notes` and set the affected field to null rather than guessing.
 

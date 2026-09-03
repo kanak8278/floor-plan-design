@@ -340,11 +340,43 @@ def test_minimal_schema_validator():
     assert L.validate_against_schema({"a": True, "b": "x", "c": []}, sch)
 
 
-def test_patch_schema_is_strict_shaped():
+def test_patch_schema_shape():
     sch = L.propose_patch_tool_schema()
-    assert set(sch["required"]) == set(sch["properties"])
     op = sch["properties"]["ops"]["items"]
     assert set(op["properties"]["op"]["enum"]) == set(L.OP_TABLE)
+    assert set(op["properties"]["level"]["enum"]) == {L.LEVEL_SPEC,
+                                                     L.LEVEL_GEOMETRY}
+    assert sch["additionalProperties"] is False
+    # Every op's declared params must exist in the flat params object, or the
+    # model has no way to express them.
+    params = set(op["properties"]["params"]["properties"])
+    for name, e in L.OP_TABLE.items():
+        missing = (set(e["required"]) | set(e["optional"])) - params
+        assert not missing, (name, missing)
+
+
+def test_patch_schema_stays_inside_the_strict_grammar_budget():
+    """The measured API caps: 16 union-typed and 24 optional parameters.
+
+    The patch schema exceeds the optional cap, which is exactly why it is not
+    strict. The spec schema must stay under both, since it IS strict.
+    """
+    def counts(node, acc=None):
+        acc = acc if acc is not None else {"unions": 0, "optional": 0}
+        if isinstance(node, dict):
+            if "anyOf" in node or isinstance(node.get("type"), list):
+                acc["unions"] += 1
+            if node.get("type") == "object":
+                acc["optional"] += len(set(node.get("properties", {}))
+                                       - set(node.get("required", [])))
+            for v in node.values():
+                counts(v, acc)
+        elif isinstance(node, list):
+            for v in node:
+                counts(v, acc)
+        return acc
+    spec = counts(DesignSpec.to_json_schema())
+    assert spec["unions"] <= 16 and spec["optional"] <= 24, spec
 
 
 # ==========================================================================
@@ -841,7 +873,10 @@ def score_extraction(spec, questions, truth) -> dict:
     return out
 
 
-def run_extraction_eval(model: str = L.MODEL_REASONING, workers: int = 8,
+EVAL_MODEL = os.environ.get("FPEVAL_LLM_MODEL", L.MODEL_REASONING)
+
+
+def run_extraction_eval(model: str = EVAL_MODEL, workers: int = 8,
                         prompts=None) -> dict:
     """Run the whole prompt suite and return honest aggregate numbers."""
     prompts = prompts or PROMPTS
@@ -918,9 +953,9 @@ def test_extract_spec_on_the_prompt_suite(capsys):
     a, t = res["underdetermined_asked_blocking"]
     assert a == t, [r for r in res["rows"]
                     if r.get("expected_questions") and not r.get("asked_blocking")]
+    by_id = {p["id"]: p for p in PROMPTS}
     for r in res["rows"]:
-        if r.get("expected_questions") and "plot" in dict(
-                (p["id"], p) for p in PROMPTS)[r["id"]].get("underdetermined", []):
+        if "plot" in (by_id[r["id"]].get("underdetermined") or []):
             assert r["plot"] is True, f"{r['id']} invented a plot size"
 
 
@@ -1125,19 +1160,23 @@ DEMO_FINDINGS = [
 
 @requires_api
 def test_propose_patch_emits_valid_symbolic_ops(capsys):
+    # Room ids match _demo_plan() so the referential checks actually bite.
     spec = DesignSpec(
         plot_width_ft=30, plot_depth_ft=40, road_facing_side="east",
         city_profile="bengaluru", storeys=1,
-        rooms=bhk_programme(1, pooja=True),
+        rooms=[
+            RoomSpec(id="r_living", category="living", name="Hall", priority=1),
+            RoomSpec(id="r_kitchen", category="kitchen", priority=1,
+                     preferred_zone="SE"),
+            RoomSpec(id="r_bed1", category="master_bedroom", priority=1,
+                     attached_bath=True),
+            RoomSpec(id="r_bath1", category="bathroom", priority=1),
+            RoomSpec(id="r_pooja", category="pooja", priority=2,
+                     preferred_zone="SW"),      # wrong on purpose -- finding f2
+        ],
         entrance=EntranceSpec(side="east"),
         vastu=VastuSpec(enabled=True, strictness="strict",
                         requirements=["pooja_northeast", "kitchen_southeast"]))
-    # align spec ids with the demo plan's rooms so referential checks bite
-    for r, rid in zip(spec.rooms, ["r_living", "r_kitchen", "r_bed1", "r_bath1"]):
-        r.id = rid
-    spec.rooms = [r for r in spec.rooms if not r.id.startswith("toilet")]
-    spec.rooms.append(RoomSpec(id="r_pooja", category="pooja", preferred_zone="SW"))
-    spec.adjacency = []
 
     plan = _demo_plan()
     usage = L.UsageLog()
@@ -1160,9 +1199,13 @@ def test_propose_patch_emits_valid_symbolic_ops(capsys):
     # applying the spec ops must leave a structurally valid spec
     out = batch.apply_to_spec(spec)
     assert out.validate() == [], out.validate()
-    # the pooja finding should have moved the zone to the north-east
-    assert (out.room("r_pooja") or RoomSpec(id="x", category="pooja")) \
-        .preferred_zone in ("NE", "N", "E")
+    # finding f2 says the pooja is in the south-west under a strict-vastu
+    # brief, so the patch must move it north-east (or drop it and say why).
+    pooja = out.room("r_pooja")
+    assert pooja is None or pooja.preferred_zone in ("NE", "N", "E"), \
+        pooja.preferred_zone
+    assert any("f2" in o.finding_ids for o in batch.ops), \
+        "the vastu finding was not addressed at all"
     # and no coordinates anywhere in the payload
     blob = json.dumps(batch.to_dict())
     assert '"x"' not in blob and '"polygon"' not in blob

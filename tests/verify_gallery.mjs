@@ -1,0 +1,15 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch();
+const pg = await (await b.newContext({viewport:{width:1400,height:900}})).newPage();
+const errs=[]; pg.on('pageerror',e=>errs.push(String(e).slice(0,160)));
+await pg.goto('http://localhost:5199/fpeval/index.html',{waitUntil:'networkidle'});
+await pg.waitForTimeout(1200);
+console.log(`loader: "${(await pg.textContent('#status')).trim()}"  cards=${await pg.locator('a.card').count()}`);
+await pg.screenshot({path:'out/shots/gallery.png'});
+await pg.locator('a.card').first().click();
+await pg.waitForTimeout(3500);
+const m = (await pg.textContent('body')).replace(/\s+/g,' ').match(/(\d+) rooms.{0,40}?(\d+) walls/);
+console.log(`first plan opened -> ${m ? m[0] : '(status bar not found)'}`);
+await pg.screenshot({path:'out/shots/gallery-plan.png'});
+console.log(`page errors: ${errs.length}`); errs.slice(0,3).forEach(e=>console.log('  '+e));
+await b.close();

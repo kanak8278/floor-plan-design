@@ -7,7 +7,8 @@ sys.path.insert(0, "src")
 from anthropic import Anthropic
 from fpeval.imgclass import classify
 from fpeval.extract import extract
-from fpeval.imgcorpus import check_dual_unit, parse_mm, parse_width_mm, MM_PER_FT
+from fpeval.imgcorpus import (check_dual_unit, parse_mm, parse_any,
+                              parse_width_mm, verification_tier, MM_PER_FT)
 from fpeval.plausible import check, check_area_closure, canonical
 
 client = Anthropic()
@@ -18,7 +19,7 @@ def norm_rooms(ex):
     out = []
     for r in ex.get("rooms", []):
         out.append({"name": r.get("name"),
-                    "dim_mm": parse_mm(r.get("dim_primary")) or parse_mm(r.get("dim_secondary")),
+                    "dim_mm": parse_any(r.get("dim_primary")) or parse_any(r.get("dim_secondary")),
                     "dim_primary": r.get("dim_primary"), "dim_secondary": r.get("dim_secondary"),
                     "width_mm": parse_width_mm(r.get("width_only"))})
     return out
@@ -33,6 +34,7 @@ files = sorted(glob.glob("corpus/india/raw/*"))
 if ONLY: files = [f for f in files if ONLY in f]
 agg = {"n": 0, "gate_pass": 0, "accepted": 0, "dual_rooms": 0, "dual_ok": 0,
        "tok_in": 0, "tok_out": 0}
+tiers = {}
 results = []
 
 for f in files:
@@ -62,19 +64,28 @@ for f in files:
     pl = check(rooms, plot_area_m2=plot_m2(ex))
     ac = check_area_closure(rooms, ex.get("areas") or {})
     errors = pl.errors + [i for i in ac if i.severity == "error"]
-    dual_ok = len(checked) >= 4 and (not checked or len(bad) / len(checked) <= 0.25)
-    ok = dual_ok and not errors
+    tier = verification_tier(rooms, ex.get("areas"))
+    # Tier A/A-: cross-check per room. Tier B: only the area total can vouch for it,
+    # so require the closure check to have actually run and passed.
+    if tier in ("A", "A-"):
+        gate = len(checked) >= 4 and len(bad) / max(len(checked), 1) <= 0.25
+    elif tier == "B":
+        gate = not any(i.check == "carpet_area_mismatch" for i in ac)
+    else:
+        gate = False
+    ok = gate and not errors
     if ok: agg["accepted"] += 1
+    tiers[tier] = tiers.get(tier, 0) + 1
 
     a = ex.get("areas") or {}
     print(f"{base[:52]:<54} {'ACCEPT' if ok else 'REJECT':<7} {ex.get('unit_label') or '-':<18} "
-          f"rooms={len(rooms):<3} dual={len(checked)-len(bad)}/{len(checked)} "
+          f"[{tier}] rooms={len(rooms):<3} dual={len(checked)-len(bad)}/{len(checked)} "
           f"carpet={a.get('carpet_sqft') or '-'} enc={pl.areas['built_up_m2']}m²")
     for d in bad:
         print(f"{'':54}  mm/ft mismatch {d.name}: {d.detail}")
     for i in errors + [i for i in ac if i.severity == "warn"]:
         print(f"{'':54}  [{i.severity}] {i.check}: {i.detail[:96]}")
-    results.append({"file": base, "accepted": ok, "unit": ex.get("unit_label"),
+    results.append({"file": base, "accepted": ok, "tier": tier, "unit": ex.get("unit_label"),
                     "kind": c.kind, "n_rooms": len(rooms),
                     "dual_checked": len(checked), "dual_bad": len(bad),
                     "areas": ex.get("areas"), "counts": pl.counts,
@@ -87,4 +98,5 @@ print(f"passed classifier gate : {agg['gate_pass']}")
 print(f"fully accepted         : {agg['accepted']}")
 print(f"dual-unit room checks  : {agg['dual_ok']}/{agg['dual_rooms']} agree"
       + (f" ({100*agg['dual_ok']/agg['dual_rooms']:.1f}%)" if agg['dual_rooms'] else ""))
+print(f"verification tiers     : {dict(sorted(tiers.items()))}")
 print(f"tokens                 : in={agg['tok_in']} out={agg['tok_out']}")

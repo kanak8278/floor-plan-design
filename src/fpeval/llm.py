@@ -228,6 +228,21 @@ class LLMError(RuntimeError):
     pass
 
 
+class LLMRefusal(LLMError):
+    """The safety classifier declined the request (`stop_reason == "refusal"`).
+
+    Measured: 1 of 20 neutral ResPlan-derived floor-plan briefs was declined
+    with category "bio" on claude-sonnet-5 -- a plain false positive on text
+    about bedrooms and bathrooms. It is stochastic, so it is retried; a caller
+    evaluating a corpus should catch this and skip the item rather than treat it
+    as a schema failure.
+    """
+
+    def __init__(self, message: str, category: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.category = category
+
+
 def get_client(**kwargs: Any):
     """Anthropic client. Credentials resolve from the environment."""
     import anthropic
@@ -272,6 +287,8 @@ def call_tool(
     t0 = time.time()
     in_tok = out_tok = cache_r = cache_w = 0
     last_err = "unknown"
+    degraded = False
+    refusal_cat: Optional[str] = None
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -282,7 +299,8 @@ def call_tool(
                          "cache_control": {"type": "ephemeral"}}],
                 messages=messages,
                 tools=[tool],
-                tool_choice={"type": "tool", "name": tool_name},
+                tool_choice={"type": "tool", "name": tool_name,
+                             "disable_parallel_tool_use": True},
                 output_config={"effort": effort},
             )
         except (anthropic.RateLimitError, anthropic.APITimeoutError,
@@ -294,6 +312,18 @@ def call_tool(
             continue
         except anthropic.APIStatusError as exc:
             last_err = f"{type(exc).__name__} {exc.status_code}: {exc}"
+            msg = str(exc)
+            # Strict tool use compiles the schema into a grammar and caps both
+            # union-typed (16) and optional (24) parameter counts. A schema that
+            # exceeds them is rejected outright; degrade to non-strict rather
+            # than fail, since the local schema check plus the feedback retry
+            # already enforce conformance.
+            if (tool.get("strict") and not degraded
+                    and ("optional parameters" in msg or "union types" in msg
+                         or "grammar compilation" in msg)):
+                tool.pop("strict", None)
+                degraded = True
+                continue
             if exc.status_code >= 500 and attempt < max_attempts:
                 time.sleep(min(2 ** attempt + random.random(), 30))
                 continue
@@ -306,17 +336,28 @@ def call_tool(
         cache_w += getattr(u, "cache_creation_input_tokens", 0) or 0
 
         if resp.stop_reason == "refusal":
-            last_err = f"refusal: {getattr(resp.stop_details, 'category', None)}"
+            cat = getattr(resp.stop_details, "category", None)
+            last_err = f"refusal: {cat}"
+            refusal_cat = cat
+            if attempt < max_attempts:
+                time.sleep(1.0 + random.random())
+                continue
             break
 
         block = next((b for b in resp.content if b.type == "tool_use"
                       and b.name == tool_name), None)
         if block is None:
             last_err = f"no tool_use block (stop_reason={resp.stop_reason})"
+            stray = [b for b in resp.content if b.type == "tool_use"]
+            nudge: Any = f"You must call the {tool_name} tool. Do it now."
+            if stray:
+                nudge = [{"type": "tool_result", "tool_use_id": b.id,
+                          "is_error": True,
+                          "content": f"Wrong tool. Call {tool_name}."}
+                         for b in stray]
             messages += [
                 {"role": "assistant", "content": resp.content},
-                {"role": "user", "content":
-                    f"You must call the {tool_name} tool. Do it now."},
+                {"role": "user", "content": nudge},
             ]
             if attempt < max_attempts:
                 continue
@@ -337,16 +378,23 @@ def call_tool(
             return payload
 
         last_err = "schema: " + "; ".join(schema_errs[:6])
+        # Every tool_use block in the turn needs a tool_result or the next
+        # request 400s ("tool_use ids were found without tool_result blocks").
+        # Measured failure mode: 1 call in ~50 emits two tool_use blocks even
+        # under forced tool_choice, which is why the results are built from the
+        # response rather than from `block` alone.
+        results = [{
+            "type": "tool_result",
+            "tool_use_id": b.id,
+            "is_error": True,
+            "content": ("Your output failed schema validation:\n"
+                        + "\n".join(f"- {e}" for e in schema_errs[:20])
+                        + "\nCall the tool again with a conforming object.")
+            if b.id == block.id else "Duplicate call ignored.",
+        } for b in resp.content if b.type == "tool_use"]
         messages += [
             {"role": "assistant", "content": resp.content},
-            {"role": "user", "content": [{
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "is_error": True,
-                "content": "Your output failed schema validation:\n"
-                           + "\n".join(f"- {e}" for e in schema_errs[:20])
-                           + "\nCall the tool again with a conforming object.",
-            }]},
+            {"role": "user", "content": results},
         ]
         if attempt == max_attempts:
             break
@@ -356,6 +404,9 @@ def call_tool(
                              output_tokens=out_tok, cache_read_tokens=cache_r,
                              cache_write_tokens=cache_w, attempts=max_attempts,
                              ok=False, seconds=time.time() - t0))
+    if last_err.startswith("refusal"):
+        raise LLMRefusal(
+            f"{op} refused after {max_attempts} attempts: {last_err}", refusal_cat)
     raise LLMError(f"{op} failed after {max_attempts} attempts: {last_err}")
 
 
@@ -1194,26 +1245,30 @@ Rules:
 """
 
 
-def propose_patch_tool_schema(strict: bool = True) -> dict:
-    def nullable(base: dict) -> dict:
-        """See DesignSpec.to_json_schema: enum + type-union is a 400."""
-        if not strict:
-            return base
-        out = dict(base)
-        desc = out.pop("description", None)
-        if "enum" in out:
-            wrapped: dict = {"anyOf": [out, {"type": "null"}]}
-        else:
-            if isinstance(out.get("type"), str):
-                out["type"] = [out["type"], "null"]
-            wrapped = out
-        if desc is not None:
-            wrapped["description"] = desc
-        return wrapped
+def propose_patch_tool_schema(strict: bool = False) -> dict:
+    """Tool schema for the patch batch.
 
-    # A single flat params object covering every op's parameters. Flat keeps it
-    # strict-mode-friendly; PatchOp.validate() rejects params that do not belong
-    # to the op that was named.
+    Measured, not aesthetic: strict tool use compiles the input schema into a
+    grammar and caps unions at 16 and optional parameters at 24. One flat
+    params object covering the whole op vocabulary needs ~38 optional fields,
+    so this tool cannot be strict -- both encodings 400:
+
+        "too many parameters with union types (38 ... limit: 16)"
+        "too many optional parameters (38) ... (limit: 24)"
+
+    Splitting params per op would need a 19-way oneOf, which strict mode does
+    not support either. So the schema is plain-typed and unenforced at the API,
+    and conformance is enforced locally instead: `validate_against_schema`
+    gates the reply, a failure is fed back to the model as a tool_result error,
+    and `PatchOp.validate()` rejects any parameter that does not belong to the
+    op that was named. That last check is where the real discipline lives --
+    it is also what rejects coordinate emission, which no JSON Schema could.
+    `strict=True` is kept for the day the limits rise; `call_tool` degrades
+    automatically if the API refuses it.
+    """
+    def nullable(base: dict) -> dict:
+        return base
+
     params_props: dict[str, dict] = {
         "room_id": nullable({"type": "string"}),
         "category": nullable({"type": "string", "enum": sorted(ROOM_CATEGORIES)}),
@@ -1263,7 +1318,7 @@ def propose_patch_tool_schema(strict: bool = True) -> dict:
         "room_type": nullable({"type": "string", "enum": list(EDITOR_ROOM_TYPES)}),
     }
     params = {"type": "object", "properties": params_props,
-              "required": sorted(params_props) if strict else [],
+              "required": [],          # see the docstring: union budget is 16
               "additionalProperties": False}
 
     op_props = {
@@ -1400,10 +1455,16 @@ def propose_patch_batch(
     client: Any = None,
     usage: Optional[UsageLog] = None,
     max_attempts: int = 3,
-    strict: bool = True,
+    strict: bool = False,
     effort: str = "high",
 ) -> PatchBatch:
-    """Findings -> a validated batch of symbolic ops, with rejects preserved."""
+    """Findings -> a validated batch of symbolic ops, with rejects preserved.
+
+    `strict` defaults to False because the op schema exceeds the strict-mode
+    grammar budget (see `propose_patch_tool_schema`); passing True costs one
+    wasted round-trip before `call_tool` degrades. Conformance is enforced
+    locally regardless.
+    """
     if not isinstance(plan_summary, str):
         plan_summary = summarize_plan(plan_summary)
     schema = propose_patch_tool_schema(strict=strict)

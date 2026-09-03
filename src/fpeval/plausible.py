@@ -22,36 +22,71 @@ from dataclasses import dataclass, field
 # ---- canonicalisation ------------------------------------------------------
 # Extractions carry names exactly as printed, including misspellings ("UITILITY")
 # and Indian-specific spaces absent from western datasets.
+# Long aliases are matched as substrings; SHORT ones must be word-bounded or they
+# produce false hits. Found by reading real drawings: builder plans use "TOI-1",
+# "PHE SHAFT", "PHE & HVAC/VRV", "HANDWASH" -- none of which a western-dataset
+# vocabulary contains, and "TOI" silently reported a 3-toilet flat as having none.
 _ALIASES: dict[str, tuple[str, ...]] = {
-    "bedroom":   ("bedroom", "bed room", "bed rm", "mbr", "master bed", "guest bed", "bhk"),
-    "living":    ("living", "hall", "drawing", "lounge", "family"),
+    "bedroom":   ("bedroom", "bed room", "bed rm", "master bed", "guest bed",
+                  "kids room", "children"),
+    "living":    ("living", "drawing room", "lounge", "family room", "hall"),
     "dining":    ("dining", "dinning"),
-    "kitchen":   ("kitchen", "kitchan", "kit"),
-    "bathroom":  ("bath", "toilet", "wc", "w.c", "washroom", "pwd rm", "powder",
-                  "attached toilet", "common toilet", "t&b"),
+    "kitchen":   ("kitchen", "kitchan"),
+    "bathroom":  ("bathroom", "bath room", "toilet", "washroom", "powder",
+                  "pwd rm", "attached toilet", "common toilet", "handwash",
+                  "hand wash", "wash basin"),
     "balcony":   ("balcony", "balcany", "balcone", "deck"),
-    "sitout":    ("sitout", "sit out", "sit-out", "verandah", "veranda", "porch", "portico"),
-    "utility":   ("utility", "uitility", "utilty", "wash area", "wash", "service"),
+    "sitout":    ("sitout", "sit out", "sit-out", "verandah", "veranda",
+                  "porch", "portico"),
+    "utility":   ("utility", "uitility", "utilty", "wash area", "service area"),
     "pooja":     ("pooja", "puja", "prayer", "mandir"),
-    "foyer":     ("foyer", "entry", "entrance", "lobby", "passage", "corridor", "hallway"),
-    "stair":     ("stair", "staircase", "steps"),
+    "foyer":     ("foyer", "entrance", "lobby", "passage", "corridor", "hallway",
+                  "circulation"),
+    "stair":     ("staircase", "stair", "steps"),
     "store":     ("store", "storage", "closet", "wardrobe", "dress"),
-    "study":     ("study", "office", "work"),
+    "study":     ("study", "home office", "work room"),
     "parking":   ("parking", "car park", "garage", "car porch"),
-    "patio":     ("patio", "courtyard", "terrace", "open to sky", "ots"),
+    "patio":     ("patio", "courtyard", "terrace", "open to sky"),
     "landscape": ("landscape", "garden", "lawn", "planter"),
+    # Service risers and equipment platforms. Enclosed but never carpet area, and
+    # legitimately tiny and thin, so they must not be size- or aspect-checked.
+    "shaft":     ("phe shaft", "phe & hvac", "phe and hvac", "hvac", "vrv",
+                  "duct", "shaft", "riser", "plumbing shaft", "service shaft",
+                  "ac ledge", "ac platform"),
 }
-# Spaces that are not enclosed habitable rooms; excluded from built-up area
-# and exempt from aspect-ratio checks (a sitout is legitimately long and thin).
-NON_HABITABLE = {"landscape", "patio", "parking", "sitout", "balcony", "stair", "foyer"}
+# Short tokens that need a word boundary to avoid false substring hits.
+_SHORT: dict[str, tuple[str, ...]] = {
+    "bathroom": ("toi", "wc", "t&b", "bath"),
+    "shaft":    ("phe", "ots"),
+    "bedroom":  ("mbr", "br"),
+    "kitchen":  ("kit",),
+    "foyer":    ("lift",),
+}
+
+
+# Not enclosed habitable rooms: excluded from carpet-area closure and exempt from
+# aspect checks (a sitout is legitimately long and thin).
+NON_HABITABLE = {"landscape", "patio", "parking", "sitout", "balcony", "stair",
+                 "foyer", "shaft"}
+# Not built-up at all: excluded from ground-coverage arithmetic.
 UNBUILT = {"landscape", "patio", "parking"}
+# Enclosed but skipped by every plausibility band: legitimately tiny and thin.
+UNCHECKED = {"shaft"}
 
 
 def canonical(name: str) -> str:
-    n = re.sub(r"[_\-.]+", " ", (name or "").strip().lower())
-    n = re.sub(r"\s*\d+\s*$", "", n).strip()          # BEDROOM_1 -> bedroom
+    """Map a printed room label to a category. Returns 'unknown' rather than
+    guessing -- an unknown is a visible gap, a wrong guess corrupts the counts."""
+    n = re.sub(r"[_\-./&]+", " ", (name or "").strip().lower())
+    n = re.sub(r"\s*(?:no\.?)?\s*\d+\s*$", "", n).strip()   # BEDROOM_1, TOI-2 -> bedroom, toi
+    n = re.sub(r"\s+", " ", n)
+    if not n:
+        return "unknown"
     for cat, keys in _ALIASES.items():
         if any(k in n for k in keys):
+            return cat
+    for cat, keys in _SHORT.items():
+        if any(re.search(rf"\b{re.escape(k)}\b", n) for k in keys):
             return cat
     return "unknown"
 
@@ -85,6 +120,7 @@ BANDS: dict[str, Band] = {
     "patio":    Band(0.8,  60.0,  700, None),
     "parking":  Band(6.0,  60.0, 2100, None),
     "landscape":Band(0.2, 400.0,  300, None),
+    "shaft":    Band(0.05, 12.0,  200, None),
 }
 
 
@@ -130,6 +166,8 @@ def check(rooms: list[dict], plot_area_m2: float | None = None,
             issues.append(Issue("unknown_room_type", "warn",
                                 f"room name '{r.get('name')}' did not map to a known category",
                                 r.get("name")))
+            continue
+        if cat in UNCHECKED:
             continue
         b = BANDS.get(cat)
         if not b:

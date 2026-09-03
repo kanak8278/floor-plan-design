@@ -148,6 +148,61 @@ class BBMPDefault:
             })
 
 
+class CityProfileAdapter:
+    """Wraps `bylaws.CityProfile` into the narrow interface used here.
+
+    `bylaws.py` is the canonical table and owns the bands; this module only
+    needs four numbers plus citations, so the coupling stays one small adapter
+    rather than an import graph. `BBMPDefault` remains for standalone runs.
+    """
+
+    def __init__(self, city) -> None:
+        self.city = city
+        self.name = getattr(city, "name", "city-profile")
+
+    def rules_for(self, *, plot_area_sqft: float,
+                  width_mm: int, depth_mm: int) -> PlotRules:
+        band = self.city.resolve(plot_area_sqft)
+        side = band.side.resolve_mm(depth_mm, width_mm)
+        both = getattr(band.side, "both_sides", True)
+        floors = band.max_habitable_floors
+        return PlotRules(
+            front_mm=band.front.resolve_mm(depth_mm, width_mm),
+            rear_mm=band.rear.resolve_mm(depth_mm, width_mm),
+            side_left_mm=side,
+            side_right_mm=side if both else 0,
+            far=band.far, coverage=band.max_ground_coverage,
+            max_floors=floors if floors else 99,
+            profile=self.name, band=band.label,
+            verified=True,
+            rule_text={
+                "front": f"{self.name} {band.key}: front {band.front.mode}"
+                         f" {band.front.value}",
+                "rear": f"{self.name} {band.key}: rear {band.rear.mode}"
+                        f" {band.rear.value}",
+                "left": f"{self.name} {band.key}: side {band.side.mode}"
+                        f" {band.side.value}",
+                "right": (f"{self.name} {band.key}: side {band.side.mode}"
+                          f" {band.side.value}") if both
+                         else "one side may abut (party wall)",
+                "far": f"{self.name} {band.key}: FAR {band.far}",
+                "coverage": f"{self.name} {band.key}: coverage "
+                            f"{band.max_ground_coverage:.0%}",
+                "max_floors": (band.max_floors_label or
+                               "height not encoded for this band "
+                               "(BBMP ties it to road width) - UNCHECKED"),
+            })
+
+
+def default_profile() -> BylawProfile:
+    """Canonical city table when `bylaws.py` is present, else the local stub."""
+    try:
+        from .bylaws import BENGALURU
+    except Exception:
+        return BBMPDefault()
+    return CityProfileAdapter(BENGALURU)
+
+
 # ---------------------------------------------------------------- room programme
 
 # NBC 2016 minimums, as (min clear width mm, min carpet area m^2).
@@ -401,7 +456,7 @@ def compute_envelope(width_ft: float, depth_ft: float, *,
                      interior_wall_mm: int = 115,
                      floors: int | None = None) -> AreaStatement:
     """Plot (feet) + bylaw profile + programme -> auditable area statement."""
-    profile = profile or BBMPDefault()
+    profile = profile or default_profile()
     programme = list(programme or [])
     nd = north_deg_for(road_facing, north_deg)
 

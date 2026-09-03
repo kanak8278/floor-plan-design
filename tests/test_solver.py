@@ -27,9 +27,9 @@ from shapely.geometry import Polygon, box                      # noqa: E402
 from shapely.ops import unary_union                            # noqa: E402
 
 from fpeval.envelope import (BBMPDefault, RoomReq, bhk_programme,  # noqa: E402
-                             compute_envelope, ft_to_mm, mm2_to_m2,
-                             mm2_to_sqft, north_deg_for, sqft_to_m2,
-                             zone_vector)
+                             compute_envelope, default_profile, ft_to_mm,
+                             mm2_to_m2, mm2_to_sqft, north_deg_for,
+                             sqft_to_m2, zone_vector)
 from fpeval.metrics import face_recovery, ir_identity, room_face_match  # noqa: E402
 from fpeval.project import from_project, to_project            # noqa: E402
 from fpeval.solver import (GRID_MM, LayoutSpec, _wall_axis_coord,  # noqa: E402
@@ -194,6 +194,25 @@ def test_growth_is_capped_so_big_plots_do_not_bloat_wet_rooms():
     assert st.slack_m2 > 10.0        # surplus is reported, not hidden in a bath
 
 
+def test_canonical_bylaws_table_agrees_on_the_verified_bands():
+    """bylaws.py owns the tables; the local stub is only for standalone runs.
+    They must agree wherever the stub claims a verified citation, and where
+    they diverge (above 3875 sqft) bylaws.py wins."""
+    prof = default_profile()
+    for w, d in ((20, 30), (30, 40), (30, 50), (40, 60)):
+        a = compute_envelope(w, d, profile=prof)
+        b = compute_envelope(w, d, profile=BBMPDefault())
+        assert a.rules.setbacks_mm == b.rules.setbacks_mm, (w, d)
+        assert a.rules.far == b.rules.far == 1.75, (w, d)
+        assert a.rules.coverage == b.rules.coverage == 0.75, (w, d)
+    # 50x80 = 4000 sqft falls in BBMP's >=3875 band: FAR 2.25, coverage 65%
+    big = compute_envelope(50, 80, profile=prof)
+    if big.rules.profile != BBMPDefault().name:
+        assert big.rules.far == 2.25 and big.rules.coverage == 0.65
+        assert big.binding_cap == "ground_coverage"
+        assert big.footprint_mm2 <= big.coverage_cap_mm2
+
+
 def test_envelope_gate_rejects_overstuffed_brief_arithmetically():
     st = _env(20, 30, programme=bhk_programme(5))
     assert st.verdict == "INFEASIBLE"
@@ -273,10 +292,15 @@ def _assert_openings_fit_their_walls(res):
             f"{o.id} runs off wall {w.id} ({w.length:.0f} mm)"
 
 
+_PROG_KW = ("baths", "dining", "pooja", "utility", "living_m2")
+
+
 def _solve(w, d, n, **kw):
-    kw.setdefault("time_limit_s", 10.0)
+    kw.setdefault("time_limit_s", 8.0)
+    pk = {k: kw.pop(k) for k in list(kw) if k in _PROG_KW}
     prog = kw.pop("programme", None) or bhk_programme(
-        n, pooja=n >= 3, dining=n >= 4, utility=n >= 4)
+        n, pooja=pk.pop("pooja", n >= 3), dining=pk.pop("dining", n >= 4),
+        utility=pk.pop("utility", n >= 4), **pk)
     spec = LayoutSpec(programme=prog,
                       required_adjacency=[("kitchen", "living")], **kw)
     return solve_layout(w, d, spec)
@@ -379,14 +403,25 @@ def test_2bhk_on_20x30_reports_the_band_argument():
     assert "min_clear_width" in res.infeasible_groups
 
 
-def test_infeasible_is_distinguished_from_timeout():
-    """A 1 ms budget on a solvable brief is a TIMEOUT, never an INFEASIBLE."""
-    res = _solve(30, 40, 3, time_limit_s=0.001, candidates=1, tree_samples=1)
-    assert res.status in ("TIMEOUT", "OPTIMAL", "FEASIBLE")
-    if res.status == "TIMEOUT":
-        assert res.plan is None
-        assert "not proven infeasible" in res.message
-        assert res.infeasible_groups == []
+def test_short_budget_never_misreports_a_solvable_brief_as_infeasible():
+    """INFEASIBLE must mean "cannot fit", not "ran out of time". A brief that
+    solves in 8 s must not come back INFEASIBLE on a 1 s budget."""
+    for w, d, n in ((30, 40, 3), (40, 60, 4), (50, 80, 5)):
+        res = _solve(w, d, n, time_limit_s=1.0)
+        assert res.status != "INFEASIBLE", (w, d, n, res.message)
+        if res.status == "TIMEOUT":
+            assert res.plan is None
+            assert res.infeasible_groups == []
+            assert "not proven infeasible" in res.message
+        else:
+            assert res.ok
+
+
+def test_infeasible_and_timeout_carry_different_payloads():
+    bad = _solve(20, 30, 5)
+    assert bad.status == "INFEASIBLE" and bad.infeasible_groups
+    good = _solve(30, 40, 2)
+    assert good.ok and good.infeasible_groups == []
 
 
 def test_solver_never_raises_on_absurd_input():
@@ -419,7 +454,7 @@ def test_plan_survives_to_project_and_json():
 
 def test_rooms_are_recoverable_as_faces_of_the_wall_graph():
     for w, d, n in ((30, 40, 2), (30, 40, 3), (40, 60, 3), (50, 80, 4)):
-        res = _solve(w, d, n)
+        res = _solve(w, d, n, time_limit_s=6.0)
         assert res.ok, (w, d, n, res.message)
         fr = face_recovery(res.plan)
         assert fr["ok"] and fr["area_iou"] > 0.99, (w, d, n, fr)
@@ -535,10 +570,8 @@ def test_solve_time_percentiles():
 def _main() -> int:
     fns = [(k, v) for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
-    order = {name: i for i, name in enumerate(
-        [n for n, _ in fns])}
     failed = []
-    for name, fn in sorted(fns, key=lambda kv: order[kv[0]]):
+    for name, fn in fns:
         t0 = time.time()
         try:
             fn()

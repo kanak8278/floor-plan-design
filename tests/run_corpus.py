@@ -355,6 +355,18 @@ def adjacency_report(plans, workers) -> dict:
     print(f"  n={len(good)}/{len(recs)} plans, {time.time()-t0:.1f}s" + (f"  errors={errs}" if errs else ""))
     print(f"  micro over door/window edges: TP={tp} FP={fp} FN={fn}")
     print(f"    precision={prec:.4f} recall={rec:.4f} F1={f1:.4f}")
+    at: dict[str, int] = {}
+    for r in good:
+        for k, v in r["fn_attribution"].items():
+            at[k] = at.get(k, 0) + v
+    atot = sum(at.values())
+    print("  who is wrong on the missing edges (geometry adjudicates):")
+    for k in sorted(at, key=lambda k: -at[k]):
+        print(f"    {k:26s} {at[k]:7d}  {pct(at[k], atot):>8s}")
+    fn_ir = sum(r["fn_attributable_to_ir"] for r in good)
+    rec_adj = tp / max(tp + fn_ir, 1)
+    print(f"  recall counting ONLY our own misses: {rec_adj:.4f}  "
+          f"(F1={2*prec*rec_adj/max(prec+rec_adj,1e-9):.4f})")
     exact = sum(1 for r in good if r["fn"] == 0 and r["fp"] == 0)
     print(f"  plans with an exactly identical walkable edge set: {pct(exact, len(good))}")
     jac = [r["jaccard"] for r in good if r["jaccard"] == r["jaccard"]]
@@ -374,6 +386,8 @@ def adjacency_report(plans, workers) -> dict:
     print(f"  plan_to_graph nodes not mappable to an IR room: {sum(r['unmapped_ref_nodes'] for r in good)}")
     return {"n": len(good), "tp": tp, "fp": fp, "fn": fn,
             "precision": prec, "recall": rec, "f1": f1,
+            "fn_attribution": at, "fn_attributable_to_ir": fn_ir,
+            "recall_adjusted": rec_adj,
             "exact_edge_set_rate": exact / max(len(good), 1),
             "recall_by_type": {t: {"n": v[0], "hit": v[1]} for t, v in bt.items()},
             "errors": errs}
@@ -502,8 +516,20 @@ def write_manifest(plans, recs, n_keep: int, source_pkl: str) -> dict:
             "axis_cluster_mm": R.AXIS_CLUSTER_MM,
             "align_overlap_slack": R.ALIGN_OVERLAP_SLACK,
             "min_opening_mm": R.MIN_OPENING_MM,
-            "wall_merge": "collinear_interval",
+            "sliver_aspect": R.SLIVER_ASPECT,
+            "room_wall_tol_mm": R.ROOM_WALL_TOL_MM,
+            "wall_extraction": "collinear interval merge + split at X-crossings",
+            "opening_hosting": "longest wall-centreline chord, nearest-wall fallback",
         },
+        "pipeline": "ResPlan dict -> fpeval.resplan.convert -> IR -> "
+                    "fpeval.project.to_project -> OpenPlan3D Project",
+        "how_to_load": (
+            "import json; man = json.load(open('tests/eval_corpus.json')); "
+            "projects = json.load(open(man['artefacts']['projects_json']['path'])); "
+            "irs = json.load(open(man['artefacts']['ir_json']['path'])); "
+            "# same order as man['plans']; regenerate with "
+            "`python tests/run_corpus.py all --manifest`"
+        ),
         "artefacts": {
             "projects_json": {"path": "out/eval_corpus/projects.json",
                               "bytes": os.path.getsize(proj_path), "sha256": sha(proj_path),

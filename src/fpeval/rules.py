@@ -336,6 +336,13 @@ def check_geometry(ctx: _Ctx) -> list[Finding]:
     out: list[Finding] = []
     plan = ctx.plan
 
+    if not ctx.polys:
+        # Explicit, because the generate loop can emit a wall network with no
+        # faces and every other rule would then silently report nothing.
+        out.append(Finding("GEO.NO_ROOMS", "error", 1.0,
+                           f"plan has no room with a valid polygon "
+                           f"({len(plan.rooms)} rooms declared)", []))
+
     # degenerate / missing polygons
     for r in ctx.rooms:
         p = ctx.polys.get(r.id)

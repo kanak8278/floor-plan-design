@@ -387,10 +387,17 @@ def _score_nominal(rects, reqs: Sequence[RoomReq], targets: Sequence[float],
                     else 1500.0 if r.category in WET else 0.0)
         z = r.zone()
         if z and spec.w_vastu > 0:
+            # Scaled to match the CP-SAT objective: there, 1 m^2 of area error
+            # costs 10000 and 1 m of centroid shift costs w_vastu*10000*weight;
+            # here 1 m^2 costs 40, so 1 m of shift must cost w_vastu*40*weight.
+            # Get this wrong and topology selection is Vastu-blind, which is
+            # where nearly all the real leverage lives — inside a fixed
+            # topology a room can only move by resizing.
             vx, vy = zone_vector(z, north_deg)
             dx = (x0 + x1) / 2 - (X0 + X1) / 2
             dy = (y0 + y1) / 2 - (Y0 + Y1) / 2
-            pen -= spec.w_vastu * 2.0 * (vx * dx + vy * dy) / 1000.0
+            pen -= (spec.w_vastu * 40.0 * max(r.weight, 0.2)
+                    * (vx * dx + vy * dy) / 1000.0)
     if rects[ent][1] > Y0 + 1:
         pen += 6000.0                # entrance must reach the road edge
     for i, j in req_adj:
@@ -759,10 +766,20 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
                 stack.append(v)
     unreachable = [r.id for i, r in enumerate(reqs) if i not in seen]
 
+    # Record the setbacks the emitted geometry actually achieves (outer wall
+    # face to plot boundary), not the bylaw minima: coverage capping and the
+    # inward grid snap both push the building further in, and a Site that
+    # disagrees with its own walls is worse than no Site at all.
+    half = st.exterior_wall_mm // 2
+    pw = max(p.x for p in st.plot_polygon)
+    pd = max(p.y for p in st.plot_polygon)
     plan = Plan(id=plan_id, walls=walls, openings=openings, rooms=rooms,
                 site=Site(plot_polygon=list(st.plot_polygon),
                           north_deg=st.north_deg,
-                          setbacks_mm=dict(st.rules.setbacks_mm)),
+                          setbacks_mm={"front": Y0 - half,
+                                       "rear": pd - (Y1 + half),
+                                       "left": X0 - half,
+                                       "right": pw - (X1 + half)}),
                 storey_height=storey_height, provenance=provenance)
     return plan, unreachable, no_window
 
@@ -973,6 +990,7 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             "wall_allowance_mm": alw_mm,
             "note": ("Room.area is the centreline rectangle so rooms tile the "
                      "footprint exactly; clear_areas_m2 is carpet area"),
+            "bylaw_setbacks_mm": dict(st.rules.setbacks_mm),
             "area_statement": st.to_dict()}
 
     plan, unreachable, no_win = _emit_plan(

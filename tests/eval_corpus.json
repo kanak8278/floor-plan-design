@@ -17,14 +17,14 @@
  "artefacts": {
   "projects_json": {
    "path": "out/eval_corpus/projects.json",
-   "bytes": 29595583,
-   "sha256": "bb30cd8fca711867eac8562c11f48f41e84b5feb568b74e1125876ca210748ce",
+   "bytes": 29620549,
+   "sha256": "74b48dc29e981e489c730bd65c85d76e3696991aabb01101faefa8cdf574492a",
    "content": "OpenPlan3D Project dicts + _expect block"
   },
   "ir_json": {
    "path": "out/eval_corpus/ir.json",
-   "bytes": 26168966,
-   "sha256": "85eb6a384f309829d15d5edbb8a81ef268a42d803c34ff707f6ac17199a3d06e",
+   "bytes": 26189043,
+   "sha256": "8caefa16a066b3b0e881f5e7b0b4226ce4051a84fa0d5f103172788867a09b6a",
    "content": "canonical IR Plan dicts, same order"
   }
  },
@@ -689,7 +689,7 @@
   {
    "resplan_id": 3733,
    "project_id": "proj-3733",
-   "n_walls": 68,
+   "n_walls": 70,
    "n_rooms": 9,
    "n_openings": 19,
    "n_faces": 9,
@@ -702,7 +702,7 @@
   {
    "resplan_id": 8266,
    "project_id": "proj-8266",
-   "n_walls": 38,
+   "n_walls": 40,
    "n_rooms": 6,
    "n_openings": 11,
    "n_faces": 7,
@@ -819,7 +819,7 @@
   {
    "resplan_id": 7784,
    "project_id": "proj-7784",
-   "n_walls": 55,
+   "n_walls": 59,
    "n_rooms": 9,
    "n_openings": 17,
    "n_faces": 10,
@@ -1079,7 +1079,7 @@
   {
    "resplan_id": 2359,
    "project_id": "proj-2359",
-   "n_walls": 91,
+   "n_walls": 93,
    "n_rooms": 12,
    "n_openings": 23,
    "n_faces": 11,
@@ -2769,7 +2769,7 @@
   {
    "resplan_id": 14361,
    "project_id": "proj-14361",
-   "n_walls": 75,
+   "n_walls": 77,
    "n_rooms": 15,
    "n_openings": 29,
    "n_faces": 15,
@@ -3679,7 +3679,7 @@
   {
    "resplan_id": 580728,
    "project_id": "proj-580728",
-   "n_walls": 89,
+   "n_walls": 91,
    "n_rooms": 13,
    "n_openings": 26,
    "n_faces": 13,
@@ -4823,7 +4823,7 @@
   {
    "resplan_id": 11611,
    "project_id": "proj-11611",
-   "n_walls": 31,
+   "n_walls": 35,
    "n_rooms": 5,
    "n_openings": 8,
    "n_faces": 7,
@@ -5122,7 +5122,7 @@
   {
    "resplan_id": 4801,
    "project_id": "proj-4801",
-   "n_walls": 25,
+   "n_walls": 27,
    "n_rooms": 5,
    "n_openings": 8,
    "n_faces": 5,
@@ -5304,7 +5304,7 @@
   {
    "resplan_id": 890,
    "project_id": "proj-890",
-   "n_walls": 42,
+   "n_walls": 44,
    "n_rooms": 9,
    "n_openings": 19,
    "n_faces": 9,
@@ -5369,7 +5369,7 @@
   {
    "resplan_id": 12735,
    "project_id": "proj-12735",
-   "n_walls": 36,
+   "n_walls": 40,
    "n_rooms": 8,
    "n_openings": 15,
    "n_faces": 8,
@@ -5447,7 +5447,7 @@
   {
    "resplan_id": 1883,
    "project_id": "proj-1883",
-   "n_walls": 47,
+   "n_walls": 49,
    "n_rooms": 10,
    "n_openings": 17,
    "n_faces": 10,
@@ -5551,7 +5551,7 @@
   {
    "resplan_id": 3461,
    "project_id": "proj-3461",
-   "n_walls": 69,
+   "n_walls": 71,
    "n_rooms": 9,
    "n_openings": 19,
    "n_faces": 10,
@@ -7085,7 +7085,7 @@
   {
    "resplan_id": 14103,
    "project_id": "proj-14103",
-   "n_walls": 30,
+   "n_walls": 32,
    "n_rooms": 6,
    "n_openings": 7,
    "n_faces": 6,
@@ -7280,7 +7280,7 @@
   {
    "resplan_id": 1213,
    "project_id": "proj-1213",
-   "n_walls": 56,
+   "n_walls": 58,
    "n_rooms": 7,
    "n_openings": 9,
    "n_faces": 8,
@@ -7735,7 +7735,7 @@
   {
    "resplan_id": 8926,
    "project_id": "proj-8926",
-   "n_walls": 81,
+   "n_walls": 83,
    "n_rooms": 13,
    "n_openings": 21,
    "n_faces": 13,
@@ -8151,7 +8151,7 @@
   {
    "resplan_id": 15331,
    "project_id": "proj-15331",
-   "n_walls": 36,
+   "n_walls": 40,
    "n_rooms": 7,
    "n_openings": 13,
    "n_faces": 8,
@@ -8411,7 +8411,7 @@
   {
    "resplan_id": 9818,
    "project_id": "proj-9818",
-   "n_walls": 59,
+   "n_walls": 61,
    "n_rooms": 10,
    "n_openings": 17,
    "n_faces": 10,
@@ -8905,7 +8905,7 @@
   {
    "resplan_id": 12886,
    "project_id": "proj-12886",
-   "n_walls": 41,
+   "n_walls": 45,
    "n_rooms": 8,
    "n_openings": 14,
    "n_faces": 9,
@@ -8970,7 +8970,7 @@
   {
    "resplan_id": 225,
    "project_id": "proj-225",
-   "n_walls": 50,
+   "n_walls": 52,
    "n_rooms": 8,
    "n_openings": 13,
    "n_faces": 9,
@@ -9256,12 +9256,12 @@
   {
    "resplan_id": 2564,
    "project_id": "proj-2564",
-   "n_walls": 60,
+   "n_walls": 62,
    "n_rooms": 5,
    "n_openings": 8,
    "n_faces": 7,
    "all_rooms_matched": false,
-   "min_room_iou": 0.983334,
+   "min_room_iou": 0.983332,
    "src_area_err": 0.0021313,
    "openings_hosted": 8,
    "openings_total": 8
@@ -9698,7 +9698,7 @@
   {
    "resplan_id": 12738,
    "project_id": "proj-12738",
-   "n_walls": 53,
+   "n_walls": 55,
    "n_rooms": 9,
    "n_openings": 16,
    "n_faces": 10,
@@ -9750,7 +9750,7 @@
   {
    "resplan_id": 7812,
    "project_id": "proj-7812",
-   "n_walls": 42,
+   "n_walls": 44,
    "n_rooms": 9,
    "n_openings": 13,
    "n_faces": 9,
@@ -10192,7 +10192,7 @@
   {
    "resplan_id": 4997,
    "project_id": "proj-4997",
-   "n_walls": 44,
+   "n_walls": 46,
    "n_rooms": 9,
    "n_openings": 8,
    "n_faces": 9,
@@ -10400,7 +10400,7 @@
   {
    "resplan_id": 1185,
    "project_id": "proj-1185",
-   "n_walls": 100,
+   "n_walls": 104,
    "n_rooms": 18,
    "n_openings": 22,
    "n_faces": 19,
@@ -10491,7 +10491,7 @@
   {
    "resplan_id": 3480,
    "project_id": "proj-3480",
-   "n_walls": 64,
+   "n_walls": 68,
    "n_rooms": 8,
    "n_openings": 15,
    "n_faces": 10,
@@ -11089,7 +11089,7 @@
   {
    "resplan_id": 15570,
    "project_id": "proj-15570",
-   "n_walls": 47,
+   "n_walls": 51,
    "n_rooms": 8,
    "n_openings": 18,
    "n_faces": 10,
@@ -11869,7 +11869,7 @@
   {
    "resplan_id": 2091,
    "project_id": "proj-2091",
-   "n_walls": 62,
+   "n_walls": 64,
    "n_rooms": 10,
    "n_openings": 20,
    "n_faces": 10,
@@ -12402,7 +12402,7 @@
   {
    "resplan_id": 2356,
    "project_id": "proj-2356",
-   "n_walls": 72,
+   "n_walls": 78,
    "n_rooms": 14,
    "n_openings": 25,
    "n_faces": 15,
@@ -12779,7 +12779,7 @@
   {
    "resplan_id": 15226,
    "project_id": "proj-15226",
-   "n_walls": 68,
+   "n_walls": 70,
    "n_rooms": 11,
    "n_openings": 27,
    "n_faces": 11,
@@ -13013,7 +13013,7 @@
   {
    "resplan_id": 12381,
    "project_id": "proj-12381",
-   "n_walls": 54,
+   "n_walls": 56,
    "n_rooms": 9,
    "n_openings": 17,
    "n_faces": 10,
@@ -13351,7 +13351,7 @@
   {
    "resplan_id": 4494,
    "project_id": "proj-4494",
-   "n_walls": 39,
+   "n_walls": 41,
    "n_rooms": 9,
    "n_openings": 14,
    "n_faces": 9,
@@ -14001,7 +14001,7 @@
   {
    "resplan_id": 12678,
    "project_id": "proj-12678",
-   "n_walls": 36,
+   "n_walls": 38,
    "n_rooms": 8,
    "n_openings": 14,
    "n_faces": 9,
@@ -14456,7 +14456,7 @@
   {
    "resplan_id": 15591,
    "project_id": "proj-15591",
-   "n_walls": 56,
+   "n_walls": 58,
    "n_rooms": 11,
    "n_openings": 18,
    "n_faces": 11,
@@ -14521,7 +14521,7 @@
   {
    "resplan_id": 14843,
    "project_id": "proj-14843",
-   "n_walls": 29,
+   "n_walls": 31,
    "n_rooms": 6,
    "n_openings": 11,
    "n_faces": 6,
@@ -14560,7 +14560,7 @@
   {
    "resplan_id": 498,
    "project_id": "proj-498",
-   "n_walls": 43,
+   "n_walls": 47,
    "n_rooms": 7,
    "n_openings": 21,
    "n_faces": 8,
@@ -15015,7 +15015,7 @@
   {
    "resplan_id": 15461,
    "project_id": "proj-15461",
-   "n_walls": 65,
+   "n_walls": 67,
    "n_rooms": 12,
    "n_openings": 25,
    "n_faces": 12,
@@ -15444,7 +15444,7 @@
   {
    "resplan_id": 2368,
    "project_id": "proj-2368",
-   "n_walls": 54,
+   "n_walls": 58,
    "n_rooms": 9,
    "n_openings": 20,
    "n_faces": 10,
@@ -15639,7 +15639,7 @@
   {
    "resplan_id": 720556,
    "project_id": "proj-720556",
-   "n_walls": 46,
+   "n_walls": 48,
    "n_rooms": 7,
    "n_openings": 13,
    "n_faces": 7,
@@ -15743,7 +15743,7 @@
   {
    "resplan_id": 13323,
    "project_id": "proj-13323",
-   "n_walls": 29,
+   "n_walls": 31,
    "n_rooms": 5,
    "n_openings": 9,
    "n_faces": 5,
@@ -16107,7 +16107,7 @@
   {
    "resplan_id": 9014,
    "project_id": "proj-9014",
-   "n_walls": 92,
+   "n_walls": 94,
    "n_rooms": 16,
    "n_openings": 25,
    "n_faces": 17,
@@ -16211,7 +16211,7 @@
   {
    "resplan_id": 10418,
    "project_id": "proj-10418",
-   "n_walls": 51,
+   "n_walls": 59,
    "n_rooms": 10,
    "n_openings": 18,
    "n_faces": 15,
@@ -17303,7 +17303,7 @@
   {
    "resplan_id": 16152,
    "project_id": "proj-16152",
-   "n_walls": 40,
+   "n_walls": 42,
    "n_rooms": 7,
    "n_openings": 15,
    "n_faces": 7,
@@ -17329,7 +17329,7 @@
   {
    "resplan_id": 2317,
    "project_id": "proj-2317",
-   "n_walls": 99,
+   "n_walls": 103,
    "n_rooms": 12,
    "n_openings": 22,
    "n_faces": 11,
@@ -17446,7 +17446,7 @@
   {
    "resplan_id": 13973,
    "project_id": "proj-13973",
-   "n_walls": 48,
+   "n_walls": 50,
    "n_rooms": 10,
    "n_openings": 12,
    "n_faces": 11,
@@ -17927,7 +17927,7 @@
   {
    "resplan_id": 11127,
    "project_id": "proj-11127",
-   "n_walls": 53,
+   "n_walls": 55,
    "n_rooms": 9,
    "n_openings": 16,
    "n_faces": 9,
@@ -18382,7 +18382,7 @@
   {
    "resplan_id": 16597,
    "project_id": "proj-16597",
-   "n_walls": 65,
+   "n_walls": 67,
    "n_rooms": 14,
    "n_openings": 27,
    "n_faces": 15,
@@ -18460,7 +18460,7 @@
   {
    "resplan_id": 1045,
    "project_id": "proj-1045",
-   "n_walls": 52,
+   "n_walls": 54,
    "n_rooms": 12,
    "n_openings": 22,
    "n_faces": 13,
@@ -19591,7 +19591,7 @@
   {
    "resplan_id": 6754,
    "project_id": "proj-6754",
-   "n_walls": 33,
+   "n_walls": 35,
    "n_rooms": 7,
    "n_openings": 12,
    "n_faces": 8,
@@ -19656,7 +19656,7 @@
   {
    "resplan_id": 14526,
    "project_id": "proj-14526",
-   "n_walls": 100,
+   "n_walls": 102,
    "n_rooms": 16,
    "n_openings": 26,
    "n_faces": 16,
@@ -19695,7 +19695,7 @@
   {
    "resplan_id": 13665,
    "project_id": "proj-13665",
-   "n_walls": 62,
+   "n_walls": 64,
    "n_rooms": 11,
    "n_openings": 15,
    "n_faces": 11,
@@ -20553,7 +20553,7 @@
   {
    "resplan_id": 13325,
    "project_id": "proj-13325",
-   "n_walls": 40,
+   "n_walls": 42,
    "n_rooms": 8,
    "n_openings": 11,
    "n_faces": 8,
@@ -20566,7 +20566,7 @@
   {
    "resplan_id": 4985,
    "project_id": "proj-4985",
-   "n_walls": 33,
+   "n_walls": 37,
    "n_rooms": 6,
    "n_openings": 9,
    "n_faces": 7,
@@ -20943,7 +20943,7 @@
   {
    "resplan_id": 10122,
    "project_id": "proj-10122",
-   "n_walls": 58,
+   "n_walls": 60,
    "n_rooms": 10,
    "n_openings": 26,
    "n_faces": 10,
@@ -21060,7 +21060,7 @@
   {
    "resplan_id": 141,
    "project_id": "proj-141",
-   "n_walls": 67,
+   "n_walls": 71,
    "n_rooms": 11,
    "n_openings": 18,
    "n_faces": 12,
@@ -21658,7 +21658,7 @@
   {
    "resplan_id": 9858,
    "project_id": "proj-9858",
-   "n_walls": 45,
+   "n_walls": 49,
    "n_rooms": 7,
    "n_openings": 15,
    "n_faces": 7,
@@ -23140,7 +23140,7 @@
   {
    "resplan_id": 10168,
    "project_id": "proj-10168",
-   "n_walls": 53,
+   "n_walls": 55,
    "n_rooms": 8,
    "n_openings": 16,
    "n_faces": 8,
@@ -23530,7 +23530,7 @@
   {
    "resplan_id": 9058,
    "project_id": "proj-9058",
-   "n_walls": 56,
+   "n_walls": 58,
    "n_rooms": 10,
    "n_openings": 21,
    "n_faces": 11,
@@ -23673,7 +23673,7 @@
   {
    "resplan_id": 11258,
    "project_id": "proj-11258",
-   "n_walls": 33,
+   "n_walls": 35,
    "n_rooms": 7,
    "n_openings": 13,
    "n_faces": 7,
@@ -24414,7 +24414,7 @@
   {
    "resplan_id": 4296,
    "project_id": "proj-4296",
-   "n_walls": 525,
+   "n_walls": 545,
    "n_rooms": 12,
    "n_openings": 21,
    "n_faces": 23,
@@ -24531,7 +24531,7 @@
   {
    "resplan_id": 824156,
    "project_id": "proj-824156",
-   "n_walls": 34,
+   "n_walls": 36,
    "n_rooms": 7,
    "n_openings": 9,
    "n_faces": 8,
@@ -24674,7 +24674,7 @@
   {
    "resplan_id": 11200,
    "project_id": "proj-11200",
-   "n_walls": 31,
+   "n_walls": 33,
    "n_rooms": 6,
    "n_openings": 10,
    "n_faces": 6,
@@ -24778,7 +24778,7 @@
   {
    "resplan_id": 5059,
    "project_id": "proj-5059",
-   "n_walls": 34,
+   "n_walls": 38,
    "n_rooms": 6,
    "n_openings": 8,
    "n_faces": 7,
@@ -25012,7 +25012,7 @@
   {
    "resplan_id": 1376,
    "project_id": "proj-1376",
-   "n_walls": 79,
+   "n_walls": 81,
    "n_rooms": 13,
    "n_openings": 21,
    "n_faces": 13,
@@ -25376,7 +25376,7 @@
   {
    "resplan_id": 11250,
    "project_id": "proj-11250",
-   "n_walls": 44,
+   "n_walls": 46,
    "n_rooms": 8,
    "n_openings": 18,
    "n_faces": 8,
@@ -25584,7 +25584,7 @@
   {
    "resplan_id": 6595,
    "project_id": "proj-6595",
-   "n_walls": 43,
+   "n_walls": 45,
    "n_rooms": 8,
    "n_openings": 11,
    "n_faces": 9,

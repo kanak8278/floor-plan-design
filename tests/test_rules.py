@@ -298,6 +298,25 @@ def test_vastu_never_errors():
                    for f in fs if f.rule_id.startswith("VASTU."))
 
 
+def test_degenerate_input_reports_instead_of_crashing():
+    """The generate loop will hand us junk; it must get findings, not a traceback."""
+    from fpeval.ir import Opening
+    ids = {f.rule_id for f in validate(Plan(id="empty"))}
+    assert "GEO.NO_ROOMS" in ids
+    p = Plan(id="junk",
+             walls=[Wall("w0", P(0, 0), P(0, 0), 230),
+                    Wall("w1", P(0, 0), P(50, 0), 230)],
+             openings=[Opening("o0", "door", "nope", 0.5, 900),
+                       Opening("o1", "door", "w1", 2.5, 900)],
+             rooms=[Room("r0", "X", "bedroom", [], [P(0, 0), P(1, 0), P(1, 1)], 1),
+                    Room("r1", "Y", "bedroom", [], [P(0, 0)], 0)])
+    ids = {f.rule_id for f in validate(p)}
+    for rid in ("GEO.ROOM_DEGENERATE", "GEO.OPENING_ORPHAN",
+                "GEO.OPENING_TOO_WIDE", "GEO.WALL_TOO_SHORT",
+                "GEO.OPENING_OFF_WALL", "GEO.NO_FRONT_DOOR"):
+        assert rid in ids, rid
+
+
 def test_findings_sorted_most_severe_first():
     fs = validate(mutate.overlap_two_rooms(clean_plan())[0], CLEAN_BRIEF)
     sev = [f.severity for f in fs]
@@ -552,6 +571,7 @@ def test_mutations_do_not_touch_the_input():
 # +/-30% scale error moves every area by up to 69%. They are still *measured*
 # below, and reported separately from the scale-free families.
 SCALE_FREE = {
+    "GEO.NO_ROOMS",
     "GEO.ROOM_OVERLAP", "GEO.ROOM_DEGENERATE", "GEO.ROOM_OUTSIDE_ENVELOPE",
     "GEO.ROOM_AREA_MISMATCH", "GEO.WALL_TOO_SHORT", "GEO.OPENING_ORPHAN",
     "GEO.OPENING_TOO_WIDE", "GEO.OPENING_OVERRUNS_WALL", "GEO.OPENING_OFF_WALL",

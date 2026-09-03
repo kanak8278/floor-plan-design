@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fpeval — converted ResPlan plans</title>
+<style>
+  body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+       margin:0;padding:32px;background:#0f1115;color:#e6e8ec}
+  h1{font-size:20px;margin:0 0 4px}
+  p.sub{color:#9aa3af;margin:0 0 24px}
+  #status{padding:10px 14px;border-radius:8px;background:#1a1e26;margin-bottom:20px;color:#9aa3af}
+  #status.ok{color:#4ade80}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+  a.card{display:block;padding:14px 16px;border:1px solid #262c37;border-radius:10px;
+         background:#151922;text-decoration:none;color:#e6e8ec;transition:.12s}
+  a.card:hover{border-color:#3b82f6;background:#1a2030}
+  .id{font-weight:600;margin-bottom:6px}
+  .meta{color:#9aa3af;font-size:12.5px}
+  .badge{display:inline-block;padding:1px 7px;border-radius:99px;background:#1e293b;
+         color:#93c5fd;font-size:11.5px;margin-right:6px}
+  footer{margin-top:28px;color:#6b7280;font-size:12.5px;line-height:1.7}
+  code{background:#1a1e26;padding:1px 5px;border-radius:4px}
+</style>
+<h1>Converted ResPlan plans</h1>
+<p class="sub">ResPlan → canonical IR (integer mm) → OpenPlan3D <code>Project</code> JSON. Click one to open it in the editor.</p>
+<div id="status">Seeding localStorage…</div>
+<div class="grid" id="grid"></div>
+<footer>
+  Dimensions are <strong>indicative</strong>: ResPlan coordinates are not metric, so scale is inferred
+  from <code>wall_depth</code> assuming 226 mm walls (±30%).<br>
+  Room count may exceed the IR's by 1–2 — ResPlan has no circulation category, so unlabelled
+  space is correctly detected as an extra room by <code>detectRooms</code>.
+</footer>
+<script type="module">
+const KEY = 'floorplan_projects';
+const st = document.getElementById('status');
+try {
+  const projects = await (await fetch('./projects.json')).json();
+  const all = JSON.parse(localStorage.getItem(KEY) || '{}');
+  for (const p of projects) all[p.id] = JSON.stringify(p);
+  localStorage.setItem(KEY, JSON.stringify(all));
+  st.textContent = `Loaded ${projects.length} projects into this browser. They now also appear under “Projects”.`;
+  st.className = 'ok';
+  document.getElementById('grid').innerHTML = projects.map(p => {
+    const m = p._meta;
+    return `<a class="card" href="/editor?id=${p.id}">
+      <div class="id">${p.id}</div>
+      <div class="meta"><span class="badge">${m.bedrooms} BHK</span>
+      <span class="badge">${m.area_m2} m²</span></div>
+      <div class="meta" style="margin-top:6px">${m.rooms} rooms · ${m.walls} walls · ${m.openings} openings</div>
+    </a>`;
+  }).join('');
+} catch (e) {
+  st.textContent = 'Failed: ' + e;
+}
+</script>

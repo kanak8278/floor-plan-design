@@ -69,6 +69,23 @@ Then report which verification affordances the drawing carries. Be strict about 
 List anything in `blocking_problems` that would make text extraction unreliable."""
 
 
+
+# Only these make extraction impossible. Everything else is a caveat to record,
+# not a reason to discard the plan -- the dual-unit and carpet-area checksums
+# will catch a bad transcription objectively.
+_HARD_PATTERNS = (
+    "multiple plans", "more than one plan", "several plans", "collage",
+    "combined in a single image", "cropped", "cut off", "truncated",
+    "illegible", "unreadable", "too low resolution", "very low resolution",
+    "no room labels", "no text",
+)
+
+
+def _is_hard_blocker(msg: str) -> bool:
+    m = (msg or "").lower()
+    return any(p in m for p in _HARD_PATTERNS)
+
+
 @dataclass
 class Classification:
     path: str
@@ -126,14 +143,18 @@ def classify(path: str, client: Anthropic | None = None,
             {"type": "image", "source": {"type": "base64", "media_type": mt, "data": data}},
             {"type": "text", "text": PROMPT}]}])
     out = next(b.input for b in r.content if b.type == "tool_use")
-    # `usable` is deliberately stricter than "is a floor plan": without printed
-    # dimensions there is nothing to verify against, so the plan cannot be ground truth.
+    # The gate rejects only what is objectively not extractable. It deliberately
+    # does NOT reject on the model's soft caveats ("small text", "slight blur",
+    # "watermark") -- those are non-deterministic and were throwing away good
+    # plans that the downstream checksums then confirmed were fine. Trust the
+    # arithmetic, not the model's self-assessment.
+    hard = [b for b in out["blocking_problems"] if _is_hard_blocker(b)]
+    out["hard_blockers"] = hard
     usable = bool(
         out["kind"] == "floor_plan_2d"
         and out["is_orthographic_plan_view"]
         and out["has_room_labels"]
-        and out["has_printed_room_dimensions"]
-        and not out["blocking_problems"]
+        and not hard
     )
     return Classification(path=path, kind=out["kind"], usable=usable,
                           confidence=out["confidence"], reasoning=out["reasoning"],
