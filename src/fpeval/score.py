@@ -74,6 +74,7 @@ class Result:
     scenario: Any = None
     foyer: Any = None
     site_notes: list[str] = field(default_factory=list)
+    n_symbols: int = 0
     furnish_drops: int = 0
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
@@ -272,6 +273,18 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         res.furnish_drops = len(fr.drops)
     except Exception as e:
         res.warnings.append(f"furnishing failed: {type(e).__name__}: {e}")
+
+    # Electrical and plumbing symbols: rule-based annotations the furnisher does
+    # not place, and the reason 35 `must_place` assertions were failing.
+    try:
+        from .entrance import place_symbols
+        from .catalog import get as _cget
+        def _has(i):
+            try: _cget(i); return True
+            except Exception: return False
+        res.n_symbols = place_symbols(plan, catalog_has=_has)
+    except Exception as e:
+        res.warnings.append(f"symbol placement failed: {type(e).__name__}: {e}")
 
     # Site elements: the gate is on the PLOT boundary, not in the room tiling,
     # so nothing in the layout solver was ever going to place it. Plans that

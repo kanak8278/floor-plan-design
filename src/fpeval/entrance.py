@@ -180,3 +180,105 @@ def place_site_elements(plan, *, road_facing: str = "N",
         else:
             notes.append("no room for a car inside the setback; parking omitted")
     return notes
+
+
+# --------------------------------------------------------- service symbols
+# The catalogue carries 8 electrical and 5 plumbing items at height 0 -- 2D
+# symbols, not solids. `furnish.py` places none of them ("Nothing places rugs,
+# lighting, or the 15 electrical/plumbing 2D symbols"), which is why 35 of the
+# suite's `must_place` assertions failed. They are rule-based, not a packing
+# problem: a ceiling point goes at the centroid, a switch beside the door, an
+# outlet on a wall away from the door. So they get their own pass.
+SYMBOL_RULES: dict[str, tuple[str, ...]] = {
+    "living":         ("sym_ceiling_light", "sym_ceiling_fan", "sym_switch",
+                       "sym_outlet", "sym_outlet"),
+    "dining":         ("sym_pendant", "sym_switch", "sym_outlet"),
+    "bedroom":        ("sym_ceiling_light", "sym_ceiling_fan", "sym_switch",
+                       "sym_outlet", "sym_outlet"),
+    "master_bedroom": ("sym_ceiling_light", "sym_ceiling_fan", "sym_switch",
+                       "sym_outlet", "sym_outlet"),
+    "study":          ("sym_ceiling_light", "sym_switch", "sym_outlet"),
+    "kitchen":        ("sym_ceiling_light", "sym_switch", "sym_outlet",
+                       "sym_water_supply", "sym_drain", "sym_gas_line"),
+    "bathroom":       ("sym_ceiling_light", "sym_switch", "sym_water_supply",
+                       "sym_drain", "sym_water_heater"),
+    "utility":        ("sym_ceiling_light", "sym_switch", "sym_water_supply",
+                       "sym_drain", "sym_washer_hookup"),
+    "pooja":          ("sym_ceiling_light", "sym_switch"),
+    "foyer":          ("sym_ceiling_light", "sym_switch", "sym_smoke"),
+    "store":          ("sym_ceiling_light", "sym_switch"),
+    "stair":          ("sym_ceiling_light", "sym_switch"),
+    "balcony":        ("wall_sconce_outdoor",),
+    "sitout":         ("wall_sconce_outdoor",),
+}
+CEILING = {"sym_ceiling_light", "sym_ceiling_fan", "sym_pendant",
+           "sym_recessed_light", "sym_smoke"}
+AT_DOOR = {"sym_switch"}
+WET_POINT = {"sym_water_supply", "sym_drain", "sym_water_heater",
+             "sym_washer_hookup", "sym_gas_line"}
+
+
+def place_symbols(plan, *, catalog_has=None) -> int:
+    """Place electrical and plumbing symbols. Returns how many were placed.
+
+    Deliberately simple: these are annotations on a drawing, not objects that
+    can collide. A ceiling point goes at the room's centroid; a switch sits
+    inside the room beside its door; an outlet and a wet point go on a wall.
+    """
+    from shapely.geometry import LineString, Point, Polygon
+    placed = 0
+    n = len(plan.furniture)
+    walls = {w.id: w for w in plan.walls}
+
+    for room in plan.rooms:
+        want = SYMBOL_RULES.get(room.category or "")
+        if not want or len(room.polygon) < 3:
+            continue
+        poly = Polygon([q.as_tuple() for q in room.polygon])
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if poly.is_empty or poly.area <= 0:
+            continue
+        c = poly.centroid
+        inner = poly.buffer(-350) or poly
+        if inner.is_empty:
+            inner = poly
+
+        # doors of this room, for switch placement
+        doors = []
+        for o in plan.openings:
+            if o.kind == "window":
+                continue
+            w = walls.get(o.wall_id)
+            if w is None:
+                continue
+            pt = LineString([w.start.as_tuple(), w.end.as_tuple()]).interpolate(
+                max(0.0, min(1.0, o.position)), normalized=True)
+            if poly.buffer(250).contains(pt):
+                doors.append(pt)
+
+        # wall points for outlets and wet points, spread around the boundary
+        ring = poly.buffer(-150).exterior if not poly.buffer(-150).is_empty else poly.exterior
+        spread = [ring.interpolate(f, normalized=True) for f in (0.12, 0.38, 0.62, 0.88)]
+        si = 0
+        for item in want:
+            if catalog_has is not None and not catalog_has(item):
+                continue
+            if item in CEILING:
+                x, y = c.x, c.y
+            elif item in AT_DOOR and doors:
+                d = doors[0]
+                near = inner.exterior.interpolate(
+                    inner.exterior.project(d), normalized=False) \
+                    if not inner.is_empty else d
+                x, y = near.x, near.y
+            else:
+                pt = spread[si % len(spread)]
+                si += 1
+                x, y = pt.x, pt.y
+            plan.furniture.append(Furniture(
+                id=f"sym{n}", catalog_id=item, position=P(round(x), round(y)),
+                rotation=0.0, width=150, depth=150, height=0, room_id=room.id))
+            n += 1
+            placed += 1
+    return placed
