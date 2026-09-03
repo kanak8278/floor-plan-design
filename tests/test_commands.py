@@ -589,3 +589,83 @@ def test_the_generated_catalogue_explains_the_difference():
     text = catalogue(SYMBOLIC)
     assert "18-type taxonomy" in text
     assert "floor-rendering bucket" in text
+
+
+# --------------------------------------------------------------------------
+# wall moves and the wall graph
+# --------------------------------------------------------------------------
+
+def test_KNOWN_BUG_moving_a_wall_outward_destroys_every_room():
+    """A wall move relocates one wall's endpoints and nothing else.
+
+    Walls are joined at shared vertices, so moving one away from its
+    neighbours opens the corners, the ring stops being a closed face, and
+    every room on the storey loses its identity, name and category. The
+    command still reports success.
+
+    Found by `tests/probe_agent.py`: the agent kept refusing later requests
+    with "five of the seven rooms are bounded by only one or two walls...
+    they've lost their names and categories", which was true and was our
+    fault, not its confusion.
+
+    This test asserts the CURRENT WRONG BEHAVIOUR so the eventual fix has
+    something to flip. A graph-aware move -- dragging connected endpoints
+    along -- is the fix, and it is the "IR mutation layer mirroring
+    project.ts" that `loop.py` already notes does not exist.
+    """
+    doc = box_doc()
+    doc.apply(Command(op="add_wall", params={
+        "wall_id": "w4", "start": {"x": 3000, "y": 0},
+        "end": {"x": 3000, "y": 4000}}))
+    rooms = doc.design.active.rooms
+    assert len(rooms) == 2
+    for r, name in zip(rooms, ("Master Bedroom", "Living Room")):
+        doc.apply(Command(op="update_room",
+                          params={"room_id": r.id, "name": name}))
+
+    # "south" is away from the box, because w0 lies along y = 0.
+    res = doc.apply(Command(op="move_wall_parallel", source="agent", params={
+        "wall_id": "w0", "direction": "south", "distance_mm": 300}))
+
+    assert res.ok, "the command reports success"
+    assert doc.design.active.rooms == [], \
+        "CURRENT BEHAVIOUR: every face is destroyed"
+    # The damage is at least reported, so the chat can say so.
+    assert sorted(res.rooms_gone) == ["Living Room", "Master Bedroom"]
+
+
+def test_moving_a_wall_inward_happens_to_survive():
+    """Not a guarantee -- an accident of geometry worth recording.
+
+    The perpendicular walls still span past the moved wall, so GEOS nodes the
+    crossings and the faces close anyway. Any plan where the neighbours do not
+    overrun the moved wall loses its rooms exactly as above, which is why the
+    inward case must not be mistaken for the operation being safe.
+    """
+    doc = box_doc()
+    doc.apply(Command(op="add_wall", params={
+        "wall_id": "w4", "start": {"x": 3000, "y": 0},
+        "end": {"x": 3000, "y": 4000}}))
+    for r, name in zip(doc.design.active.rooms, ("A", "B")):
+        doc.apply(Command(op="update_room",
+                          params={"room_id": r.id, "name": name}))
+
+    res = doc.apply(Command(op="move_wall_parallel", source="agent", params={
+        "wall_id": "w0", "direction": "north", "distance_mm": 300}))
+    assert res.ok
+    assert len(doc.design.active.rooms) == 2
+    assert sorted(r.name for r in doc.design.active.rooms) == ["A", "B"]
+    assert res.rooms_gone == []
+
+
+def test_a_wall_move_still_reports_what_it_destroyed():
+    """Whatever else is wrong, the user must be told. `rooms_gone` is what
+    the chat turns into "Master Bedroom no longer exists"."""
+    doc = box_doc()
+    rid = doc.design.active.rooms[0].id
+    doc.apply(Command(op="update_room",
+                      params={"room_id": rid, "name": "Hall"}))
+    res = doc.apply(Command(op="move_wall_parallel", source="agent", params={
+        "wall_id": "w0", "direction": "south", "distance_mm": 500}))
+    assert res.ok
+    assert "Hall" in res.rooms_gone

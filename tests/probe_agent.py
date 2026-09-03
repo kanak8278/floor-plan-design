@@ -194,12 +194,31 @@ def probe_move_wall() -> Probe:
         return (f"Move wall {w.id} 300 mm north. Do not change anything else.")
 
     def expect(before, after):
+        """"Did a wall move" is not enough, and the first version of this
+        probe passed while the document was being wrecked.
+
+        A wall move relocates one wall's endpoints and leaves its neighbours
+        behind, so the ring can stop being a closed face and every room on the
+        storey loses its identity. The probe has to check that the rooms
+        survived, or it reports success on the most destructive operation in
+        the vocabulary. See `test_KNOWN_BUG_moving_a_wall_outward_destroys_
+        every_room`.
+        """
         bw = {w.id: (w.start.as_tuple(), w.end.as_tuple())
               for w in _walls(before)}
         moved = [w.id for w in _walls(after)
                  if w.id in bw and (w.start.as_tuple(), w.end.as_tuple()) != bw[w.id]]
-        return (bool(moved), f"moved {moved or 'nothing'}")
-    return Probe("move/wall", ask, expect)
+        rb, ra = len(_rooms(before)), len(_rooms(after))
+        nb = sum(1 for r in _rooms(before) if r.name)
+        na = sum(1 for r in _rooms(after) if r.name)
+        if not moved:
+            return (False, "moved nothing")
+        if ra < rb or na < nb:
+            return (False, f"moved {moved} BUT rooms {rb} -> {ra}, "
+                           f"named {nb} -> {na} — the wall graph tore")
+        return (True, f"moved {moved}, rooms and names intact")
+    return Probe("move/wall", ask, expect,
+                 "checks the graph survived, not just that a wall moved")
 
 
 def probe_move_opening() -> Probe:
@@ -481,6 +500,13 @@ def main(argv=None) -> int:
     ap.add_argument("--fresh-conversation", action="store_true",
                     help="a new transcript per probe, isolating them from "
                          "each other at the cost of losing cache hits")
+    ap.add_argument("--fresh-document", action="store_true",
+                    help="regenerate the plan before every probe. Without "
+                         "this, one destructive probe poisons every later one "
+                         "-- which is realistic but makes attribution hard: "
+                         "the first run had 8 refusals, most of them the "
+                         "agent correctly declining to work on a document "
+                         "that an earlier wall move had already wrecked")
     args = ap.parse_args(argv)
 
     if not (os.environ.get("ANTHROPIC_API_KEY")
@@ -524,6 +550,10 @@ def main(argv=None) -> int:
         for probe in probes:
             if args.fresh_conversation:
                 transcript = []
+            if args.fresh_document:
+                fresh, _ = generate_plan(example, args.time_limit)
+                if fresh is not None:
+                    doc = Document.from_plan(fresh, name=eid)
             r = run_probe(doc, transcript, probe, eid)
             runs.append(r)
             mark = {"pass": "ok  ", "fail": "FAIL", "refused": "refd",
