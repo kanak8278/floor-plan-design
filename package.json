@@ -1,0 +1,7 @@
+{
+  "name": "fpeval-harness",
+  "private": true,
+  "type": "module",
+  "description": "Browser-driving + TS verification harness for the OpenPlan3D fork",
+  "devDependencies": { "playwright": "^1.62.1" }
+}

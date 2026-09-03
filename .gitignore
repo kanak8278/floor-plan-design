@@ -7,3 +7,4 @@ out/
 data/ResPlan.pkl
 vendor/openPlan3D/node_modules/
 vendor/openPlan3D/.svelte-kit/
+node_modules/
