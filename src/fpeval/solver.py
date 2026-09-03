@@ -90,11 +90,23 @@ class LayoutSpec:
     programme: list[RoomReq]
     required_adjacency: list[tuple[str, str]] = field(default_factory=list)
     forbidden_adjacency: list[tuple[str, str]] = field(default_factory=list)
+    # Signed preferences from the topology matrix: +1 required ... -1 forbidden.
+    # Binary pairs cannot say "mildly discouraged", which is most of the table.
+    soft_adjacency: list[tuple[str, str, float]] = field(default_factory=list)
     entrance_room: str | None = None          # default: RoomReq.is_entrance
     # objective weights
     w_area: float = 1.0
     w_aspect: float = 0.35
     w_vastu: float = 0.35
+    # Spatial hierarchy. Measured on 400 real ResPlan plans, the living room
+    # is the most integrated space in 97% and carries 2.53x the plan's average
+    # integration; our own output managed 3.3% and 1.01x, i.e. no hierarchy at
+    # all. The topology surrogate had no relational term whatsoever -- only
+    # per-room area, width, aspect, window and Vastu -- so nothing ever
+    # preferred a hub over a chain.
+    w_hub: float = 1.0        # reward the public core touching many rooms
+    w_private: float = 1.0    # penalise a private room acting as a corridor
+    w_soft_adj: float = 1.0   # weighted topology preferences
     # limits
     max_aspect_hard: float = 4.0
     time_limit_s: float = 8.0
@@ -366,7 +378,8 @@ def _g(mm: float, up: bool = True) -> int:
 def _score_nominal(rects, reqs: Sequence[RoomReq], targets: Sequence[float],
                    rect: tuple[float, float, float, float], alw: int, ent: int,
                    north_deg: float, spec: LayoutSpec,
-                   req_adj: list[tuple[int, int]]) -> float:
+                   req_adj: list[tuple[int, int]],
+                   soft_adj: list[tuple[int, int, float]] | None = None) -> float:
     """Cheap surrogate for the CP-SAT objective, used to prefilter topologies.
 
     Worth the 400 samples: CP-SAT on a hopeless topology burns the whole time
@@ -410,6 +423,39 @@ def _score_nominal(rects, reqs: Sequence[RoomReq], targets: Sequence[float],
     for i, j in req_adj:
         if _touching(rects[i], rects[j], DOOR_W + 2 * JAMB) is None:
             pen += 2500.0
+
+    # ---- spatial hierarchy ------------------------------------------------
+    # Degree in the *structural* adjacency graph is a cheap surrogate for
+    # integration: a room that physically touches many others can be doored to
+    # many others, which is what makes it a configurational core. Computing real
+    # integration here would need the door graph, and the door graph is chosen
+    # after this ranking.
+    n = len(reqs)
+    door_gap = DOOR_W + 2 * JAMB
+    deg = [0] * n
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _touching(rects[i], rects[j], door_gap) is not None:
+                deg[i] += 1
+                deg[j] += 1
+
+    for i, r in enumerate(reqs):
+        if r.category in ("living", "dining", "foyer"):
+            # Reward the public core for being reachable from many rooms.
+            pen -= spec.w_hub * 900.0 * deg[i] * (1.6 if r.category == "living" else 1.0)
+        elif r.category in ("bedroom", "master_bedroom", "study"):
+            # A private room touching more than two others will end up carrying
+            # traffic. Two is enough: one to circulation, one to its own bath.
+            pen += spec.w_private * 1400.0 * max(0, deg[i] - 2)
+
+    for i, j, w in (soft_adj or ()):
+        touching = _touching(rects[i], rects[j], door_gap) is not None
+        # A satisfied positive preference is rewarded; an unsatisfied one is
+        # charged half as much, so a preference nudges without dominating.
+        if w > 0:
+            pen -= spec.w_soft_adj * 800.0 * w * (1.0 if touching else -0.5)
+        elif touching:
+            pen -= spec.w_soft_adj * 800.0 * w        # w < 0 -> a charge
     return pen
 
 
@@ -565,44 +611,122 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
                     reqs: Sequence[RoomReq], nominal: dict[int, tuple],
                     required: set[frozenset], forbidden: set[frozenset]
                     ) -> list[tuple[int, int, str]] | None:
-    """Prim from the entrance over penalised structural edges -> door set.
+    """Hub assignment, not a minimum spanning tree.
 
-    Rooted at the entrance, so every room is reachable from the front door by
-    construction; the door-width constraints above then keep it true.
+    A minimum spanning tree over edge costs was the wrong objective and it is
+    worth recording why. Prim minimises the TOTAL cost, so on base-01 it chose
+    living -> bedroom1 -> hall -> bedroom3 -> bathroom at a cost of 2, which is
+    cheaper than any hub -- and which makes you walk through two bedrooms to
+    reach the only toilet. Circulation wants a STAR: everything hangs off a
+    public spine, and private rooms are leaves.
 
-    Returns None when the entrance cannot reach every room without an
-    NBC-forbidden door. That is a property of the topology, not of the
-    dimensions, so the caller should move to the next candidate rather than
-    emit an illegal plan.
+    Measured consequence of the MST version, against 400 real ResPlan plans:
+    the living room was the most integrated space in 3.3% of our plans versus
+    97% of real ones.
+
+    Algorithm:
+      1. spine  -- connect the circulation rooms (living / dining / foyer /
+         stair) into a tree among themselves;
+      2. leaves -- attach every other room to an adjacent circulation room,
+         cheapest first;
+      3. baths  -- a bathroom with no circulation neighbour may attach to one
+         bedroom (an en-suite), but never become a through-route;
+      4. give up -- if a room can reach neither circulation nor a legal host,
+         the TOPOLOGY is wrong; return None so the caller tries the next.
+
+    Returns None rather than emitting a plan that routes traffic through a
+    bedroom.
     """
+    CIRC = {"living", "dining", "foyer", "stair", "passage"}
+    PRIV = {"bedroom", "master_bedroom", "study"}
+
     adj: dict[int, list[tuple[int, int, str]]] = {i: [] for i in range(n)}
     for (i, j), ax in pairs.items():
         key = frozenset((reqs[i].category, reqs[j].category))
         if key in NBC_FORBIDDEN:
-            continue                    # code prohibition, not a penalty
-        pen = _EDGE_PEN.get(key, _EDGE_PEN_DEFAULT)
+            continue
         ids = frozenset((reqs[i].id, reqs[j].id))
+        if ids in forbidden:
+            continue                     # a hard prohibition, not a cost
+        pen = _EDGE_PEN.get(key, _EDGE_PEN_DEFAULT)
         if ids in required:
             pen = -1000
-        if ids in forbidden:
-            pen += 5000
         if _touching(nominal[i], nominal[j], 1.0) is None:
-            pen += 300               # structurally possible but must be forced
+            pen += 300
         adj[i].append((pen, j, ax))
         adj[j].append((pen, i, ax))
-    seen = {ent}
+
+    circ = [i for i in range(n) if reqs[i].category in CIRC]
+    if ent not in circ:
+        circ.append(ent)                 # the entrance is circulation by role
+    circ_set = set(circ)
     edges: list[tuple[int, int, str]] = []
-    frontier = [(p, ent, j, ax) for p, j, ax in adj[ent]]
-    while len(seen) < n and frontier:
+
+    # 1. spine over circulation, grown from the entrance
+    seen = {ent}
+    frontier = [(p, ent, j, ax) for p, j, ax in adj[ent] if j in circ_set]
+    while frontier:
         frontier.sort()
         p, u, v, ax = frontier.pop(0)
         if v in seen:
             continue
         seen.add(v)
         edges.append((min(u, v), max(u, v), ax))
-        frontier.extend((q, v, k, a2) for q, k, a2 in adj[v] if k not in seen)
+        frontier.extend((q, v, k, a2) for q, k, a2 in adj[v]
+                        if k in circ_set and k not in seen)
+    if len(seen) < len(circ_set):
+        return None                      # circulation itself is disconnected
+
+    # 2. every remaining room hangs off circulation
+    for i in range(n):
+        if i in seen:
+            continue
+        hosts = [(p, j, ax) for p, j, ax in adj[i] if j in seen and j in circ_set]
+        if hosts:
+            hosts.sort()
+            p, j, ax = hosts[0]
+            seen.add(i)
+            edges.append((min(i, j), max(i, j), ax))
+
+    # 3. an en-suite bathroom may hang off exactly one bedroom
+    for i in range(n):
+        if i in seen or reqs[i].category != "bathroom":
+            continue
+        beds = [(p, j, ax) for p, j, ax in adj[i]
+                if reqs[j].category in PRIV and j in seen]
+        if beds:
+            beds.sort()
+            p, j, ax = beds[0]
+            seen.add(i)
+            edges.append((min(i, j), max(i, j), ax))
+
+    # 4. fallback: a SERVICE room with no circulation neighbour may hang off any
+    #    already-connected room, provided that host does not thereby become a
+    #    through-route. Without this tier the stricter rule simply rejected
+    #    topologies the MST version had accepted (vastu-01 and base-05 both went
+    #    infeasible), which trades one failure for another.
+    SERVICE = {"bathroom", "store", "utility", "shaft", "pooja"}
+    degree: dict[int, int] = {}
+    for a_, b_, _ax in edges:
+        degree[a_] = degree.get(a_, 0) + 1
+        degree[b_] = degree.get(b_, 0) + 1
+    for i in range(n):
+        if i in seen or reqs[i].category not in SERVICE:
+            continue
+        hosts = [(p, j, ax) for p, j, ax in adj[i] if j in seen
+                 and not (reqs[j].category in PRIV and degree.get(j, 0) >= 2)]
+        if hosts:
+            hosts.sort()
+            p, j, ax = hosts[0]
+            seen.add(i)
+            degree[j] = degree.get(j, 0) + 1
+            edges.append((min(i, j), max(i, j), ax))
+
+    # anything still stranded means the topology cannot be doored legally
     if len(seen) < n:
         return None
+
+    # required pairs the assignment did not already create
     for (i, j), ax in pairs.items():
         if frozenset((reqs[i].id, reqs[j].id)) in required:
             e = (min(i, j), max(i, j), ax)
@@ -862,6 +986,8 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
     id_to_i = {r.id: i for i, r in enumerate(reqs)}
     req_adj = [(id_to_i[a], id_to_i[b]) for a, b in spec.required_adjacency
                if a in id_to_i and b in id_to_i]
+    soft_adj = [(id_to_i[a], id_to_i[b], w) for a, b, w in spec.soft_adjacency
+                if a in id_to_i and b in id_to_i]
 
     # 3. candidate topologies: sample cheaply, keep the best few
     reuse = None
@@ -888,7 +1014,7 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             seen_sig.add(sig)
             nom, _cv = _nominal(nodes, root, rect_f, weights)
             sc = _score_nominal(nom, reqs, targets, rect_f, alw_mm, ent,
-                                st.north_deg, spec, req_adj)
+                                st.north_deg, spec, req_adj, soft_adj)
             cands.append((sc, nodes, root, order))
         cands.sort(key=lambda c: c[0])
         cands = cands[:max(1, spec.max_topologies)]

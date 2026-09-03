@@ -71,6 +71,7 @@ class Result:
     solve_ms: int = 0
     n_furniture: int = 0
     typology: str = ""
+    scenario: Any = None
     furnish_drops: int = 0
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
@@ -191,16 +192,22 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         stmt = compute_envelope(w_ft, d_ft,
                                 road_facing=facing, profile=prof, programme=prog)
         _rescale_to_budget(prog, stmt)
-        from .bridge import RELAXED_MAX_ASPECT, typology_adjacency
-        from . import typology as TY
+        from .bridge import RELAXED_MAX_ASPECT
+        from . import topology as TP
         beds = sum(1 for r in prog if r.category in ("bedroom", "master_bedroom"))
-        kind = TY.infer(site_kind=("apartment_unit" if is_unit else "plot"),
+        # topology.py supersedes the coarser typology table: 10 scenarios keyed
+        # on typology x size band, with a signed preference matrix rather than
+        # binary pairs.
+        sc = TP.resolve(site_kind=("apartment_unit" if is_unit else "plot"),
                         plot_sqft=(None if is_unit else plot_sqft),
+                        carpet_sqft=(sum(v for k, v in (t.area_quote_sqft or {}).items()
+                                         if "carpet" in k) or None),
                         storeys=int(t.storeys or 1), bedrooms=beds,
                         kitchens=sum(1 for r in prog if r.category == "kitchen"),
                         has_two_living=sum(1 for r in prog if r.category == "living") >= 2)
-        req_adj, forb_adj = typology_adjacency(prog, kind)
-        res.typology = kind
+        req_adj, forb_adj, soft_adj = TP.solver_pairs(prog, sc)
+        res.typology = sc.key
+        res.scenario = sc
         sr = solve_layout(
             w_ft, d_ft,
             LayoutSpec(programme=prog,
@@ -208,6 +215,7 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                        max_aspect_hard=(RELAXED_MAX_ASPECT if relaxed else 2.8),
                        required_adjacency=req_adj,
                        forbidden_adjacency=forb_adj,
+                       soft_adjacency=soft_adj,
                        time_limit_s=time_limit_s),
             road_facing=facing, profile=prof,
             plan_id=f"{example.id}-{track}")
@@ -247,7 +255,7 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
 
     res.plan = plan
     res.n_rooms = len(plan.rooms)
-    brief = {"typology": res.typology,
+    brief = {"scenario": res.typology,
              "site_kind": "apartment_unit" if is_unit else "plot",
              "plot_area_sqft": plot_sqft or None,
              "habitable_floors": int(t.storeys or 1)}
