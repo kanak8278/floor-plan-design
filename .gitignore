@@ -10,3 +10,7 @@ vendor/openPlan3D/.svelte-kit/
 node_modules/
 corpus/out/
 corpus/india/raw/
+
+# Generated plan data written into the served directory by scripts/build_*.py.
+# It lived in git for several commits (~7 MB of superseded blobs) before this.
+vendor/openPlan3D/static/fpeval/*.json
