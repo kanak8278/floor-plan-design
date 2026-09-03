@@ -10,3 +10,4 @@ vendor/openPlan3D/.svelte-kit/
 node_modules/
 corpus/out/
 corpus/india/raw/
+tests/js/.generated/

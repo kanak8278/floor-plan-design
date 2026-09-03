@@ -30,6 +30,13 @@ export interface Room {
   roomType?: RoomCategory;
   /** Custom label position offset from centroid (in world units) */
   labelOffset?: Point;
+  /**
+   * A point inside the room, recorded when it was first named. This is what
+   * carries the room's identity across geometry edits — the wall-id set does
+   * not, because splitting or adding a wall changes it. See
+   * `$lib/utils/roomIdentity`.
+   */
+  anchor?: Point;
 }
 
 export interface Door {

@@ -1,8 +1,9 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
+  interface GalleryProject { id: string; _meta: { bedrooms: number; area_m2: number; rooms: number; walls: number; openings: number } }
   let status = 'Seeding localStorage…';
   let ok = false;
-  let projects = [];
+  let projects: GalleryProject[] = [];
   onMount(async () => {
     const KEY = 'floorplan_projects';
     try {

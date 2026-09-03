@@ -545,6 +545,14 @@ export function updateRoom(id: string, updates: Partial<{ name: string; floorTex
     let r = f.rooms.find((r) => r.id === id);
     if (r) {
       Object.assign(r, updates);
+      // Backfill identity for rooms saved before anchors existed. Without this
+      // a room named in an older session keeps matching by wall-id set, and
+      // loses its name the first time a wall is split. See
+      // `$lib/utils/roomIdentity`.
+      if (!r.anchor) {
+        const live = get(detectedRoomsStore).find((d) => d.id === id);
+        if (live?.anchor) r.anchor = live.anchor;
+      }
     } else {
       // Room not in floor.rooms yet (dynamically detected) — add it so changes persist on save
       const detected = get(detectedRoomsStore).find((r) => r.id === id);
