@@ -1280,6 +1280,113 @@ def check_standards(ctx: _Ctx) -> list[Finding]:
     return out
 
 
+
+# ----------------------------------------------------------- brief conformance
+# The BRIEF family answers "did we build what was asked for", as distinct from
+# NBC ("is it legal") and DESIGN ("is it a good house"). It exists because these
+# gaps were previously visible only as a suite score: 22 adjacency requests were
+# quietly unmet with nothing in the plan's own findings to say so, which means
+# neither the user nor the repair loop could see them.
+#
+# Severity follows how the brief said it. An explicit request -- "a balcony off
+# the master bedroom" -- is an error when unmet: the client asked, we did not
+# deliver. A preference the brief merely implied is a warning.
+def check_brief(ctx: _Ctx) -> list[Finding]:
+    req = ctx.brief.get("requirements") or {}
+    if not req:
+        return out_empty()
+    out: list[Finding] = []
+    a = _adj(ctx)
+    cat_of = {r.id: (r.category or "") for r in ctx.rooms}
+    names = {r.id: r.name for r in ctx.rooms}
+    by_cat: dict[str, list[str]] = {}
+    for rid, c in cat_of.items():
+        by_cat.setdefault(c, []).append(rid)
+
+    def _ids(cat: str) -> list[str]:
+        ids = list(by_cat.get(cat, []))
+        # A brief saying "master bedroom" is satisfied by whichever bedroom the
+        # plan made the master; if none is categorised so, fall back to bedrooms.
+        if not ids and cat == "master_bedroom":
+            ids = list(by_cat.get("bedroom", []))
+        return ids
+
+    # ---- rooms the brief asked for -------------------------------------
+    for cat, want in (req.get("rooms") or {}).items():
+        got = len(_ids(cat))
+        if got < int(want):
+            out.append(Finding(
+                "BRIEF.ROOM_MISSING", "error", 1.0,
+                f"the brief asks for {want} {cat.replace('_', ' ')}(s); the plan "
+                f"has {got}", _ids(cat)))
+
+    # ---- adjacency the brief asked for ---------------------------------
+    for pair in (req.get("adjacent") or []):
+        ca, cb = pair[0], pair[1]
+        xs, ys = _ids(ca), _ids(cb)
+        if not xs or not ys:
+            continue                      # the missing-room finding covers it
+        if not any(y in a.get(x, ()) for x in xs for y in ys):
+            out.append(Finding(
+                "BRIEF.ADJACENCY_UNMET", "error", 0.9,
+                f"the brief asks for the {ca.replace('_', ' ')} to open off the "
+                f"{cb.replace('_', ' ')}; there is no door between them",
+                xs[:2] + ys[:2]))
+
+    for pair in (req.get("not_adjacent") or []):
+        ca, cb = pair[0], pair[1]
+        hit = next(((x, y) for x in _ids(ca) for y in _ids(cb)
+                    if y in a.get(x, ())), None)
+        if hit:
+            out.append(Finding(
+                "BRIEF.FORBIDDEN_ADJACENCY", "error", 0.9,
+                f"the brief asks for no door between the {ca.replace('_', ' ')} "
+                f"and the {cb.replace('_', ' ')}, but {names.get(hit[0], hit[0])} "
+                f"opens into {names.get(hit[1], hit[1])}", list(hit)))
+
+    # ---- items, and which room they belong in ---------------------------
+    placed = {f.catalog_id for f in getattr(ctx.plan, "furniture", None) or []}
+    for cid in (req.get("must_place") or []):
+        if cid not in placed:
+            out.append(Finding(
+                "BRIEF.ITEM_MISSING", "warn", 0.6,
+                f"the brief asks for '{cid}' and nothing was placed", []))
+
+    for cid, room_cat in (req.get("place_in") or {}).items():
+        hosts = set(_ids(room_cat))
+        items = [f for f in (getattr(ctx.plan, "furniture", None) or [])
+                 if f.catalog_id == cid]
+        if not items:
+            continue                      # the missing-item finding covers it
+        if not any(f.room_id in hosts for f in items):
+            where = sorted({names.get(f.room_id, str(f.room_id)) for f in items})
+            out.append(Finding(
+                "BRIEF.ITEM_MISPLACED", "warn", 0.6,
+                f"the brief puts '{cid}' in the {room_cat.replace('_', ' ')}; it "
+                f"is in {', '.join(where[:3])} instead", []))
+
+    # ---- vastu zones the brief named ------------------------------------
+    for cat, zone in (req.get("vastu_zones") or {}).items():
+        ids = _ids(cat)
+        if not ids:
+            continue
+        # The VASTU family already scores zones; this only reports that a
+        # SPECIFICALLY REQUESTED one was not honoured, which is a brief failure
+        # rather than a preference.
+        zf = [f for f in ctx.brief.get("_vastu_findings", [])
+              if set(f.element_ids) & set(ids)]
+        if zf:
+            out.append(Finding(
+                "BRIEF.ZONE_UNMET", "warn", 0.7,
+                f"the brief puts the {cat.replace('_', ' ')} in the {zone}; the "
+                f"plan does not place it there", ids[:2]))
+    return out
+
+
+def out_empty() -> list[Finding]:
+    return []
+
+
 def check_bylaws(ctx: _Ctx) -> list[Finding]:
     out: list[Finding] = []
     prof = ctx.profile
@@ -1577,6 +1684,7 @@ def validate(plan: Plan, brief: dict | None = None,
     fs += check_zoning(ctx)
     fs += check_syntax(ctx)
     fs += check_standards(ctx)
+    fs += check_brief(ctx)
     if brief.get("vastu", True):
         _s, vf = vastu_score(plan, profile, ctx)
         fs += vf

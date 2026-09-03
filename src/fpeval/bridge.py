@@ -103,7 +103,10 @@ SERVICE_TARGET_M2 = {
     "sitout": 5.0,
     "patio": 6.0,
     "bathroom": 4.0,   # real median 4.64, p25 3.82
-    "utility": 3.0,
+    # 3.0 was too small: at 2.5 m2 realised, the door swing covered 72% of
+    # the floor and a 600x650 washing machine had nowhere to stand. A utility
+    # that must hold a machine plus access needs ~4 m2.
+    "utility": 4.2,
     "store": 2.5,
     "shaft": 0.6,
     "foyer": 4.0,
@@ -122,6 +125,15 @@ SERVICE_TARGET_CAP_M2 = {
 }
 
 
+SERVICE_FLOOR_M2 = {
+    # What the contents need, so proportional budget scaling cannot shrink a
+    # room below the point where its own furniture stops fitting.
+    "utility": 3.5,    # 600x650 machine + access, measured against door swing
+    "bathroom": 2.8,   # NBC combined bath+WC
+    "kitchen": 5.0,    # NBC
+}
+
+
 def cap_service_targets(prog) -> list[str]:
     """Clamp service-room targets AND set a hard ceiling.
 
@@ -131,6 +143,13 @@ def cap_service_targets(prog) -> list[str]:
     """
     notes = []
     for r in prog:
+        floor = SERVICE_FLOOR_M2.get(r.category)
+        if floor is not None:
+            r.min_area_m2 = max(r.min_area_m2 or 0.0, floor)
+            if r.target_m2 < floor:
+                notes.append(f"{r.id}: target {r.target_m2:.1f} -> {floor:.1f} m² "
+                             "(contents floor)")
+                r.target_m2 = floor
         cap = SERVICE_TARGET_CAP_M2.get(r.category)
         if cap is None:
             continue
@@ -228,15 +247,21 @@ def truth_to_programme(truth: Any, *, relaxed: bool = False
             continue
         for i in range(n):
             rid = key if n == 1 else f"{key}{i+1}"
+            cat = key
             zone = (getattr(truth, "vastu_zones", {}) or {}).get(key) or t.vastu_zone
             # The first bedroom is the master: bigger, and SW under Vastu.
+            cat = key
             if key == "bedroom" and i == 0:
+                # It was given master TREATMENT (bigger target, SW zone) while
+                # keeping category="bedroom", so `master_bedroom` never existed
+                # and every adjacency asking for it failed by construction.
+                cat = "master_bedroom"
                 target = _target_m2("master_bedroom", None)
                 zone = (getattr(truth, "vastu_zones", {}) or {}).get("master_bedroom") or "SW"
             else:
                 target = _target_m2(key, None)
             prog.append(RoomReq(id=rid, name=f"{t.display} {i+1}" if n > 1 else t.display,
-                                category=key, target_m2=target, weight=1.0,
+                                category=cat, target_m2=target, weight=1.0,
                                 vastu_zone=zone, is_entrance=(key == "living" and i == 0)))
     if relaxed:
         _apply_relaxed(prog)

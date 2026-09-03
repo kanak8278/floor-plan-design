@@ -192,7 +192,7 @@ RULES: dict[str, tuple[Spec, ...]] = {
         Spec("fridge", "fridge", "run", align="flush", optional=True,
              min_room_m2=5.5, avoid_window=True, min_gap_to=(("hob", 300),),
              note="at a run end; 1800 tall so it must not stand over a window"),
-        Spec("washer_dryer", "washing_machine", "run", optional=True,
+        Spec("washer_dryer", "washing_machine", "run", optional=True, note="dropped when a utility exists; the utility is where it belongs",
              min_room_m2=9.0, level=1),
     ),
     "bathroom": (
@@ -1369,6 +1369,21 @@ def _bed_for(ctx: _Ctx, spec: Spec) -> Spec:
     return spec
 
 
+# Items a room only hosts when no better room exists. The kitchen and the
+# utility both list the washing machine; when both rooms are present the utility
+# must win, or a brief saying "washing machine in the utility" is silently
+# violated (measured: it landed in the Kitchen on det-02 and det-06).
+DEFERS_TO: dict[str, tuple[tuple[str, str], ...]] = {
+    "kitchen": (("washer_dryer", "utility"),),
+}
+
+
+def _suppressed_items(plan: Plan, room_key: str) -> set[str]:
+    present = {(r.category or "") for r in plan.rooms}
+    return {item for item, better in DEFERS_TO.get(room_key, ())
+            if better in present}
+
+
 def furnish(plan: Plan, policy: dict[str, Any] | None = None,
             seed: int = 0) -> tuple[Plan, FurnishReport]:
     """Place furniture in every furnishable room. Returns a *new* plan.
@@ -1419,6 +1434,17 @@ def furnish(plan: Plan, policy: dict[str, Any] | None = None,
                                             mitre_limit=2.0),
                                   None, 0.0, "locked"))
         drops: list[tuple[Spec, str]] = []
+
+        # Drop items this room only hosts in the absence of a better one.
+        _defer = _suppressed_items(plan, fkey)
+        if _defer:
+            kept = []
+            for sp in specs:
+                if sp.key in _defer:
+                    drops.append((sp, f"deferred to the {DEFERS_TO[fkey][0][1]}"))
+                else:
+                    kept.append(sp)
+            specs = kept
 
         if fkey == "kitchen":
             drops += _furnish_kitchen(ctx, specs, pol, placed)

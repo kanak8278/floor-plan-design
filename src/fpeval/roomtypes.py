@@ -92,7 +92,10 @@ _add(RoomType("bathroom", "Bathroom", "wet", True, True, 2.8, 1200, 2100,
                        "pwd rm", "attached toilet", "common toilet", "handwash",
                        "hand wash", "wash basin"),
               short_aliases=("toi", "wc", "t&b", "bath")))
-_add(RoomType("utility", "Utility", "service", False, True, None, 800, 2100,
+# A utility must hold a 600x650 machine plus ~900 mm of access, so it needs a
+# CONTENTS-driven floor area (3.5 m2), not a wider wall: forcing 1500 mm of
+# width instead made det-01 and det-25 infeasible outright.
+_add(RoomType("utility", "Utility", "service", False, True, 3.5, 1000, 2100,
               (1.5, 8.0), 4.0, "NW", (), wet=True,
               op3d_room_type="utility", floor_texture="ceramic-gray", furnish_key="utility",
               aliases=("utility", "uitility", "utilty", "wash area", "service area")))
