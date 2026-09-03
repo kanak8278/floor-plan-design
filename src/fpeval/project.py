@@ -117,6 +117,65 @@ def to_project(plan: Plan, name: str | None = None) -> dict[str, Any]:
     }
 
 
+
+def _derive_room_polygons(walls: list[Wall], rooms: list[Room]) -> None:
+    """Recover each room's polygon from the wall graph, in place.
+
+    OpenPlan3D's `Project` stores a room as `walls: string[]` and derives the
+    outline on the fly (`detectRooms` + `getRoomPolygon`), so a Project carries no
+    room polygons at all. Reading one back without this step produced rooms with
+    zero vertices, which made the validator report GEO.ROOM_DEGENERATE for every
+    room on a plan it had just called clean -- 9 false errors on the read-back
+    path. Derive them the same way the editor does.
+    """
+    from shapely.geometry import LineString, Point
+    from shapely.ops import polygonize, unary_union
+
+    segs = {w.id: LineString([w.start.as_tuple(), w.end.as_tuple()])
+            for w in walls if w.length > 0}
+    if not segs:
+        return
+    faces = [f for f in polygonize(unary_union(list(segs.values()))) if f.area > 1e4]
+    if not faces:
+        return
+
+    # Prefer the room's own wall set: the face whose boundary is best covered by
+    # those walls. Falls back to centroid containment for rooms whose wall list is
+    # incomplete (OpenPlan3D's chaining fails on ~0.4% of long merged walls).
+    used: set[int] = set()
+    for r in rooms:
+        own = [segs[wid] for wid in r.wall_ids if wid in segs]
+        best, best_score = None, -1.0
+        for i, f in enumerate(faces):
+            if i in used:
+                continue
+            if own:
+                bnd = f.boundary.buffer(30.0)          # 30 mm tolerance
+                covered = sum(l.length for l in own if bnd.covers(l))
+                score = covered / max(f.boundary.length, 1.0)
+            else:
+                score = 0.0
+            if score > best_score:
+                best, best_score = i, score
+        if best is not None and best_score > 0.35:
+            used.add(best)
+            f = faces[best]
+            r.polygon = [P(round(x), round(y)) for x, y in f.exterior.coords[:-1]]
+            if not r.area:
+                r.area = int(round(f.area))
+
+    # Any room still empty: match by area, largest unclaimed face first.
+    leftovers = [i for i in range(len(faces)) if i not in used]
+    empty = [r for r in rooms if len(r.polygon) < 3]
+    for r in empty:
+        if not leftovers:
+            break
+        j = min(leftovers, key=lambda i: abs(faces[i].area - (r.area or 0)))
+        leftovers.remove(j)
+        f = faces[j]
+        r.polygon = [P(round(x), round(y)) for x, y in f.exterior.coords[:-1]]
+
+
 def from_project(proj: dict[str, Any]) -> Plan:
     fl = next((f for f in proj["floors"] if f["id"] == proj.get("activeFloorId")),
               proj["floors"][0])
@@ -173,6 +232,9 @@ def from_project(proj: dict[str, Any]) -> Plan:
                            room_id=f_rooms.get(f["id"]),
                            locked=bool(f.get("locked")))
                  for f in fl.get("furniture", [])]
+
+    # Project has no room polygons; recover them from the wall graph.
+    _derive_room_polygons(walls, rooms)
 
     plot = [P(round(p["x"] * MM_PER_CM), round(p["y"] * MM_PER_CM))
             for p in side.get("plot_polygon_cm", [])]

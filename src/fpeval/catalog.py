@@ -187,7 +187,7 @@ def _parse_entourage(src: str) -> list[dict[str, Any]]:
             "category": f.get("category", "outdoor"),
             "width": int(round(float(f.get("width", 100)) * MM_PER_CM)),
             "aspect": float(f.get("aspect", 1.0)),
-            "path_count": (n + 1) if psrc else 0,
+            "path_count": (n if psrc.rstrip().endswith(",") else n + 1) if psrc else 0,
             "paths_source": re.sub(r"\s+", " ", psrc),
         })
     return out

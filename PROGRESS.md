@@ -65,3 +65,12 @@ One line per verified step. Newest last.
 - 11 examples use REAL verified builder figures (Brigade Lakecrest 1353/873 sqft, the 3BHK+3T+STUDY at 2184/1310, Divyasree Shettigere 1150/785/733 RERA).
 - Thin coverage worth extending later: compound_wall 1, irregular_plot 1, shaft 1, terrace 1, sitout 2, coverage 2, setbacks 2, rwh 2.
 - LLM layer landed: 100% schema conformance on 28 prompts, 96.4% every-field-correct, 0/28 invented a plot size, 6/6 asked on underdetermined, 0/4 faked a plot for an apartment. 19 patch ops with coordinate emission rejected in code, not merely discouraged.
+
+## HTTP API
+
+- Before this there was NO api. The only connection was a one-way file drop: Python wrote `static/fpeval/projects.json`, a Svelte route fetched it into `localStorage['floorplan_projects']`, and `/editor?id=X` read localStorage. No read-back path at all.
+- Built `service/app.py` (FastAPI, stateless) + a same-origin SvelteKit proxy at `api/[...path]/+server.ts`, so the browser only ever talks to one host. Stateless on purpose: the document lives in the browser, so there is no server/client desync class of bug and the editor's undo stack stays the single source of history.
+- Endpoints: `GET /api/health`, `GET /api/roomtypes` (the 18-type taxonomy, so the UI never hard-codes a room list), `POST /api/generate`, `POST /api/validate`, `POST /api/render`.
+- Verified: generate 30x40 3BHK -> OPTIMAL in 4.1s, 8 rooms / 11 walls / 8 doors / 7 windows, 48KB SVG, area statement; validate 3ms; render annotated 38KB. All three work through the proxy on :5199 as well as direct on :8099.
+- FOUND AND FIXED a real read-back bug in the process: /api/generate reported 0 errors while /api/validate on the SAME plan reported 9. Cause -- OpenPlan3D's `Project` stores a room as `walls: string[]` and derives the outline on the fly, so it carries no room polygons; `from_project` returned rooms with 0 vertices and the validator flagged GEO.ROOM_DEGENERATE for every one. `from_project` now derives faces from the wall graph the way `detectRooms` does. Generate and validate now agree exactly (0 errors, 7 warnings both sides).
+- Regression: ResPlan round-trip still 400/400 identical on walls, openings, rooms and plot; 99.9% of rooms recover a polygon on read-back.
