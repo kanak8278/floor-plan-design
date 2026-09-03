@@ -27,6 +27,28 @@ from .rules import validate as validate_plan
 PROFILE = CityProfileAdapter(BENGALURU)
 
 
+class _UnitProfile:
+    """A profile for an apartment unit: no setbacks, no coverage cap, no FAR.
+
+    A unit is not a site. There is nothing to set back from, no ground to cover,
+    and no floor-area ratio to respect -- those all belong to the tower, and its
+    developer already satisfied them. Handing the plot profile to a unit would
+    manufacture violations out of rules that do not apply.
+    """
+    name = "apartment_unit"
+
+    def rules_for(self, *, plot_area_sqft: float, width_mm: int,
+                  depth_mm: int):
+        from .envelope import PlotRules
+        return PlotRules(front_mm=0, rear_mm=0, side_left_mm=0, side_right_mm=0,
+                         far=99.0, coverage=1.0, max_floors=1,
+                         profile="apartment_unit", band="unit", verified=False,
+                         rule_text={"note": "unit bounded by its quoted area, not by a site"})
+
+
+_UNIT_PROFILE = _UnitProfile()
+
+
 @dataclass
 class Check:
     name: str
@@ -60,6 +82,40 @@ class Result:
         return sum(c.ok for c in self.checks) / len(self.checks) if self.checks else 0.0
 
 
+# Indian loading factors run ~1.25-1.75 super-built-up over carpet; the internal
+# wall footprint alone is ~12-18% of carpet. Only the latter matters here: we need
+# the gross rectangle the unit occupies, not the share of lobbies it is sold with.
+CARPET_TO_GROSS = 1.15
+# Median aspect of the builder unit plans ingested (Brigade, Prestige, Godrej,
+# Divyasree) -- units are notably deeper than square because towers are slab-form.
+UNIT_ASPECT = 1.45
+
+
+def unit_envelope_ft(truth) -> tuple[float, float] | None:
+    """Apartment unit -> an equivalent rectangle in feet.
+
+    A unit has no plot, so there is nothing to set back from and no FAR to cap.
+    What bounds it is the quoted area. Preferring carpet because it is the figure
+    that actually describes the enclosed space; super-built-up includes a share of
+    corridors and lobbies that are not in this drawing at all.
+    """
+    q = getattr(truth, "area_quote_sqft", {}) or {}
+    carpet = q.get("rera_carpet_sqft") or q.get("carpet_sqft")
+    if carpet:
+        gross = carpet * CARPET_TO_GROSS
+    else:
+        gross_q = q.get("builtup_sqft") or q.get("super_builtup_sqft") or q.get("saleable_sqft")
+        if not gross_q:
+            return None
+        # Back out carpet from a gross quote at the default loading factor, then
+        # re-inflate for walls. Flagged as approximate wherever it is used.
+        gross = gross_q / 1.40 * CARPET_TO_GROSS
+    import math
+    d = math.sqrt(gross * UNIT_ASPECT)
+    w = gross / d
+    return (round(w, 1), round(d, 1))
+
+
 def _rescale_to_budget(prog, stmt) -> None:
     """Replace nominal targets with the envelope's proportional budget.
 
@@ -87,14 +143,16 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                                     "clarification is an extraction behaviour; track A cannot test it"))
             return res
 
-    # ---- apartment units have no plot to lay out ------------------------
-    if (t.site_kind or "plot") == "apartment_unit":
+    # ---- apartment units: solve inside the quoted area, no setbacks/FAR ---
+    is_unit = (t.site_kind or "plot") == "apartment_unit"
+    unit_dims = unit_envelope_ft(t) if is_unit else None
+    if is_unit and unit_dims is None:
         res.status = "skipped"
-        res.checks.append(Check("apartment_no_plot", True,
-                                "unit has no plot; the rectangular solver is plot-driven"))
+        res.checks.append(Check("unit_area_quoted", example.expect == "clarify",
+                                "unit has no quoted area to bound the layout"))
         return res
 
-    if t.plot_width_ft is None or t.plot_depth_ft is None:
+    if not is_unit and (t.plot_width_ft is None or t.plot_depth_ft is None):
         res.status = "skipped"
         res.checks.append(Check("plot_given", example.expect == "clarify",
                                 "no plot dimensions in ground truth"))
@@ -109,17 +167,21 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         return res
 
     facing = (t.road_facing or "n")[0].upper()
+    w_ft, d_ft = (unit_dims if is_unit else (t.plot_width_ft, t.plot_depth_ft))
     t0 = time.time()
     try:
-        stmt = compute_envelope(t.plot_width_ft, t.plot_depth_ft,
-                                road_facing=facing, profile=PROFILE, programme=prog)
+        # A unit is bounded by its quoted area, so give the envelope a profile with
+        # no setbacks and full coverage rather than pretending it sits on a plot.
+        prof = _UNIT_PROFILE if is_unit else PROFILE
+        stmt = compute_envelope(w_ft, d_ft,
+                                road_facing=facing, profile=prof, programme=prog)
         _rescale_to_budget(prog, stmt)
         sr = solve_layout(
-            t.plot_width_ft, t.plot_depth_ft,
+            w_ft, d_ft,
             LayoutSpec(programme=prog,
                        entrance_room=next((r.id for r in prog if r.is_entrance), prog[0].id),
                        time_limit_s=time_limit_s),
-            road_facing=facing, profile=PROFILE,
+            road_facing=facing, profile=prof,
             plan_id=f"{example.id}-{track}")
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"
@@ -144,7 +206,8 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
 
     res.plan = plan
     res.n_rooms = len(plan.rooms)
-    findings = validate_plan(plan, brief=None, profile=BENGALURU)
+    brief = {"site_kind": "apartment_unit"} if is_unit else None
+    findings = validate_plan(plan, brief=brief, profile=BENGALURU)
     errs = [f for f in findings if f.severity == "error"]
     res.n_errors, res.n_warnings = len(errs), len(findings) - len(errs)
 
@@ -170,6 +233,8 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
 
     # ---- bye-law -------------------------------------------------------
     cov = getattr(stmt, "proposed_coverage", None) or getattr(stmt, "coverage", None)
+    if is_unit:
+        cov = None                     # no plot, so coverage is meaningless
     if cov is not None:
         res.coverage = round(float(cov), 3)
         if t.coverage_max:

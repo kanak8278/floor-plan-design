@@ -855,6 +855,19 @@ def check_bylaws(ctx: _Ctx) -> list[Finding]:
     if plot is not None and plot_area_m2 is None:
         plot_area_m2 = plot.area / 1e6
 
+    # An apartment unit is not a site: there is nothing to set back from, no
+    # ground to cover and no FAR to respect -- the tower's developer already
+    # satisfied all three. Applying plot bye-laws to a unit manufactures
+    # violations out of rules that do not apply to it, which is exactly what
+    # happened on the suite's 11 apartment examples (coverage 99.8%, 21% of
+    # footprint "outside the envelope").
+    if str(ctx.brief.get("site_kind", "plot")) == "apartment_unit":
+        out.append(Finding(
+            "BYLAW.UNIT_NOT_A_SITE", "warn", 0.1,
+            "apartment unit: setback, coverage and FAR belong to the tower, "
+            "not to this unit; not checked", []))
+        return out
+
     if plot is None or not ctx.brief.get("site_is_surveyed", bool(ctx.plan.site.setbacks_mm)):
         # Refusing to guess. ResPlan's `land` polygon is a building outline with
         # a thin margin (measured coverage 0.64-0.89, median 0.84, no setback
