@@ -4,3 +4,6 @@ __pycache__/
 tests/js/samples.json
 tests/js/node_modules/
 out/
+data/ResPlan.pkl
+vendor/openPlan3D/node_modules/
+vendor/openPlan3D/.svelte-kit/

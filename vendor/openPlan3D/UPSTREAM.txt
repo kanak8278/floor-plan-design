@@ -1,0 +1,5 @@
+upstream: https://github.com/laanlabs/openPlan3D
+commit: abb5267581d4ca8d4df00f23c94fb55954de9d40
+license: MIT
+vendored: 2026-09-03
+note: .git stripped so this is versioned as our fork. Diff against upstream by re-cloning that commit.

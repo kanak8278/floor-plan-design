@@ -1,0 +1,5 @@
+upstream: https://github.com/m-agour/ResPlan
+commit: e2b78fe069aee1ab1e1828a612743f308e3c32a7
+file: ResPlan.pkl (list of 17000 dicts, shapely MultiPolygons per category)
+size: 246MB -- gitignored, kept on disk
+vendored: 2026-09-03
