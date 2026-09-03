@@ -1191,6 +1191,95 @@ def check_zoning(ctx: _Ctx) -> list[Finding]:
     return out
 
 
+
+# ------------------------------------------------------- dimensional standards
+def check_standards(ctx: _Ctx) -> list[Finding]:
+    """Staircase geometry and light/ventilation, from `standards.py`.
+
+    Neither was checked before. Stairs were emitted with a riser count and never
+    tested against NBC's 190 mm riser cap or 250 mm tread minimum, and no rule
+    looked at glazed area at all -- so a windowless bedroom passed everything
+    except a design-quality warning.
+    """
+    from . import standards as SD
+    out: list[Finding] = []
+    storeys = int(ctx.brief.get("habitable_floors", 1))
+    units = int(ctx.brief.get("dwelling_units", 1))
+    prof = ("apartment" if str(ctx.brief.get("site_kind")) == "apartment_unit"
+            else "multi_family" if units > 1 else "residential")
+    std = SD.STAIRS[prof]
+
+    for st in getattr(ctx.plan, "stairs", None) or []:
+        n = max(int(st.riser_count or 0), 2)
+        going = SD.developed_going_mm(st.depth, st.width, st.stair_type)
+        if going <= 0:
+            continue                     # spiral: angular geometry, not checked
+        r, t, c = SD.stair_geometry(going, n, ctx.plan.storey_height)
+        need = SD.required_going_mm(n, std.tread_min_mm)
+        if r > std.riser_max_mm:
+            out.append(Finding("NBC.STAIR_RISER", "error", 1.0,
+                f"riser {r:.0f} mm exceeds {std.riser_max_mm} mm "
+                f"({n} risers over a {ctx.plan.storey_height} mm storey) — {std.source}",
+                [st.id]))
+        if t < std.tread_min_mm:
+            out.append(Finding("NBC.STAIR_TREAD", "error", 1.0,
+                f"tread {t:.0f} mm below {std.tread_min_mm} mm; a {n}-riser flight "
+                f"needs {need:.0f} mm of going and this {st.stair_type} provides "
+                f"{going:.0f} mm", [st.id]))
+        if not (std.two_r_plus_t[0] <= c <= std.two_r_plus_t[1]):
+            out.append(Finding("NBC.STAIR_COMFORT", "warn", 0.6,
+                f"2R+T is {c:.0f} mm, outside the {std.two_r_plus_t[0]}-"
+                f"{std.two_r_plus_t[1]} mm comfort band "
+                f"(ideal {std.two_r_plus_t_ideal[0]}-{std.two_r_plus_t_ideal[1]})",
+                [st.id]))
+        if st.width < std.width_min_mm:
+            out.append(Finding("NBC.STAIR_WIDTH", "error", 1.0,
+                f"flight width {st.width} mm below {std.width_min_mm} mm for "
+                f"{prof.replace('_', ' ')}", [st.id]))
+        if n > std.risers_per_flight_max and st.stair_type == "straight":
+            out.append(Finding("NBC.STAIR_NO_LANDING", "error", 0.9,
+                f"{n} risers in one straight flight; NBC requires a landing after "
+                f"at most {std.risers_per_flight_max}", [st.id]))
+
+    # ---- light and ventilation ------------------------------------------
+    win_area: dict[str, float] = {}
+    for o in ctx.plan.openings:
+        if o.kind != "window":
+            continue
+        w = ctx.walls.get(o.wall_id)
+        if w is None:
+            continue
+        ln = wall_line(w)
+        pt = ln.interpolate(max(0.0, min(1.0, o.position)), normalized=True)
+        for rid, poly in ctx.polys.items():
+            if poly.buffer(250).contains(pt):
+                win_area[rid] = win_area.get(rid, 0.0) + o.width * max(o.head - o.sill, 0)
+                break
+
+    for r in ctx.rooms:
+        cat = r.category or ""
+        cls = ("kitchen" if cat == "kitchen"
+               else "bathroom" if cat == "bathroom"
+               else "habitable" if cat in SD.HABITABLE_VENT else None)
+        if cls is None:
+            continue
+        v = SD.VENTILATION[cls]
+        floor_m2 = (r.area or 0) / 1e6
+        glazed_m2 = win_area.get(r.id, 0.0) / 1e6
+        need = max(v.window_frac_of_floor * floor_m2, v.min_window_m2)
+        if need <= 0:
+            continue
+        if glazed_m2 + 1e-9 < need:
+            sev = "error" if not v.mechanical_ok else "warn"
+            out.append(Finding(
+                f"NBC.VENTILATION_{cls.upper()}", sev, 0.9,
+                f"{r.name}: {glazed_m2:.2f} m² of window against {need:.2f} m² "
+                f"required for {floor_m2:.1f} m² of floor"
+                + (" (or a mechanical exhaust)" if v.mechanical_ok else "")
+                + f" — {v.source}", [r.id]))
+    return out
+
+
 def check_bylaws(ctx: _Ctx) -> list[Finding]:
     out: list[Finding] = []
     prof = ctx.profile
@@ -1487,6 +1576,7 @@ def validate(plan: Plan, brief: dict | None = None,
     fs += check_bathroom_topology(ctx)
     fs += check_zoning(ctx)
     fs += check_syntax(ctx)
+    fs += check_standards(ctx)
     if brief.get("vastu", True):
         _s, vf = vastu_score(plan, profile, ctx)
         fs += vf
