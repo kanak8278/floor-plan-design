@@ -1,0 +1,103 @@
+{
+  "group": "infeasible, contradictory, bye-law limits",
+  "note": "The most important group. A system that silently returns a bad plan instead of refusing is worse than one that refuses too often. expect_reason must match the solver's constraint groups: area_budget, min_area, min_clear_width, max_aspect_hard, door_width, pinned.",
+  "examples": [
+    {
+      "id": "inf-01",
+      "prompt": "20x30 site, I want a 5BHK with attached bathrooms.",
+      "features": ["plot", "bhk", "attached_bath"],
+      "expect": "infeasible",
+      "expect_reason": "area_budget",
+      "truth": {"site_kind": "plot", "plot_width_ft": 20, "plot_depth_ft": 30,
+                "rooms": {"bedroom": 5}, "attached_bath": 5}
+    },
+    {
+      "id": "inf-02",
+      "prompt": "20x30, 3BHK where every bedroom is at least 12 by 14 feet.",
+      "features": ["plot", "bhk", "coverage"],
+      "expect": "infeasible",
+      "expect_reason": "area_budget",
+      "truth": {"site_kind": "plot", "plot_width_ft": 20, "plot_depth_ft": 30,
+                "rooms": {"bedroom": 3}}
+    },
+    {
+      "id": "inf-03",
+      "prompt": "30x40 site but I want 3000 sq ft of built up area on the ground floor.",
+      "features": ["plot", "coverage", "setbacks"],
+      "expect": "infeasible",
+      "expect_reason": "area_budget",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 1, "coverage_max": 0.75},
+      "source": "authored — 3000 sqft on a 1200 sqft plot at 75% coverage is 3.3x the cap; the refusal must cite coverage"
+    },
+    {
+      "id": "inf-04",
+      "prompt": "30x40, single floor, and I need 4000 sq ft total built up area.",
+      "features": ["plot", "far"],
+      "expect": "infeasible",
+      "expect_reason": "area_budget",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 1, "far_max": 1.75},
+      "source": "authored — FAR 1.75 on 1200 sqft caps total at 2100 sqft regardless of storeys"
+    },
+    {
+      "id": "inf-05",
+      "prompt": "20x30 site, 2BHK, but no setbacks at all, build wall to wall on the boundary.",
+      "features": ["plot", "bhk", "setbacks"],
+      "expect": "infeasible",
+      "expect_reason": "area_budget",
+      "truth": {"site_kind": "plot", "plot_width_ft": 20, "plot_depth_ft": 30,
+                "rooms": {"bedroom": 2}},
+      "source": "authored — zero setbacks is not ours to grant; must be refused with the bye-law cited, not quietly obeyed"
+    },
+    {
+      "id": "inf-06",
+      "prompt": "30x40, 6BHK, all bedrooms attached bath, plus pooja, study, servant room and store, single floor.",
+      "features": ["plot", "bhk", "attached_bath", "pooja", "study", "servant", "store"],
+      "expect": "infeasible",
+      "expect_reason": "area_budget",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 1, "rooms": {"bedroom": 7}}
+    },
+    {
+      "id": "inf-07",
+      "prompt": "20x30, 4 bedrooms, and every room must be minimum 10 feet wide.",
+      "features": ["plot", "bhk"],
+      "expect": "infeasible",
+      "expect_reason": "min_clear_width",
+      "truth": {"site_kind": "plot", "plot_width_ft": 20, "plot_depth_ft": 30,
+                "rooms": {"bedroom": 4}},
+      "source": "authored — 20 ft frontage minus setbacks leaves ~17 ft, so two 10 ft-wide bands cannot sit side by side"
+    },
+    {
+      "id": "inf-08",
+      "prompt": "30x40 site, 3BHK, and please give me a swimming pool and a tennis court in the compound.",
+      "features": ["plot", "bhk", "garden", "contradictory"],
+      "expect": "infeasible",
+      "expect_reason": "area_budget",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}},
+      "source": "authored — a tennis court is 78x36 ft; the plot is 30x40. Refusal must name the space, not attempt a miniature."
+    },
+    {
+      "id": "inf-09",
+      "prompt": "30x40 3BHK. I want zero internal walls, completely open plan, but every bedroom must be fully private and soundproof.",
+      "features": ["plot", "bhk", "contradictory", "hall"],
+      "expect": "infeasible",
+      "expect_reason": "min_area",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}},
+      "source": "authored — self-contradictory brief. The correct response names the contradiction rather than picking a side."
+    },
+    {
+      "id": "inf-10",
+      "prompt": "My site is 15 feet by 20 feet. I need a 3BHK duplex with parking.",
+      "features": ["plot", "bhk", "parking", "multifloor"],
+      "expect": "infeasible",
+      "expect_reason": "area_budget",
+      "truth": {"site_kind": "plot", "plot_width_ft": 15, "plot_depth_ft": 20,
+                "storeys": 2, "rooms": {"bedroom": 3}},
+      "source": "authored — 300 sqft plot; below BBMP's smallest band"
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "group": "multi-floor, stairs, duplex, terrace",
+  "note": "G+1 and G+2 are the norm on Bengaluru plots; BBMP allows stilt+3 at 1200 sqft. Stairs are Stair objects, not rooms. Rental-floor briefs are common and imply a second kitchen, which the plausibility checker must not flag as an error.",
+  "examples": [
+    {
+      "id": "floor-01",
+      "prompt": "30x40 east facing. Ground floor for my family 2BHK, first floor 2BHK to rent out. Separate staircase from outside for the tenants.",
+      "features": ["plot", "bhk", "multifloor", "stairs", "facing"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "east", "storeys": 2,
+                "rooms_min": {"kitchen": 2, "stair": 1}},
+      "source": "authored — two kitchens is correct here; a rule that caps kitchens at one would wrongly reject it"
+    },
+    {
+      "id": "floor-02",
+      "prompt": "30x40, G+2. Ground floor parking and one 1BHK, then 2BHK on each of the upper floors.",
+      "features": ["plot", "multifloor", "stairs", "parking", "far"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 3, "rooms_min": {"parking": 1, "stair": 1},
+                "far_max": 1.75}
+    },
+    {
+      "id": "floor-03",
+      "prompt": "40x60 duplex. Living, dining, kitchen and one guest bedroom downstairs, three bedrooms and a family lounge upstairs.",
+      "features": ["plot", "bhk", "multifloor", "duplex", "stairs", "hall", "dining"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "storeys": 2, "rooms": {"bedroom": 4},
+                "rooms_min": {"living": 2, "dining": 1, "kitchen": 1, "stair": 1}}
+    },
+    {
+      "id": "floor-04",
+      "prompt": "30x50 G+1, 4BHK, and I want an internal open staircase in the living room, not a closed one.",
+      "features": ["plot", "bhk", "multifloor", "stairs", "hall"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "storeys": 2, "rooms": {"bedroom": 4},
+                "rooms_min": {"stair": 1, "living": 1}}
+    },
+    {
+      "id": "floor-05",
+      "prompt": "30x40, G+1, 3BHK, with a dog legged staircase and a small store under the landing.",
+      "features": ["plot", "bhk", "multifloor", "stairs", "store"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 2, "rooms": {"bedroom": 3},
+                "rooms_min": {"stair": 1, "store": 1}}
+    },
+    {
+      "id": "floor-06",
+      "prompt": "40x60, G+1, 3BHK, with an open terrace on the first floor for family gatherings and a small overhead tank room.",
+      "features": ["plot", "bhk", "multifloor", "terrace", "stairs"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "storeys": 2, "rooms": {"bedroom": 3},
+                "rooms_min": {"patio": 1, "stair": 1}}
+    },
+    {
+      "id": "floor-07",
+      "prompt": "50x80, G+2, 5BHK for a joint family. Parents on the ground floor because they cannot climb stairs.",
+      "features": ["plot", "bhk", "multifloor", "stairs", "family"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 50, "plot_depth_ft": 80,
+                "storeys": 3, "rooms": {"bedroom": 5},
+                "rooms_min": {"stair": 1}, "family": "joint family"}
+    },
+    {
+      "id": "floor-08",
+      "prompt": "30x40 site, 3BHK, single floor only. I do not want stairs at all, we are getting older.",
+      "features": ["plot", "bhk", "family"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 1, "rooms": {"bedroom": 3}},
+      "source": "authored — negative requirement: no stair object should be emitted"
+    },
+    {
+      "id": "floor-09",
+      "prompt": "20x30, G+2, one 1BHK per floor, all rented out. Common staircase.",
+      "features": ["plot", "multifloor", "stairs", "far"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 20, "plot_depth_ft": 30,
+                "storeys": 3, "rooms_min": {"stair": 1, "kitchen": 3},
+                "far_max": 1.75}
+    },
+    {
+      "id": "floor-10",
+      "prompt": "30x40, G+1 duplex, 3BHK, staircase in the south-west and a pooja room on the first floor landing facing north-east.",
+      "features": ["plot", "bhk", "multifloor", "stairs", "duplex", "vastu", "pooja"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 2, "rooms": {"bedroom": 3},
+                "rooms_min": {"stair": 1, "pooja": 1}, "vastu_enabled": true,
+                "vastu_zones": {"stair": "SW", "pooja": "NE"}}
+    }
+  ]
+}

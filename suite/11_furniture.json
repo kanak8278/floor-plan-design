@@ -1,0 +1,101 @@
+{
+  "group": "furniture, kitchen layout, irregular plots",
+  "note": "Furniture selection is a closed-enum LLM choice; placement is a solver. must_place uses real OpenPlan3D catalogue ids so anything placed renders in the editor's 2D and 3D views. Kitchen work-triangle and Vastu fire/water separation are the hardest placement cases.",
+  "examples": [
+    {
+      "id": "furn-01",
+      "prompt": "30x40, 3BHK, fully furnished. Beds with wardrobes, sofa and TV in the living, dining table for six.",
+      "features": ["plot", "bhk", "furniture", "hall", "dining"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "rooms_min": {"living": 1, "dining": 1},
+                "must_place": ["bed_queen", "wardrobe", "sofa", "television",
+                               "dining_table", "dining_chair"]}
+    },
+    {
+      "id": "furn-02",
+      "prompt": "40x60, 3BHK, L shaped modular kitchen with the hob on the outer wall and the sink under the window.",
+      "features": ["plot", "bhk", "kitchen_layout", "furniture"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "rooms_min": {"kitchen": 1},
+                "must_place": ["counter", "stove", "sink_k", "fridge"]}
+    },
+    {
+      "id": "furn-03",
+      "prompt": "30x40 east facing, 3BHK, Vastu kitchen: cooking platform in the south-east facing east, sink towards north-east, fridge in the south-west corner.",
+      "features": ["plot", "bhk", "facing", "vastu", "kitchen_layout", "furniture"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "east", "rooms": {"bedroom": 3},
+                "vastu_enabled": true, "vastu_zones": {"kitchen": "SE"},
+                "must_place": ["stove", "sink_k", "fridge", "counter"]},
+      "source": "authored — hob SE, sink NE, minimum 600mm apart (fire/water). The hardest placement constraint in the suite."
+    },
+    {
+      "id": "furn-04",
+      "prompt": "40x60, 3BHK, U shaped kitchen with a breakfast counter, plus dishwasher and built in oven.",
+      "features": ["plot", "bhk", "kitchen_layout", "furniture"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "rooms_min": {"kitchen": 1},
+                "must_place": ["counter", "dishwasher", "oven", "sink_k", "stove"]}
+    },
+    {
+      "id": "furn-05",
+      "prompt": "30x40, 3BHK. Master bedroom with a queen bed, two nightstands, a wardrobe and a dressing table.",
+      "features": ["plot", "bhk", "furniture"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3},
+                "must_place": ["bed_queen", "nightstand", "wardrobe", "dresser"]}
+    },
+    {
+      "id": "furn-06",
+      "prompt": "30x50, 3BHK, kids bedroom with two single beds and a study desk each.",
+      "features": ["plot", "bhk", "furniture", "study", "family"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "rooms": {"bedroom": 3},
+                "must_place": ["bed_twin", "desk", "office_chair"]}
+    },
+    {
+      "id": "furn-07",
+      "prompt": "40x60, 3BHK, living room with an L shaped sofa, coffee table, bookshelf and a ceiling fan in every room.",
+      "features": ["plot", "bhk", "furniture", "hall"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "rooms_min": {"living": 1},
+                "must_place": ["sofa", "coffee_table", "bookshelf", "sym_ceiling_fan"]}
+    },
+    {
+      "id": "furn-08",
+      "prompt": "My site is an irregular shape, roughly 30 feet on the road narrowing to 22 feet at the back, 45 feet deep. 3BHK.",
+      "features": ["plot", "bhk", "irregular_plot"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "rooms": {"bedroom": 3}},
+      "source": "authored — the solver is rectangular-only today, so this is expected to be a KNOWN GAP; the suite records it rather than pretending"
+    },
+    {
+      "id": "furn-09",
+      "prompt": "30x40 3BHK, and mark the electrical points: switches, outlets, ceiling lights and fans in each room.",
+      "features": ["plot", "bhk", "furniture"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3},
+                "must_place": ["sym_outlet", "sym_switch", "sym_ceiling_light",
+                               "sym_ceiling_fan"]},
+      "source": "authored — 2D symbols with height 0; must render in plan but not extrude in 3D"
+    },
+    {
+      "id": "furn-10",
+      "prompt": "40x60, 3BHK, and show the plumbing points: water supply, drains, the geyser in each bathroom and the gas line to the kitchen.",
+      "features": ["plot", "bhk", "furniture", "attached_bath", "kitchen_layout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3},
+                "must_place": ["sym_water_supply", "sym_drain", "sym_water_heater",
+                               "sym_gas_line"]}
+    }
+  ]
+}

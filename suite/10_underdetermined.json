@@ -1,0 +1,94 @@
+{
+  "group": "underdetermined prompts requiring clarification",
+  "note": "The pass condition is ASKING, not guessing. Inventing a 30x40 because it is the most common size is the failure mode being tested. clarify_about names the field that must be queried.",
+  "examples": [
+    {
+      "id": "clar-01",
+      "prompt": "I want to build a house. Can you make a plan?",
+      "features": ["underdetermined"],
+      "expect": "clarify",
+      "clarify_about": ["plot_dimensions", "bedroom_count"],
+      "truth": {}
+    },
+    {
+      "id": "clar-02",
+      "prompt": "Design a 3BHK for me.",
+      "features": ["underdetermined", "bhk"],
+      "expect": "clarify",
+      "clarify_about": ["plot_dimensions"],
+      "truth": {"rooms": {"bedroom": 3}},
+      "source": "authored — bedroom count is given, plot is not. Must not default to 30x40."
+    },
+    {
+      "id": "clar-03",
+      "prompt": "I have a 30x40 site in Bengaluru. What do you suggest?",
+      "features": ["underdetermined", "plot"],
+      "expect": "clarify",
+      "clarify_about": ["bedroom_count"],
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40}
+    },
+    {
+      "id": "clar-04",
+      "prompt": "Vastu compliant house please.",
+      "features": ["underdetermined", "vastu"],
+      "expect": "clarify",
+      "clarify_about": ["plot_dimensions", "bedroom_count", "north_direction"],
+      "truth": {"vastu_enabled": true},
+      "source": "authored — Vastu without a compass bearing is unactionable; north must be asked for"
+    },
+    {
+      "id": "clar-05",
+      "prompt": "Make me a big house with lots of rooms.",
+      "features": ["underdetermined"],
+      "expect": "clarify",
+      "clarify_about": ["plot_dimensions", "bedroom_count"],
+      "truth": {}
+    },
+    {
+      "id": "clar-06",
+      "prompt": "3BHK east facing. Budget is around 40 lakhs.",
+      "features": ["underdetermined", "bhk", "facing", "budget"],
+      "expect": "clarify",
+      "clarify_about": ["plot_dimensions"],
+      "truth": {"rooms": {"bedroom": 3}, "road_facing": "east",
+                "budget_band": "40L"}
+    },
+    {
+      "id": "clar-07",
+      "prompt": "I have a plot. It is a corner site. 3BHK with parking.",
+      "features": ["underdetermined", "corner_plot", "bhk", "parking"],
+      "expect": "clarify",
+      "clarify_about": ["plot_dimensions"],
+      "truth": {"site_kind": "plot", "corner_plot": true, "rooms": {"bedroom": 3},
+                "rooms_min": {"parking": 1}}
+    },
+    {
+      "id": "clar-08",
+      "prompt": "Flat layout for a 2BHK.",
+      "features": ["underdetermined", "apartment_unit", "bhk"],
+      "expect": "clarify",
+      "clarify_about": ["unit_area"],
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 2}},
+      "source": "authored — for a unit the missing bound is the area quote, not a plot size"
+    },
+    {
+      "id": "clar-09",
+      "prompt": "40x60, how many floors can I build?",
+      "features": ["underdetermined", "plot", "multifloor", "far"],
+      "expect": "clarify",
+      "clarify_about": ["bedroom_count"],
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "far_max": 1.75},
+      "source": "authored — the storey question IS answerable from FAR and coverage alone; the programme is what is missing"
+    },
+    {
+      "id": "clar-10",
+      "prompt": "Same as the last plan but bigger.",
+      "features": ["underdetermined"],
+      "expect": "clarify",
+      "clarify_about": ["plot_dimensions", "bedroom_count"],
+      "truth": {},
+      "source": "authored — a reference to prior context that does not exist; must ask rather than hallucinate a previous plan"
+    }
+  ]
+}

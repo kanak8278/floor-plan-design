@@ -1,0 +1,108 @@
+{
+  "group": "apartment units and area quotes",
+  "note": "An apartment unit has NO plot -- inventing one voids every setback, coverage and FAR check, so site_kind must be apartment_unit and plot dims absent. The bound is the quoted area stack. Figures here are taken from real Bengaluru builder plans I ingested.",
+  "examples": [
+    {
+      "id": "apt-01",
+      "prompt": "I am buying a 2BHK flat, 1353 sq ft super built up, 873 sq ft carpet. Can you draw the layout with two bedrooms, two toilets, kitchen, utility and two balconies?",
+      "features": ["apartment_unit", "area_quote", "bhk", "utility", "balcony", "common_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 2},
+                "rooms_min": {"bathroom": 2, "kitchen": 1, "utility": 1, "balcony": 2},
+                "area_quote_sqft": {"super_builtup_sqft": 1353, "carpet_sqft": 873},
+                "storeys": 1, "unit_label": "2BHK 2T"},
+      "source": "Brigade Lakecrest TYPE C18, verified: carpet 873 vs my computed 864 sq ft (1% error)"
+    },
+    {
+      "id": "apt-02",
+      "prompt": "3 BHK plus 3 toilets plus study. Super built up 2184 sq ft, unit carpet 1310 sq ft. Also a pooja, a foyer and one balcony.",
+      "features": ["apartment_unit", "area_quote", "bhk", "study", "pooja", "balcony"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 3},
+                "rooms_min": {"bathroom": 3, "study": 1, "pooja": 1, "foyer": 1, "balcony": 1},
+                "area_quote_sqft": {"super_builtup_sqft": 2184, "carpet_sqft": 1310},
+                "unit_label": "3 BHK + 3 TOILETS + STUDY"},
+      "source": "real unit plan, verified: carpet 1310 vs computed 1300 sq ft (0.8% error)"
+    },
+    {
+      "id": "apt-03",
+      "prompt": "2 BHK, saleable 1150 sq ft, carpet 785, RERA carpet 733. Master bedroom, one more bedroom, two toilets, kitchen with utility, one balcony, living cum dining.",
+      "features": ["apartment_unit", "area_quote", "bhk", "utility", "balcony", "hall", "dining"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 2},
+                "rooms_min": {"bathroom": 2, "kitchen": 1, "utility": 1, "balcony": 1},
+                "area_quote_sqft": {"saleable_sqft": 1150, "carpet_sqft": 785,
+                                    "rera_carpet_sqft": 733}},
+      "source": "Divyasree Shettigere 2BHK, feet-inches-only drawing"
+    },
+    {
+      "id": "apt-04",
+      "prompt": "3BHK flat around 1443 sq ft. Three bedrooms, two toilets, kitchen, foyer and a balcony.",
+      "features": ["apartment_unit", "area_quote", "bhk", "balcony"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 3},
+                "rooms_min": {"bathroom": 2, "kitchen": 1, "foyer": 1, "balcony": 1},
+                "area_quote_sqft": {"super_builtup_sqft": 1443}},
+      "source": "Brigade Belvedere TYPE 3 G"
+    },
+    {
+      "id": "apt-05",
+      "prompt": "Big flat, 5 BHK with maid's unit, 4204 sq ft. Needs five bedrooms, family lounge, formal living, dining, kitchen with utility, and a servant room with toilet.",
+      "features": ["apartment_unit", "area_quote", "bhk", "servant", "hall", "dining", "utility"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 6},
+                "rooms_min": {"living": 2, "dining": 1, "utility": 1, "bathroom": 5},
+                "area_quote_sqft": {"super_builtup_sqft": 4204},
+                "unit_label": "5 BHK + MAID'S UNIT"}
+    },
+    {
+      "id": "apt-06",
+      "prompt": "2 BHK, 1176 sq ft, TYPE A2. Standard layout, two toilets one attached.",
+      "features": ["apartment_unit", "area_quote", "bhk", "attached_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 2},
+                "attached_bath": 1, "rooms_min": {"bathroom": 2},
+                "area_quote_sqft": {"super_builtup_sqft": 1176},
+                "unit_label": "TYPE A2"},
+      "source": "Prestige Golden Grove Tellapur"
+    },
+    {
+      "id": "apt-07",
+      "prompt": "3.5 BHK apartment, 1510 sq ft carpet. Three bedrooms and a study nook, three toilets.",
+      "features": ["apartment_unit", "area_quote", "bhk", "study"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "half_bhk": true,
+                "rooms": {"bedroom": 3}, "rooms_min": {"bathroom": 3, "study": 1},
+                "area_quote_sqft": {"carpet_sqft": 1510}}
+    },
+    {
+      "id": "apt-08",
+      "prompt": "1BHK studio type flat, 529 sq ft carpet. One bedroom, one toilet, open kitchen with the living.",
+      "features": ["apartment_unit", "area_quote", "bhk", "kitchen_layout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 1, "bathroom": 1},
+                "rooms_min": {"kitchen": 1, "living": 1},
+                "area_quote_sqft": {"carpet_sqft": 529}}
+    },
+    {
+      "id": "apt-09",
+      "prompt": "4BHK plus servant plus store plus powder room, about 2650 sq ft carpet. East facing balconies.",
+      "features": ["apartment_unit", "area_quote", "bhk", "servant", "store", "common_bath", "balcony", "facing"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 5},
+                "rooms_min": {"store": 1, "bathroom": 5, "balcony": 1},
+                "road_facing": "east",
+                "area_quote_sqft": {"carpet_sqft": 2650},
+                "unit_label": "4BHK + SR + ST + PDR"}
+    },
+    {
+      "id": "apt-10",
+      "prompt": "My flat is 1223 sq ft. It is a 2BHK. What can be done with the layout? I do not own any land, it is in a tower.",
+      "features": ["apartment_unit", "area_quote", "bhk"],
+      "expect": "optimal",
+      "truth": {"site_kind": "apartment_unit", "rooms": {"bedroom": 2},
+                "area_quote_sqft": {"super_builtup_sqft": 1223}},
+      "source": "authored — explicit 'no land' statement; asserting plot dims stay absent"
+    }
+  ]
+}

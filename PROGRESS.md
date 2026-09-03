@@ -54,3 +54,14 @@ One line per verified step. Newest last.
 
 - ResPlan has NO furniture at all, and generated plans are empty rooms. Furnishing system delegated: LLM selects catalogue IDs (closed enum), a relational placement solver owns coordinates. OpenPlan3D's `roomTemplates.ts` cannot be reused -- it hardcodes offsets assuming a 400x300 room.
 - LLM spec/brief/patch layer still in progress (spec.py, llm.py, brief.py).
+
+## Feature audit and prompt suite
+
+- `FEATURES_AUDIT.md`: full OpenPlan3D inventory from source (137 lines). Corrected three of my own earlier claims: `motorcycle`/`bike` DO exist (Garage category), `fence_gate` DOES exist (Fencing), multi-floor 3D stacking DOES exist (`buildAllFloorsStacked`), and there IS a cutaway mechanism (`setWallsXray`/`toggleWallTransparency`) though not a clipping-plane section. Also found sun-position/time-of-day simulation, relevant for orientation.
+- Catalogue is 189 items across 19 categories, heavily outdoor: Landscaping 57, Outdoor Furniture 13, Paths & Lawns 10, Garden Structures 10, Pool & Spa 8, Garage 8, Fencing 6, plus 8 electrical and 5 plumbing 2D symbols.
+- `src/fpeval/suite.py`: prompt-suite schema with machine-checkable ground truth. 39 closed feature tags; validator rejects unknown tags, unknown room types, missing infeasible reasons, and clarify examples that do not say what to ask.
+- **110 examples authored across 11 groups**, all validating, every feature tag covered: 90 expect a plan, 10 expect INFEASIBLE with a named binding constraint, 10 expect a clarifying question rather than a guess.
+- Ground truth asserts spec recovery, feasibility outcome, programme fit, Vastu zones, and catalogue ids that must be placed -- never geometric similarity to a reference, because there is no single right answer to "3BHK on a 30x40".
+- 11 examples use REAL verified builder figures (Brigade Lakecrest 1353/873 sqft, the 3BHK+3T+STUDY at 2184/1310, Divyasree Shettigere 1150/785/733 RERA).
+- Thin coverage worth extending later: compound_wall 1, irregular_plot 1, shaft 1, terrace 1, sitout 2, coverage 2, setbacks 2, rwh 2.
+- LLM layer landed: 100% schema conformance on 28 prompts, 96.4% every-field-correct, 0/28 invented a plot size, 6/6 asked on underdetermined, 0/4 faked a plot for an apartment. 19 patch ops with coordinate emission rejected in code, not merely discouraged.

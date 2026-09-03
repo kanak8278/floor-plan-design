@@ -1,0 +1,240 @@
+{
+  "group": "baseline plot + BHK",
+  "note": "The canonical plot-based cases everything else builds on. Prompts are written in the voice a Bengaluru homeowner actually uses, including quirks like quoting frontage first and saying 'site' rather than 'plot'.",
+  "examples": [
+    {
+      "id": "base-01",
+      "prompt": "I have a 30x40 east facing site in Bengaluru. Need a 3BHK ground floor house.",
+      "features": [
+        "plot",
+        "bhk",
+        "facing"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 30,
+        "plot_depth_ft": 40,
+        "road_facing": "east",
+        "storeys": 1,
+        "rooms": {
+          "bedroom": 3
+        },
+        "rooms_min": {
+          "living": 1,
+          "kitchen": 1,
+          "bathroom": 1
+        },
+        "coverage_max": 0.75,
+        "far_max": 1.75
+      }
+    },
+    {
+      "id": "base-02",
+      "prompt": "Small budget 2BHK on my 20x30 site. Just the basics, nothing fancy.",
+      "features": [
+        "plot",
+        "bhk",
+        "budget"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 20,
+        "plot_depth_ft": 30,
+        "storeys": 1,
+        "rooms": {
+          "bedroom": 2
+        },
+        "rooms_min": {
+          "living": 1,
+          "kitchen": 1,
+          "bathroom": 1
+        },
+        "coverage_max": 0.75,
+        "budget_band": "economy"
+      }
+    },
+    {
+      "id": "base-03",
+      "prompt": "40 by 60 north facing plot, want a 4 bedroom house on ground floor itself.",
+      "features": [
+        "plot",
+        "bhk",
+        "facing"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 40,
+        "plot_depth_ft": 60,
+        "road_facing": "north",
+        "storeys": 1,
+        "rooms": {
+          "bedroom": 4
+        },
+        "rooms_min": {
+          "living": 1,
+          "kitchen": 1
+        }
+      }
+    },
+    {
+      "id": "base-04",
+      "prompt": "30x50 site. 3BHK where every bedroom has its own attached bathroom.",
+      "features": [
+        "plot",
+        "bhk",
+        "attached_bath"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 30,
+        "plot_depth_ft": 50,
+        "rooms": {
+          "bedroom": 3
+        },
+        "attached_bath": 3,
+        "rooms_min": {
+          "bathroom": 3
+        }
+      }
+    },
+    {
+      "id": "base-05",
+      "prompt": "We are building on a 50x80 corner site off Sarjapur Road. Premium 5BHK, separate formal living and family living.",
+      "features": [
+        "plot",
+        "bhk",
+        "corner_plot",
+        "hall",
+        "budget"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 50,
+        "plot_depth_ft": 80,
+        "corner_plot": true,
+        "rooms": {
+          "bedroom": 5
+        },
+        "rooms_min": {
+          "living": 2
+        },
+        "coverage_max": 0.65,
+        "far_max": 2.25,
+        "budget_band": "premium"
+      }
+    },
+    {
+      "id": "base-06",
+      "prompt": "Just my wife and me. 30x40 site, 2BHK is enough, we want a big living and dining instead of more bedrooms.",
+      "features": [
+        "plot",
+        "bhk",
+        "family",
+        "hall",
+        "dining"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 30,
+        "plot_depth_ft": 40,
+        "rooms": {
+          "bedroom": 2
+        },
+        "rooms_min": {
+          "living": 1,
+          "dining": 1
+        },
+        "family": "couple"
+      }
+    },
+    {
+      "id": "base-07",
+      "prompt": "40x60 plot, G+1 duplex, 3 bedrooms upstairs and living kitchen downstairs.",
+      "features": [
+        "plot",
+        "bhk",
+        "multifloor",
+        "duplex",
+        "stairs"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 40,
+        "plot_depth_ft": 60,
+        "storeys": 2,
+        "rooms": {
+          "bedroom": 3
+        },
+        "rooms_min": {
+          "living": 1,
+          "kitchen": 1,
+          "stair": 1
+        }
+      }
+    },
+    {
+      "id": "base-08",
+      "prompt": "Odd site size, it is 25 feet wide and 40 feet deep. Can we fit a 3BHK?",
+      "features": [
+        "plot",
+        "bhk"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 25,
+        "plot_depth_ft": 40,
+        "rooms": {
+          "bedroom": 3
+        },
+        "coverage_max": 0.75
+      }
+    },
+    {
+      "id": "base-09",
+      "prompt": "West facing 30x40. 3BHK. I know west facing is not ideal so please handle the afternoon sun on the bedrooms.",
+      "features": [
+        "plot",
+        "bhk",
+        "facing"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 30,
+        "plot_depth_ft": 40,
+        "road_facing": "west",
+        "rooms": {
+          "bedroom": 3
+        }
+      }
+    },
+    {
+      "id": "base-10",
+      "prompt": "My site has 60 feet road frontage and is 40 feet deep. 3BHK single floor with a wide front elevation.",
+      "features": [
+        "plot",
+        "bhk",
+        "facing"
+      ],
+      "expect": "optimal",
+      "truth": {
+        "site_kind": "plot",
+        "plot_width_ft": 60,
+        "plot_depth_ft": 40,
+        "storeys": 1,
+        "rooms": {
+          "bedroom": 3
+        }
+      },
+      "source": "authored \u2014 tests that frontage-first phrasing is not silently normalised to 40x60"
+    }
+  ]
+}

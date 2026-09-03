@@ -1,0 +1,97 @@
+{
+  "group": "pooja, study, servant, store, shaft",
+  "note": "Rooms that exist in Indian briefs and not in western datasets. 'SR + ST + PDR' is real builder shorthand for servant room, store and powder room. Shafts are PHE/HVAC risers -- enclosed but never carpet area.",
+  "examples": [
+    {
+      "id": "spec-01",
+      "prompt": "30x40 east facing, 3BHK, with a separate pooja room, not just a shelf in the wall.",
+      "features": ["plot", "bhk", "facing", "pooja"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "east", "rooms": {"bedroom": 3},
+                "rooms_min": {"pooja": 1}}
+    },
+    {
+      "id": "spec-02",
+      "prompt": "40x60, 3BHK plus a study room for me since I work from home. Needs a door I can shut.",
+      "features": ["plot", "bhk", "study"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "rooms_min": {"study": 1},
+                "must_place": ["desk", "office_chair"]}
+    },
+    {
+      "id": "spec-03",
+      "prompt": "50x80 site. 4BHK plus servant room with its own toilet at the back, and a store room.",
+      "features": ["plot", "bhk", "servant", "store", "common_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 50, "plot_depth_ft": 80,
+                "rooms": {"bedroom": 5}, "rooms_min": {"store": 1, "bathroom": 5}},
+      "source": "authored — servant room counts as a bedroom-class space in the programme; 'SR' in builder shorthand"
+    },
+    {
+      "id": "spec-04",
+      "prompt": "This is a 3.5 BHK requirement on a 40x60 site. Three proper bedrooms and a small den we can use as a study or a nursery later.",
+      "features": ["plot", "bhk", "study"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "half_bhk": true, "rooms": {"bedroom": 3},
+                "rooms_min": {"study": 1}},
+      "source": "authored — '3.5 BHK' is a real market label; rounding it to 3 or 4 changes the programme"
+    },
+    {
+      "id": "spec-05",
+      "prompt": "30x40, 3BHK, with a store room under the staircase and a loft over the kitchen.",
+      "features": ["plot", "bhk", "store", "stairs", "multifloor"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 2, "rooms": {"bedroom": 3},
+                "rooms_min": {"store": 1, "stair": 1}}
+    },
+    {
+      "id": "spec-06",
+      "prompt": "40x60, 3BHK. Pooja room in the north-east with a marble floor, and it should not share a wall with a bathroom.",
+      "features": ["plot", "bhk", "pooja", "vastu", "attached_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "rooms_min": {"pooja": 1},
+                "vastu_enabled": true, "vastu_zones": {"pooja": "NE"}},
+      "source": "authored — pooja must not abut a bathroom; a prohibited adjacency, not a zone rule"
+    },
+    {
+      "id": "spec-07",
+      "prompt": "30x50, 3BHK, and a small home office carved out of the living room with a partition, not a full room.",
+      "features": ["plot", "bhk", "study", "hall"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "rooms": {"bedroom": 3}, "rooms_min": {"living": 1}},
+      "source": "authored — a partitioned nook is NOT a study room; the spec must not promote it to one"
+    },
+    {
+      "id": "spec-08",
+      "prompt": "40x60, 4BHK, provide plumbing and AC shafts so the pipes and outdoor units are not on the elevation.",
+      "features": ["plot", "bhk", "shaft"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 4}, "rooms_min": {"shaft": 1}},
+      "source": "authored — shafts are built-up but not carpet; the area statement must exclude them from carpet"
+    },
+    {
+      "id": "spec-09",
+      "prompt": "50x80, 4BHK with a servant quarter that has a separate entrance from the side, plus a store and a powder room.",
+      "features": ["plot", "bhk", "servant", "store", "common_bath", "gate"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 50, "plot_depth_ft": 80,
+                "rooms": {"bedroom": 5}, "rooms_min": {"store": 1, "bathroom": 5}}
+    },
+    {
+      "id": "spec-10",
+      "prompt": "30x40, 3BHK, pooja room, and I want the dining next to the kitchen but visible from the living.",
+      "features": ["plot", "bhk", "pooja", "dining", "hall", "kitchen_layout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3},
+                "rooms_min": {"pooja": 1, "dining": 1, "living": 1, "kitchen": 1}}
+    }
+  ]
+}

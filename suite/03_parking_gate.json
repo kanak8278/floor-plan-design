@@ -1,0 +1,98 @@
+{
+  "group": "parking, gate, compound wall, driveway",
+  "note": "On-plot parking is near-universal in Indian plot housing and is usually a two-wheeler plus a car. The catalogue has car_sedan, car_suv, bike, motorcycle, fence_gate, driveway, so these are placeable. Stilt parking is FAR-exempt under BBMP, which changes the area arithmetic.",
+  "examples": [
+    {
+      "id": "park-01",
+      "prompt": "30x40 east facing, 3BHK, and I need covered car parking in front plus space for two scooters.",
+      "features": ["plot", "bhk", "parking", "porch"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "east", "rooms": {"bedroom": 3},
+                "rooms_min": {"parking": 1},
+                "must_place": ["car_sedan", "motorcycle"]}
+    },
+    {
+      "id": "park-02",
+      "prompt": "40x60 site, 3BHK, two cars must fit inside the compound side by side.",
+      "features": ["plot", "bhk", "parking"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "rooms_min": {"parking": 1},
+                "must_place": ["car_sedan", "car_suv"]}
+    },
+    {
+      "id": "park-03",
+      "prompt": "30x40, 3BHK, stilt parking below and the house on the first floor.",
+      "features": ["plot", "bhk", "parking", "multifloor", "stairs", "far"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 2, "rooms": {"bedroom": 3},
+                "rooms_min": {"parking": 1, "stair": 1}, "far_max": 1.75},
+      "source": "authored — stilt parking is FAR-exempt under BBMP, so the area statement must not count it"
+    },
+    {
+      "id": "park-04",
+      "prompt": "30x50 site, 3BHK. Want a proper compound wall all around with a sliding main gate on the road side.",
+      "features": ["plot", "bhk", "gate", "compound_wall"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "rooms": {"bedroom": 3}, "must_place": ["fence_gate"]}
+    },
+    {
+      "id": "park-05",
+      "prompt": "40x60 corner site, 3BHK. Gate on the smaller road so the main frontage stays clean.",
+      "features": ["plot", "bhk", "gate", "corner_plot"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "corner_plot": true, "rooms": {"bedroom": 3},
+                "must_place": ["fence_gate"]}
+    },
+    {
+      "id": "park-06",
+      "prompt": "30x40, 3BHK, paved driveway from the gate to the car porch, and a separate small pedestrian gate.",
+      "features": ["plot", "bhk", "gate", "parking", "garden"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3},
+                "must_place": ["driveway", "fence_gate", "path_straight"]}
+    },
+    {
+      "id": "park-07",
+      "prompt": "50x80 site, 4BHK. Garage with a shutter for two cars, plus a workbench for my tools.",
+      "features": ["plot", "bhk", "parking"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 50, "plot_depth_ft": 80,
+                "rooms": {"bedroom": 4}, "rooms_min": {"parking": 1},
+                "must_place": ["garage_door_double", "workbench", "car_sedan"]}
+    },
+    {
+      "id": "park-08",
+      "prompt": "20x30 site, 2BHK. There is no room for a car so just a two wheeler parking near the gate.",
+      "features": ["plot", "bhk", "parking", "gate"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 20, "plot_depth_ft": 30,
+                "rooms": {"bedroom": 2}, "must_place": ["motorcycle", "fence_gate"]},
+      "source": "authored — a 20x30 with setbacks cannot hold a 4.5m car; the system must not force one in"
+    },
+    {
+      "id": "park-09",
+      "prompt": "30x40, 3BHK, and keep the rainwater harvesting pit and the sump under the driveway.",
+      "features": ["plot", "bhk", "parking", "rwh"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "must_place": ["driveway"]},
+      "source": "authored — RWH is mandatory at >=1200 sqft under BBMP; sump/OHT are not in the catalogue yet, so must_place omits them deliberately"
+    },
+    {
+      "id": "park-10",
+      "prompt": "40x60 north facing, 3BHK, car parking on the north-west side as per Vastu.",
+      "features": ["plot", "bhk", "facing", "parking", "vastu"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "road_facing": "north", "rooms": {"bedroom": 3},
+                "rooms_min": {"parking": 1}, "vastu_enabled": true,
+                "vastu_zones": {"parking": "NW"}}
+    }
+  ]
+}

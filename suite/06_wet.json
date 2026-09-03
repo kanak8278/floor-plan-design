@@ -1,0 +1,97 @@
+{
+  "group": "bathrooms, wet areas, plumbing",
+  "note": "NBC minima: bath+WC combined 2.8 m2 min width 1.2 m; bath only 1.8 m2; WC only 1.1 m2; ceiling 2.10 m. A WC must not open directly into a kitchen -- the rules engine already enforces this. Wet-room stacking matters for plumbing cost.",
+  "examples": [
+    {
+      "id": "wet-01",
+      "prompt": "30x40, 3BHK. Master bedroom gets an attached bathroom, other two share a common bathroom.",
+      "features": ["plot", "bhk", "attached_bath", "common_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "attached_bath": 1,
+                "rooms_min": {"bathroom": 2}}
+    },
+    {
+      "id": "wet-02",
+      "prompt": "40x60, 3BHK, all attached bathrooms plus a common powder room near the living for guests.",
+      "features": ["plot", "bhk", "attached_bath", "common_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "attached_bath": 3,
+                "rooms_min": {"bathroom": 4}}
+    },
+    {
+      "id": "wet-03",
+      "prompt": "30x50, 3BHK. Please stack all the bathrooms and the kitchen on one side so the plumbing stays cheap.",
+      "features": ["plot", "bhk", "attached_bath", "budget"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "rooms": {"bedroom": 3}, "rooms_min": {"bathroom": 2, "kitchen": 1}},
+      "source": "authored — wet-room grouping is a real cost driver; DesignSpec has wet_grouping for exactly this"
+    },
+    {
+      "id": "wet-04",
+      "prompt": "30x40, 3BHK. One Indian style toilet for my parents and the rest western.",
+      "features": ["plot", "bhk", "common_bath", "family"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "rooms_min": {"bathroom": 2}},
+      "source": "authored — the catalogue has no squat pan; the substitution must be recorded, not silently ignored"
+    },
+    {
+      "id": "wet-05",
+      "prompt": "40x60, 4BHK, and a separate dry area with washbasin outside each bathroom.",
+      "features": ["plot", "bhk", "attached_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 4}, "rooms_min": {"bathroom": 4}}
+    },
+    {
+      "id": "wet-06",
+      "prompt": "30x40, 3BHK, with a utility area next to the kitchen for the washing machine and a gas cylinder space.",
+      "features": ["plot", "bhk", "utility", "kitchen_layout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "rooms_min": {"utility": 1},
+                "must_place": ["washer_dryer"]}
+    },
+    {
+      "id": "wet-07",
+      "prompt": "20x30, 2BHK. Only one bathroom is fine, but it must be a proper full bath with a shower.",
+      "features": ["plot", "bhk", "common_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 20, "plot_depth_ft": 30,
+                "rooms": {"bedroom": 2, "bathroom": 1},
+                "must_place": ["shower", "toilet", "sink_b"]}
+    },
+    {
+      "id": "wet-08",
+      "prompt": "30x40, 3BHK, and the toilet door must not open towards the kitchen or the dining table.",
+      "features": ["plot", "bhk", "common_bath", "dining"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "rooms_min": {"bathroom": 2, "dining": 1}},
+      "source": "authored — NBC.WC_OPENS_INTO_KITCHEN must come back clean on the generated plan"
+    },
+    {
+      "id": "wet-09",
+      "prompt": "40x60, 3BHK, bathrooms in the north-west as per Vastu, and a bathtub in the master.",
+      "features": ["plot", "bhk", "vastu", "attached_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "attached_bath": 1,
+                "vastu_enabled": true, "vastu_zones": {"bathroom": "NW"},
+                "must_place": ["bathtub"]}
+    },
+    {
+      "id": "wet-10",
+      "prompt": "30x50 G+1, 4BHK. Keep the first floor bathrooms directly above the ground floor ones.",
+      "features": ["plot", "bhk", "multifloor", "attached_bath", "stairs"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "storeys": 2, "rooms": {"bedroom": 4},
+                "rooms_min": {"bathroom": 3, "stair": 1}},
+      "source": "authored — vertical wet-stack alignment across storeys; the solver is single-storey today, so this is expected to be a known gap"
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "group": "vastu",
+  "note": "Vastu is a weighted soft objective, not a hard constraint, and practitioners disagree. These cases test that strictness is recorded, that named zones are honoured, that a client override wins over our defaults, and that a request contradicting Vastu is not silently 'corrected'.",
+  "examples": [
+    {
+      "id": "vastu-01",
+      "prompt": "30x40 east facing site, 3BHK, must be strictly Vastu compliant. Kitchen in south-east, master bedroom south-west, pooja room in north-east.",
+      "features": ["plot", "bhk", "facing", "vastu", "pooja"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "east", "rooms": {"bedroom": 3},
+                "rooms_min": {"pooja": 1}, "vastu_enabled": true,
+                "vastu_strictness": "strict",
+                "vastu_zones": {"kitchen": "SE", "master_bedroom": "SW", "pooja": "NE"}}
+    },
+    {
+      "id": "vastu-02",
+      "prompt": "30x40 north facing, 3BHK. We follow Vastu loosely, so if it works out fine, but do not compromise the room sizes for it.",
+      "features": ["plot", "bhk", "facing", "vastu"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "north", "rooms": {"bedroom": 3},
+                "vastu_enabled": true, "vastu_strictness": "advisory"},
+      "source": "authored — 'loosely' must map to advisory, not strict"
+    },
+    {
+      "id": "vastu-03",
+      "prompt": "40x60 site. 3BHK. The main door must open towards north-east, that is non negotiable for us.",
+      "features": ["plot", "bhk", "vastu"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "vastu_enabled": true,
+                "entrance_side": "north"}
+    },
+    {
+      "id": "vastu-04",
+      "prompt": "3BHK on 40x60, Vastu compliant, and please keep the centre of the house open. Our priest said the Brahmasthan should not have any structure.",
+      "features": ["plot", "bhk", "vastu", "hall"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "vastu_enabled": true,
+                "vastu_zones": {}},
+      "source": "authored — Brahmasthan-open conflicts with efficiency on small plots; it must be a weighted soft term, not a hard cut"
+    },
+    {
+      "id": "vastu-05",
+      "prompt": "30x50, 3BHK. Bathrooms must not be in the north-east corner under any circumstances.",
+      "features": ["plot", "bhk", "vastu", "common_bath"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "rooms": {"bedroom": 3}, "vastu_enabled": true,
+                "vastu_zones": {"bathroom": "NW"}}
+    },
+    {
+      "id": "vastu-06",
+      "prompt": "G+1 on 30x40, 3BHK. Staircase should be in the south-west as per Vastu.",
+      "features": ["plot", "bhk", "vastu", "multifloor", "stairs"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "storeys": 2, "rooms": {"bedroom": 3},
+                "rooms_min": {"stair": 1}, "vastu_enabled": true,
+                "vastu_zones": {"stair": "SW"}}
+    },
+    {
+      "id": "vastu-07",
+      "prompt": "Our Vastu consultant has already fixed the directions: kitchen north-west, master bedroom south, pooja east. 40x60 site, 3BHK. Please follow his plan exactly, not the standard rules.",
+      "features": ["plot", "bhk", "vastu", "pooja"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "rooms_min": {"pooja": 1},
+                "vastu_enabled": true, "vastu_strictness": "strict",
+                "vastu_zones": {"kitchen": "NW", "master_bedroom": "S", "pooja": "E"}},
+      "source": "authored — the client's consultant overrides our default table; a system that 'corrects' NW kitchen to SE has failed"
+    },
+    {
+      "id": "vastu-08",
+      "prompt": "30x40 3BHK, fully Vastu compliant please, and I want the kitchen in the north-east because it gets morning light.",
+      "features": ["plot", "bhk", "vastu", "contradictory"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "vastu_enabled": true,
+                "vastu_zones": {"kitchen": "NE"}},
+      "source": "authored — NE kitchen contradicts 'fully Vastu compliant'. The client's explicit instruction wins and the conflict must be SURFACED, not silently resolved either way."
+    },
+    {
+      "id": "vastu-09",
+      "prompt": "30x40, 3BHK. I do not follow Vastu at all, optimise purely for light and ventilation.",
+      "features": ["plot", "bhk", "vastu"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "vastu_enabled": false,
+                "vastu_strictness": "none"}
+    },
+    {
+      "id": "vastu-10",
+      "prompt": "West facing 30x40 site, 3BHK, Vastu compliant. I have heard west facing is difficult for Vastu, do what you can.",
+      "features": ["plot", "bhk", "facing", "vastu"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "west", "rooms": {"bedroom": 3},
+                "vastu_enabled": true, "vastu_strictness": "advisory"}
+    }
+  ]
+}

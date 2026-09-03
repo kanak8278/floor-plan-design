@@ -1,0 +1,95 @@
+{
+  "group": "outdoor: garden, sitout, porch, utility yard",
+  "note": "The catalogue is 57 Landscaping + 13 Outdoor Furniture + 10 Garden Structures + 10 Paths & Lawns items, so outdoor is the best-supported area. Sitout and utility yard are Indian staples absent from western datasets.",
+  "examples": [
+    {
+      "id": "out-01",
+      "prompt": "30x40 east facing, 3BHK, with a front sitout where we can put two chairs and have morning coffee.",
+      "features": ["plot", "bhk", "facing", "sitout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "east", "rooms": {"bedroom": 3},
+                "rooms_min": {"sitout": 1}}
+    },
+    {
+      "id": "out-02",
+      "prompt": "40x60, 3BHK, keep a decent garden in the rear setback with a lawn and some fruit trees.",
+      "features": ["plot", "bhk", "garden"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "rooms_min": {"landscape": 1},
+                "must_place": ["lawn_rect", "tree_deciduous"]},
+      "source": "authored — tree_deciduous is an entourage def, not furniture; tests that the placer handles both catalogues"
+    },
+    {
+      "id": "out-03",
+      "prompt": "30x50, 3BHK, and a utility yard at the back for washing machine and drying clothes, with a wash basin outside.",
+      "features": ["plot", "bhk", "utility"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 50,
+                "rooms": {"bedroom": 3}, "rooms_min": {"utility": 1},
+                "must_place": ["washer_dryer"]}
+    },
+    {
+      "id": "out-04",
+      "prompt": "50x80 site, 4BHK, with a swimming pool and a gazebo in the back garden.",
+      "features": ["plot", "bhk", "garden", "budget"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 50, "plot_depth_ft": 80,
+                "rooms": {"bedroom": 4}, "budget_band": "premium",
+                "must_place": ["pool_rectangular", "gazebo"]}
+    },
+    {
+      "id": "out-05",
+      "prompt": "30x40, 3BHK, with a covered portico at the entrance so guests do not get wet in the rain.",
+      "features": ["plot", "bhk", "porch", "sitout"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "rooms_min": {"sitout": 1}}
+    },
+    {
+      "id": "out-06",
+      "prompt": "40x60, 3BHK, and a pergola over the side patio with string lights for evenings.",
+      "features": ["plot", "bhk", "garden"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "rooms_min": {"patio": 1},
+                "must_place": ["pergola", "string_lights"]}
+    },
+    {
+      "id": "out-07",
+      "prompt": "30x40, 3BHK. Small kitchen garden with raised beds and a compost bin near the utility.",
+      "features": ["plot", "bhk", "garden", "utility"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "rooms": {"bedroom": 3}, "rooms_min": {"utility": 1},
+                "must_place": ["raised_garden_bed", "compost_bin"]}
+    },
+    {
+      "id": "out-08",
+      "prompt": "40x60 site, 3BHK, garden shed for the gardening tools and a rain barrel.",
+      "features": ["plot", "bhk", "garden", "rwh"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 40, "plot_depth_ft": 60,
+                "rooms": {"bedroom": 3}, "must_place": ["shed", "rain_barrel"]}
+    },
+    {
+      "id": "out-09",
+      "prompt": "30x40 north facing, 3BHK, balcony off the master bedroom facing the street and a small balcony off the kitchen for the utility.",
+      "features": ["plot", "bhk", "facing", "balcony", "utility"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 30, "plot_depth_ft": 40,
+                "road_facing": "north", "rooms": {"bedroom": 3},
+                "rooms_min": {"balcony": 2}}
+    },
+    {
+      "id": "out-10",
+      "prompt": "50x80, 4BHK, with lamp posts along the driveway, a stone pathway to the front door and a garden fountain in the centre of the lawn.",
+      "features": ["plot", "bhk", "garden", "parking"],
+      "expect": "optimal",
+      "truth": {"site_kind": "plot", "plot_width_ft": 50, "plot_depth_ft": 80,
+                "rooms": {"bedroom": 4},
+                "must_place": ["lamp_post", "path_straight", "fountain", "driveway"]}
+    }
+  ]
+}
