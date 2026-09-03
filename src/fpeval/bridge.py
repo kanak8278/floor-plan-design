@@ -184,3 +184,53 @@ def truth_to_programme(truth: Any, *, relaxed: bool = False
         _apply_relaxed(prog)
         warn.append(relaxed_note(prog) or "relaxed profile requested but nothing to relax")
     return prog, warn
+
+def typology_adjacency(prog, kind: str
+                       ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Typology expectations -> (required, forbidden) room-id pairs.
+
+    This closes the largest gap in the system. The solver's topology scorer
+    optimises only PER-ROOM properties -- min width, min area, area error,
+    aspect, has-an-exterior-edge, Vastu compass pull -- plus `required_adjacency`
+    at penalty 2500. That adjacency machinery existed and was never populated, so
+    the solver had no way to express "the kitchen should be near the living
+    room". The visible result: a 2400 sqft plan that put BEDROOM 1 between the
+    kitchen and the hall, the only bathroom diagonally opposite the bedrooms, and
+    the kitchen in the far corner from the living room.
+
+    Only `direct` and `open` relations become hard requirements. `near` is a
+    preference the scorer cannot express as a pair, and `separate` becomes a
+    forbidden pair.
+    """
+    from . import typology as TY
+    ty = TY.get(kind)
+    by_cat: dict[str, list[str]] = {}
+    for r in prog:
+        by_cat.setdefault(r.category, []).append(r.id)
+
+    req: list[tuple[str, str]] = []
+    forb: list[tuple[str, str]] = []
+    for rule in ty.expect:
+        ha, hb = by_cat.get(rule.a), by_cat.get(rule.b)
+        if not ha or not hb:
+            continue
+        # One representative pair per rule: forcing every bedroom adjacent to
+        # every bathroom is unsatisfiable and would reject good topologies.
+        pair = (ha[0], hb[0])
+        if rule.relation in ("direct", "open") and rule.weight >= 0.8:
+            req.append(pair)
+        elif rule.relation == "separate" and rule.weight >= 0.8:
+            for x in ha:
+                for y in hb:
+                    forb.append((x, y))
+
+    # Beyond the typology table: every bathroom should touch either circulation
+    # or a bedroom, so a toilet is never marooned across the house from the
+    # rooms that use it.
+    circ = [i for c in ty.circulation for i in by_cat.get(c, [])]
+    beds = by_cat.get("master_bedroom", []) + by_cat.get("bedroom", [])
+    for k, bid in enumerate(by_cat.get("bathroom", [])):
+        anchor = beds[k] if k < len(beds) else (circ[0] if circ else None)
+        if anchor:
+            req.append((bid, anchor))
+    return req, forb

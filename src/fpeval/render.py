@@ -398,8 +398,10 @@ class _Doc:
     """Layered accumulator. Layer order fixes z-order, so drawing code can emit
     in whatever order is convenient and stay deterministic."""
 
-    ORDER = ("defs", "sheet", "plot", "rooms", "poche", "openings", "dims",
-             "labels", "panel", "overlay")
+    # `furniture` sits between rooms and poche so a piece touching a wall reads
+    # under it, which is the plan convention.
+    ORDER = ("defs", "sheet", "plot", "rooms", "furniture", "poche", "openings",
+             "dims", "labels", "panel", "overlay")
 
     def __init__(self) -> None:
         self.layers: dict[str, list[str]] = {k: [] for k in self.ORDER}
@@ -470,6 +472,77 @@ def _draw_rooms(doc: _Doc, ctx: _Ctx, rooms: Sequence[tuple[Room, Polygon]]) -> 
         doc.add("rooms", _polygon(pts, fill, cls=f"room room-{room.category}"))
         if not tint:                      # annotated: outline every face
             doc.add("rooms", _polyline(pts + pts[:1], ctx.ink["faint"], 0.2))
+
+
+
+# ------------------------------------------------------------------ furniture
+# `plan.furniture` was previously ignored entirely, so every furniture example in
+# the suite rendered as an empty room while scoring PASS. Drawn between the rooms
+# and the poche so walls read over the top of a piece that touches them.
+#
+# Symbols (electrical, plumbing) have zero height and are drawn as glyphs rather
+# than boxes; real furniture is drawn as its footprint with a facing tick, which
+# is the plan convention.
+_FURN_FILL = {
+    "bathroom": "#e2e8f0", "kitchen": "#e5e7eb", "decor": "#eef2e6",
+}
+_SYMBOL_R = 1.1          # paper mm
+
+
+def _furn_footprint(f, cat: dict) -> tuple[float, float]:
+    w = f.width or cat.get("width_mm") or 600
+    d = f.depth or cat.get("depth_mm") or 600
+    return float(w), float(d)
+
+
+def _draw_furniture(doc: _Doc, ctx: _Ctx, plan: Plan) -> int:
+    items = list(getattr(plan, "furniture", None) or [])
+    if not items:
+        return 0
+    try:
+        from .catalog import get as cat_get
+    except Exception:
+        cat_get = None
+
+    n = 0
+    for f in items:
+        info = {}
+        if cat_get is not None:
+            try:
+                it = cat_get(f.catalog_id)
+                info = {"width_mm": getattr(it, "width_mm", None),
+                        "depth_mm": getattr(it, "depth_mm", None),
+                        "height_mm": getattr(it, "height_mm", None),
+                        "category": (getattr(it, "category", "") or "").lower()}
+            except Exception:
+                info = {}
+        cx, cy = ctx.pt(f.position.x, f.position.y)
+
+        # A zero-height catalogue item is a 2D symbol, not a solid.
+        if (info.get("height_mm") or 1) <= 0:
+            doc.add("furniture", _circle(cx, cy, _SYMBOL_R, "none",
+                                         ctx.ink["sym"], 0.25))
+            doc.add("furniture", _line(cx - _SYMBOL_R, cy, cx + _SYMBOL_R, cy,
+                                       ctx.ink["sym"], 0.25))
+            n += 1
+            continue
+
+        w_mm, d_mm = _furn_footprint(f, info)
+        hw, hd = w_mm / 2.0, d_mm / 2.0
+        a = math.radians(f.rotation or 0.0)
+        ca, sa = math.cos(a), math.sin(a)
+        corners = []
+        for dx, dy in ((-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)):
+            corners.append(ctx.pt(f.position.x + dx * ca - dy * sa,
+                                  f.position.y + dx * sa + dy * ca))
+        fill = _FURN_FILL.get(info.get("category", ""), "#ffffff")
+        doc.add("furniture", _polygon(corners, fill, ctx.ink["sym"], 0.2,
+                                      cls=f"furn furn-{f.catalog_id}"))
+        # Facing tick on the front edge (local -Y), so orientation is legible.
+        fx, fy = ctx.pt(f.position.x - (-hd) * sa, f.position.y + (-hd) * ca)
+        doc.add("furniture", _line(cx, cy, fx, fy, ctx.ink["faint"], 0.18))
+        n += 1
+    return n
 
 
 def _draw_poche(doc: _Doc, ctx: _Ctx, poche: Sequence[Polygon],
@@ -1409,6 +1482,7 @@ def render_with_stats(plan: Plan, mode: str = "presentation", findings=None,
     content = (PAD_L, PAD_T, PAD_L + cw, PAD_T + ch)
 
     _draw_rooms(doc, ctx, rooms)
+    n_furn = _draw_furniture(doc, ctx, plan)
     _draw_poche(doc, ctx, poche, hatch=bool(opts.get("hatch_poche")))
     n_open = _draw_openings(doc, ctx, rooms)
     _draw_plot(doc, ctx, placer, plot, setb)

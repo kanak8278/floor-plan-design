@@ -69,6 +69,9 @@ class Result:
     coverage: float | None = None
     carpet_sqft: float | None = None
     solve_ms: int = 0
+    n_furniture: int = 0
+    typology: str = ""
+    furnish_drops: int = 0
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
     plan: Any = None
@@ -188,12 +191,23 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         stmt = compute_envelope(w_ft, d_ft,
                                 road_facing=facing, profile=prof, programme=prog)
         _rescale_to_budget(prog, stmt)
-        from .bridge import RELAXED_MAX_ASPECT
+        from .bridge import RELAXED_MAX_ASPECT, typology_adjacency
+        from . import typology as TY
+        beds = sum(1 for r in prog if r.category in ("bedroom", "master_bedroom"))
+        kind = TY.infer(site_kind=("apartment_unit" if is_unit else "plot"),
+                        plot_sqft=(None if is_unit else plot_sqft),
+                        storeys=int(t.storeys or 1), bedrooms=beds,
+                        kitchens=sum(1 for r in prog if r.category == "kitchen"),
+                        has_two_living=sum(1 for r in prog if r.category == "living") >= 2)
+        req_adj, forb_adj = typology_adjacency(prog, kind)
+        res.typology = kind
         sr = solve_layout(
             w_ft, d_ft,
             LayoutSpec(programme=prog,
                        entrance_room=next((r.id for r in prog if r.is_entrance), prog[0].id),
                        max_aspect_hard=(RELAXED_MAX_ASPECT if relaxed else 2.8),
+                       required_adjacency=req_adj,
+                       forbidden_adjacency=forb_adj,
                        time_limit_s=time_limit_s),
             road_facing=facing, profile=prof,
             plan_id=f"{example.id}-{track}")
@@ -218,9 +232,25 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                                     f"expected '{example.expect_reason}', got {groups}"))
         return res
 
+    # ---- furnish -------------------------------------------------------
+    # This was missing entirely: `furnish()` existed and was never called by the
+    # pipeline, so every furniture example scored PASS with an empty plan. An
+    # assertion that is never executed is worse than no assertion, because it
+    # manufactures confidence.
+    try:
+        from .furnish import furnish
+        plan, fr = furnish(plan, seed=0)
+        res.n_furniture = fr.n_placed
+        res.furnish_drops = len(fr.drops)
+    except Exception as e:
+        res.warnings.append(f"furnishing failed: {type(e).__name__}: {e}")
+
     res.plan = plan
     res.n_rooms = len(plan.rooms)
-    brief = {"site_kind": "apartment_unit"} if is_unit else None
+    brief = {"typology": res.typology,
+             "site_kind": "apartment_unit" if is_unit else "plot",
+             "plot_area_sqft": plot_sqft or None,
+             "habitable_floors": int(t.storeys or 1)}
     findings = validate_plan(plan, brief=brief, profile=BENGALURU)
     errs = [f for f in findings if f.severity == "error"]
     res.n_errors, res.n_warnings = len(errs), len(findings) - len(errs)
@@ -255,6 +285,14 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
             res.checks.append(Check("coverage_cap", float(cov) <= t.coverage_max + 1e-6,
                                     f"{cov:.3f} vs cap {t.coverage_max}"))
     res.carpet_sqft = round(sum(r.area for r in plan.rooms) / 1e6 * SQFT_M2)
+
+    # ---- must_place: catalogue ids the brief demands ---------------------
+    if t.must_place:
+        placed = {f.catalog_id for f in plan.furniture}
+        # Entourage ids (site items like trees) use hyphens and are not furniture.
+        for cid in t.must_place:
+            res.checks.append(Check(f"place:{cid}", cid in placed,
+                                    "not placed" if cid not in placed else ""))
 
     # ---- vastu ---------------------------------------------------------
     vf = [f for f in findings if f.rule_id.startswith("VASTU")]
