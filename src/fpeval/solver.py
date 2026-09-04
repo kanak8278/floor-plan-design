@@ -51,6 +51,8 @@ BATH_DOOR_W = 750
 OUTDOOR_ROOMS = ("balcony", "sitout", "patio", "terrace")
 
 JAMB = 100                        # clear either side of an opening in its wall
+MIN_WIN_W = 600                   # below this it is a vent, not a window
+PIER_MM = 600                     # masonry between two windows on one wall
 WIN_SILL, WIN_HEAD = 900, 2100
 DOOR_HEAD = 2100
 WALL_ID_MIN_OVERLAP = 100.0       # mm of shared centreline to count as bounding
@@ -139,7 +141,14 @@ class LayoutSpec:
     tree_samples: int = 400                   # topologies scored cheaply first
     seed: int = 0
     workers: int = 8
-    filler_min_m2: float = 3.0                # slack above this becomes a hall
+    filler_min_m2: float = 3.0                # slack above this becomes a passage
+    # Ceiling on the filler passage. Without one, ALL leftover area went into
+    # circulation: a 40x60 3BHK produced a 30 m2 passage beside a 10 m2 living
+    # room, and `DESIGN.CIRCULATION_OVERSIZED` fired on 66 of 100 suite plans.
+    # A passage needs enough width for two people to pass and enough length to
+    # reach the rooms; beyond that it is unassigned floor. Surplus past this
+    # goes to the social space instead, which is where a client would put it.
+    filler_max_m2: float = 9.0
 
     def entrance(self) -> str:
         if self.entrance_room:
@@ -1030,6 +1039,47 @@ def _vent_need_m2(category: str, floor_m2: float) -> float:
     return max(std.window_frac_of_floor * floor_m2, std.min_window_m2)
 
 
+def _glazing_runs(lo: int, hi: int, need_mm: int, cap_mm: int
+                  ) -> list[tuple[int, int]]:
+    """(centre, width) for the windows one wall run should carry.
+
+    One window is centred on the run; several are spread evenly with a masonry
+    pier between them, which is what an elevation actually shows.
+
+    The cap is per OPENING, not per wall, and treating it as per wall is what
+    broke: `room_cap = 3000` with one window per edge means a 46 m2 living room
+    -- needing ~4.2 m of glazing under NBC's 1 m2 per 10 m2 -- cannot be
+    satisfied on a wall with only one exterior face, however long that wall is.
+    Redistributing surplus floor into habitable rooms made rooms that big
+    common, and NBC.VENTILATION_HABITABLE went from 9 plans to 14 as a direct
+    result. The sizer's own comment already said "two windows, not one
+    impossible one"; it only ever did that across edges, never along one.
+    """
+    usable = (hi - lo) - 2 * JAMB
+    if usable < MIN_WIN_W:
+        return []
+    # How many openings the need calls for, bounded by what the run can hold.
+    by_need = -(-need_mm // cap_mm)                      # ceil
+    by_room = (usable + PIER_MM) // (MIN_WIN_W + PIER_MM)
+    n = max(1, int(min(by_need, by_room)))
+    span_avail = usable - (n - 1) * PIER_MM
+    if span_avail < MIN_WIN_W:
+        n, span_avail = 1, usable
+    width = int(min(cap_mm, max(MIN_WIN_W, min(need_mm, span_avail) // n)))
+    width -= width % 50
+    if width < MIN_WIN_W:
+        return []
+    # Do not place an opening the need does not call for.
+    while n > 1 and (n - 1) * width >= need_mm:
+        n -= 1
+    span = n * width + (n - 1) * PIER_MM
+    if span > usable:
+        return []
+    start = lo + JAMB + (usable - span) // 2
+    return [(int(start + k * (width + PIER_MM) + width // 2), width)
+            for k in range(n)]
+
+
 def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
                reqs: Sequence[RoomReq], doors: list[tuple[int, int, str]],
                rect_mm: tuple[int, int, int, int], st: AreaStatement,
@@ -1039,6 +1089,8 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
     walls = _extract_walls(rects, rect_mm, st.exterior_wall_mm,
                            st.interior_wall_mm, storey_height)
     openings: list[Opening] = []
+    # Along-wall intervals already spoken for, including jambs, per wall id.
+    used: dict[str, list[tuple[float, float]]] = {}
 
     def place(w: Wall, centre: int, width: int, kind: str) -> bool:
         L = w.length
@@ -1049,6 +1101,17 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
         e = w.end.y if vertical else w.end.x
         half = (width / 2 + JAMB) / L
         t = min(max((centre - s) / (e - s), half), 1.0 - half)
+        # Two openings must not share masonry. There was no such check: `place`
+        # clamped an opening inside its wall and then trusted the caller not to
+        # ask twice. That held only because every room got at most one window
+        # per wall, and it stops holding the moment a large room needs two.
+        c = s + t * (e - s)
+        reach = width / 2 + JAMB
+        lo_i, hi_i = sorted((c - reach, c + reach))
+        for a, b in used.get(w.id, ()):
+            if lo_i < b and a < hi_i:
+                return False
+        used.setdefault(w.id, []).append((lo_i, hi_i))
         is_win = kind == "window"
         openings.append(Opening(
             id=f"o{len(openings)}", kind=kind, wall_id=w.id,
@@ -1109,20 +1172,23 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
         need_mm = int(need_m2 * 1.10 * 1e6 / win_h_mm) if need_m2 > 0 else 0
 
         got_mm = 0
+        target_mm = max(need_mm, MIN_WIN_W)
+        # Per-OPENING cap: a bathroom gets a small high window, everything else
+        # up to a 3 m sash. More glazing than that on one wall becomes a second
+        # window, not a wider one.
+        room_cap = 900 if r.category in ("bathroom", "wc") else 3000
         for axis, coord, lo, hi in sorted(cands, key=lambda c: -(c[3] - c[2])):
+            if got_mm >= target_mm:
+                break
             w = _host(walls, axis, coord, lo, hi)
             if w is None:
                 continue
-            run = hi - lo
-            room_cap = 900 if r.category in ("bathroom", "wc") else 3000
-            want = max(600, need_mm - got_mm)
-            width = min(room_cap, want, (run - 2 * JAMB) // 50 * 50)
-            if width < 600:
-                continue
-            if place(w, (lo + hi) // 2, width, "window"):
-                got_mm += width
-            if got_mm >= max(need_mm, 600):
-                break
+            for centre, width in _glazing_runs(
+                    lo, hi, max(MIN_WIN_W, need_mm - got_mm), room_cap):
+                if place(w, centre, width, "window"):
+                    got_mm += width
+                if got_mm >= target_mm:
+                    break
         if got_mm == 0:
             no_window.append(r.id)
 
@@ -1202,15 +1268,58 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             solve_time_s=0.0, total_time_s=time.time() - t_start,
             infeasible_groups=["area_budget"])
 
-    # 2. absorb leftover area as a hall rather than bloating wet rooms
+    # 2. absorb leftover area -- capped circulation first, social space after
+    #
+    # This used to hand the whole slack to the passage. That is why every plan
+    # had a corridor bigger than its living room: the objective aims at the
+    # target, so a passage told to be 30 m2 became 30 m2. The surplus belongs
+    # in the living room ("living and hall should be one place, that will make
+    # them big together"), and the passage should be sized for walking.
     reqs = [RoomReq(**{**r.__dict__}) for r in spec.programme]
     targets = [b.budget_m2 for b in st.budgets]
+
+    # Habitable rooms share the surplus in proportion to what they already
+    # asked for, with the social rooms weighted up.
+    #
+    # Handing it all to the living room instead produced a 637 sqft living on a
+    # 2400 sqft plot -- 2.3x its own 120-280 sqft band. That is the same defect
+    # as the 337 sqft passage with a different victim: one room absorbing
+    # everything. Proportional growth is also what `envelope` already does when
+    # it allocates the budget, so this keeps one rule for "who gets area".
+    _SURPLUS_SHARE = {"living": 2.0, "dining": 1.5, "master_bedroom": 1.2,
+                      "bedroom": 1.0, "study": 0.8, "kitchen": 0.6}
+
+    def _spread(spare: float) -> None:
+        """Add `spare` m2 across habitable rooms, proportional to target x share."""
+        w = [(i, targets[i] * _SURPLUS_SHARE.get(r.category, 0.0))
+             for i, r in enumerate(reqs) if _SURPLUS_SHARE.get(r.category)]
+        tot = sum(x for _, x in w)
+        if not w or tot <= 0:
+            if targets:
+                targets[0] += spare
+                reqs[0].target_m2 = targets[0]
+            return
+        for i, x in w:
+            targets[i] += spare * x / tot
+            reqs[i].target_m2 = targets[i]
+
     if st.slack_m2 > spec.filler_min_m2:
-        reqs.append(RoomReq("hall", "Hall", "passage",
-                            target_m2=st.slack_m2, weight=0.9, max_aspect=3.5))
-        targets.append(st.slack_m2)
+        # Named "Passage", not "Hall". `roomtypes` lists "hall" as an ALIAS OF
+        # LIVING -- in Indian usage the hall IS the living room -- so labelling
+        # leftover circulation "Hall" put the word for the main social space on
+        # the one room nobody asked for. A reader looking at the drawing sees
+        # "HALL 211 SQ FT" in a corner and concludes the living room is in the
+        # wrong place, which is a reasonable reading of a mislabelled plan.
+        circ = min(st.slack_m2, spec.filler_max_m2)
+        reqs.append(RoomReq("passage", "Passage", "passage",
+                            target_m2=circ, weight=0.9, max_aspect=3.5,
+                            max_area_m2=spec.filler_max_m2))
+        targets.append(circ)
+        spare = st.slack_m2 - circ
+        if spare > 0:
+            _spread(spare)
     elif targets:
-        targets[0] += max(0.0, st.slack_m2)
+        _spread(max(0.0, st.slack_m2))
 
     # rooms tile the centreline rectangle, so targets must sum to the clear area
     # that is actually left once partitions are taken out — otherwise the
