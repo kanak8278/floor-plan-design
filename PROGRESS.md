@@ -50,10 +50,10 @@ One line per verified step. Newest last.
 - NEW: `src/fpeval/roomtypes.py` is the single canonical room-type taxonomy (18 types). Written because three vocabularies had drifted: ResPlan's 6 categories, plausible.py's 17, and free-string `category` on the solver's RoomReq. Each type carries NBC class, carpet/built-up accounting, minima, target range, aspect limit, Vastu zone, window/door/wet flags, OpenPlan3D roomType + floor texture, a furnishing key, and aliases.
 - Taxonomy verified against real builder labels: MASTER BEDROOM, TOI-2, PHE SHAFT, PHE & HVAC/VRV, HANDWASH, PUJA, SITOUT, UITILITY, PWD RM, M.TOILET, OTS, MBR, car porch all map correctly; `master_bedroom` correctly beats `bedroom` via longest-alias-first.
 
-## Open
+## Open (as of the furnishing/LLM milestone -- both since closed)
 
-- ResPlan has NO furniture at all, and generated plans are empty rooms. Furnishing system delegated: LLM selects catalogue IDs (closed enum), a relational placement solver owns coordinates. OpenPlan3D's `roomTemplates.ts` cannot be reused -- it hardcodes offsets assuming a 400x300 room.
-- LLM spec/brief/patch layer still in progress (spec.py, llm.py, brief.py).
+- ResPlan has NO furniture at all, and generated plans are empty rooms. Furnishing system delegated: LLM selects catalogue IDs (closed enum), a relational placement solver owns coordinates. OpenPlan3D's `roomTemplates.ts` cannot be reused -- it hardcodes offsets assuming a 400x300 room. **CLOSED**: `furnish.py` places, `render.py` draws, `design.py` checks clearances.
+- LLM spec/brief/patch layer still in progress (spec.py, llm.py, brief.py). **CLOSED**: 27 ops in `llm.OP_TABLE`, all three levels applied.
 
 ## Feature audit and prompt suite
 
@@ -74,3 +74,89 @@ One line per verified step. Newest last.
 - Verified: generate 30x40 3BHK -> OPTIMAL in 4.1s, 8 rooms / 11 walls / 8 doors / 7 windows, 48KB SVG, area statement; validate 3ms; render annotated 38KB. All three work through the proxy on :5199 as well as direct on :8099.
 - FOUND AND FIXED a real read-back bug in the process: /api/generate reported 0 errors while /api/validate on the SAME plan reported 9. Cause -- OpenPlan3D's `Project` stores a room as `walls: string[]` and derives the outline on the fly, so it carries no room polygons; `from_project` returned rooms with 0 vertices and the validator flagged GEO.ROOM_DEGENERATE for every one. `from_project` now derives faces from the wall graph the way `detectRooms` does. Generate and validate now agree exactly (0 errors, 7 warnings both sides).
 - Regression: ResPlan round-trip still 400/400 identical on walls, openings, rooms and plot; 99.9% of rooms recover a polygon on read-back.
+
+## Agent operations: geometry, and validation attached to actions
+
+- Ops went 10/25 applied -> **27/27**: 11 spec, 10 geometry, 6 furniture. `add_window` and `update_window` did not exist at all. `OPS.md` is generated from `OP_TABLE` + `apply.OP_CHECKS`, so a stale doc cannot disagree with the code silently.
+- Geometry applier mirrors OpenPlan3D's `project.ts` and DEPARTS from it in three places where our IR differs. Each departure is a bug it would otherwise have inherited:
+  (a) `moveWallParallel` there translates one wall, which is safe because Project rooms are lists of wall ids. Ours are FACES of the wall graph, so every wall END standing on the moved wall is dragged with it. Endpoint coincidence was not enough -- the solver emits spanning walls with T-junctions mid-span, so the first version reported "0 junctions followed" and tore the hall open.
+  (b) `splitWall` re-normalises openings on BOTH halves. Handling only the far half slid every opening before the cut towards the corner (verified by absolute position: 820,8805 before and after).
+  (c) room polygons are re-derived and matched to faces by their OLD CENTROID, not by stored area. Area-matching is right on the Project read-back path and wrong after an edit: bath1 and bath2 swapped labels across a moved partition and both appeared to grow.
+- Validation is a post-condition of the op that can break it (`apply_checked`), not a tool the agent must remember to call. A NEW error reverts the op and reports the rule; a new warning blocks nothing. Only findings the op INTRODUCED count -- otherwise one pre-existing defect freezes every later edit, and the agent has no move that clears it.
+- Verified with the user's own examples: moving a wall 300 mm reverted with "NBC.HAB_MIN_WIDTH: habitable room 'Bedroom 2' clear width 2329 mm < 2400 mm"; retyping bed3 to kitchen reverted with "NBC.WC_OPENS_INTO_KITCHEN".
+- FOUND AND FIXED: `propose_patch_tool_schema` had no field for any furniture op's params, so the model could name `place_item` and had nowhere to put its arguments -- all six furniture ops were unreachable through the one tool that proposes ops, while looking fully wired in `OP_TABLE`. `schema_param_gaps()` now fails on drift.
+- FOUND AND FIXED: `update_room` declared only `room_type`, which is OpenPlan3D's four-way indoor/outdoor/garage/utility class. "Make this bedroom a study" -- what a client actually asks -- was unexpressible, though the applier already handled `category`.
+- FOUND AND FIXED: `policy.FAMILIES` was stuck at six while the validator emits ten, and `allows()` defaults an unlisted family to on, so TOPO, SYNTAX, ZONE and BRIEF could not be switched off at all.
+
+## The broken test collection, and the nine defects behind it
+
+- **`tests/test_integration.py` ran at import and could `sys.exit(1)`, which aborted pytest COLLECTION for the whole directory.** Nine real failures had been invisible behind it. A test has to be importable without doing anything.
+- Two API-calling corpus scripts moved out of `tests/` to `scripts/`. One of them billed the user for running the unit tests.
+- Paired 100-example suite, measured at `9d4eca3`: fully passing **4/100 -> 54/100**, mean check score **0.707 -> 0.867**, zero rule errors **32/100 -> 72/100**, feasibility failures **9 -> 4**, wall clock 419s -> 241s. Tests: 244 passed, 3 skipped.
+- Biggest single cause: **`BRIEF.ROOM_MISSING` fired on 132 of 132 solved plans.** `master_bedroom` was added as a category after the brief checks were written and nothing told them a master bedroom is a bedroom, so every 3BHK solved as 2 bedrooms + 1 master was "missing a bedroom". `roomtypes.SUBTYPE_OF` now carries the fact once, both directions. A stair and a parking space count too: they live in `plan.stairs` and as a car on the driveway, not as rooms.
+- Second biggest: **the solver used 0.26 s of an 8 s budget.** It returned the best of the first four feasible topologies it met. Asking for a 26 m2 living room returned 15.8 m2 while handing a bathroom 7.1 m2 -- and reported OPTIMAL, correctly, because the objective could not tell those layouts apart. Defaults 4/24 -> 48/96, measured over the ten-case plot matrix:
+
+      candidates / pool     mean area dev   worst   median time
+         4 /  24                11.9%       23.6%      0.26 s
+        24 /  96                10.9%       21.4%      1.68 s
+        48 /  96                 8.8%       15.9%      1.73 s
+        48 / 200                10.4%       25.6%      2.64 s
+
+  Deeper is NOT monotonically better: 200 is worse than 96, because the per-candidate CP-SAT budget is `time_limit/candidates` and a deeper pool also contains worse topologies.
+- INFEASIBLE was being declared after 24 of 393 scored topologies, which is a sample, not a proof -- and it was wrong: a 1BHK on 20x30 has 37.8 m2 of layout area against a 22.8 m2 programme minimum and came back "proved infeasible". The ranked list is now walked in tranches while time remains.
+- The cross-topology key now STATES its priority order instead of leaving it to whatever the constants were: habitable room with no exterior wall 2e7 > required adjacency 1e7 > room off circulation 5e6 > sole bath behind a bedroom 4e6 > wet room with no exterior wall 1e6. (1) outranks (2) because it is law, not preference. It sat bottom at 1e6, and **every ventilation error in the suite -- 43 of 43 -- was an interior habitable room, not an undersized window.**
+- Glazing is now SIZED to NBC (1 m2 per 10 m2, kitchen min 1 m2) and spread over as many exterior edges as it takes. One window capped at 1800 mm is short for any room over ~21 m2, so every plan with a decent living room shipped with NBC.VENTILATION_HABITABLE as an error and the solver had no idea.
+- Wet rooms and pooja rooms are leaves in the door graph. The service fallback accepted any connected host that was not an overloaded bedroom, so a bathroom could host another bathroom -- one WC opening into another -- and the first bath became a two-door room. Two door swings in a 3.4 m2 bathroom leave nowhere for the WC: the furnisher rejected every pose with "door_swing(106); faces_door(14)" and shipped a bathroom with no fixtures.
+- A bedroom carries at most one en-suite, and the plan's only bathroom is never volunteered as one. DESIGN.SOLE_BATH_VIA_BEDROOM: 9 plans -> none.
+- **Stairs are generated.** A brief saying "G+1 duplex with a staircase" produced a plan with no stair anywhere: `bridge` deferred `stair` as a "vertical element". The reason for deferring did not apply -- what wrecked wall extraction (see Stairs above) was treating ResPlan's TREAD polygons as room faces during CONVERSION; a stairwell we generate is an ordinary room with walls round it.
+- Two stair bugs, the same mistake twice -- deciding from one set of numbers and emitting another. The well was sized at the 2.0 m2 in NBC_MIN (a width rule with an area attached, not room for a flight); and the flight SHAPE was chosen from the ROOM's dimensions while the flight emitted inside it is narrower and shorter, reading 4660 mm of going where the flight had 3460 and giving a 231 mm tread against the 250 mm minimum. The validator measures the flight, so the flight decides. NBC.STAIR_TREAD: 8 plans -> none.
+- `tradeoffs` on SolveResult now names the constraint that cost a room its area when the shortfall was a CHOICE: "living is 3.5 m2 under its 20.4 m2 target; a layout giving it 21.2 m2 exists but leaves kitchen with no door to circulation". The cross-topology key prefers structure over area on purpose; without this a deliberate trade-off read as a solver failure.
+- An interior balcony is not a balcony. Nothing charged for a balcony/sitout/patio with no perimeter edge in either the ranking or the key -- only habitable and wet rooms were counted -- so the slicing tree buried them. Priced WITH the habitable rooms, not below the wet ones: a windowless bathroom can be rescued by an exhaust fan, an interior balcony cannot be rescued by anything. Enclosed: 5/30 -> 1/30 of plans with an outdoor room.
+
+## Two rules were firing on real, built houses
+
+Measured over ResPlan plans whose door graph is at least connected -- 265 of 1500, since the rest carry too few doors to support any statement about circulation (median 6 doors for 8-10 rooms). Gating on that first is the whole discipline here; the ungated numbers said 93% and 65% and were measuring ResPlan's door sparsity, not circulation.
+
+- `DESIGN.BEDROOM_THROUGH_TRAFFIC` exempted only an attached bath. What actually sits behind a private room in real plans: **bathroom 416, balcony 232, kitchen 6, living 1, bedroom 1.** Balconies were the ENTIRE false-positive population -- exactly the arrangement the brief asks for ("one balcony off the master bedroom") -- and the rule fired on 59% of real plans, as an error. It also blamed every bedroom in the plan for a room that was unreachable to begin with: dropping the kitchen's only door produced three errors, one naming a bedroom that does not touch the kitchen. Removing a door cannot make a bedroom into a corridor.
+- `SYNTAX.PRIVATE_ROOM_INTEGRATED` used a flat 1.05x of plan average, which is the MEDIAN real bedroom-with-attached-bath. It fired on 65% of real plans, as an error. Per-door-count ceilings now, at the measured p99:
+
+      connectivity 1 : median 0.66   p95 0.84   p99 0.90   (n=199)  -> exempt
+      connectivity 2 : median 0.99   p95 1.06   p99 1.09   (n=319)  -> 1.10
+      connectivity 3 : median 1.27   p95 1.54   p99 1.54   (n=177)  -> 1.55
+      connectivity 4 : median 1.62   p95 1.64   p99 1.64   (n=6)    -> 1.65
+
+  Connectivity 1 is exempt outright: a terminal room strands nothing, so it cannot be a corridor whatever its integration says. Demoted to `warn`, because DESIGN.BEDROOM_THROUGH_TRAFFIC already reports the same defect from the topology -- counting one flaw twice, once as law, distorts the score.
+- Space-syntax checks now say NOTHING on a disconnected door graph. Depth does not cross components: one doorless room sent public_score to -10.3 and put the core on a bedroom, so the rule reported "the house is organised around the wrong room" when the real and already-reported fault was a missing door.
+- FOUND AND FIXED: `roomtypes.get` resolved no aliases, so the solver's own `category="passage"` returned None and silently skipped every roomtypes-driven check -- min width, needs_window, area band. A miss that returns None is indistinguishable from "checked and fine", which is the worst way for a check to fail.
+- `pooja` is not a habitable room for ventilation. NBC 2016 Part 1 defines one by USE -- living, sleeping, eating, cooking -- which is why bath, WC, store and passage are excluded. Listing pooja demanded glazing in a 1.65 m square shrine and the only wall left for the mandir was under that window, so the room shipped empty.
+- The contents-area floor was duplicated in `bridge` and applied on ONE path, so a programme built straight from `envelope.bhk_programme` never got it and a deeper search produced a 1.47 m2 utility -- less than a washing machine and its door swing. One table now, in `standards.CONTENTS_FLOOR_M2` with the clearances it derives from, consulted by `nbc_min_area_m2`.
+- The `clean_plan` negative control asserted NBC compliance with NO WINDOWS ANYWHERE, and hung a store behind a bath behind a bedroom. Rebuilt with a T-passage and per-room sized glazing: 0 errors, 16 warnings, all judgement calls.
+- Two tests asserted the wrong thing. The pinning test demanded that the PINNED re-solve grow the living room, which asks the pin to fail -- on seed 1 the pinned walls are the ones that bound it. The control belongs on the free solve.
+
+## Clean slate in the editor
+
+- Emptying `static/fpeval/*.json` (88 generated + 12 converted -> 0) stops new plans being seeded but CANNOT remove the ones already stored, and restarting the dev server does nothing either: the plan list is `localStorage`, which belongs to the origin, not to the vite process. Only code running in the page can delete it.
+- So the purge runs on app load, in the root layout, whichever page you land on -- not behind a button on a page you have to know to visit. One-shot, guarded by `fpeval_purge_v1`; purging on every load would delete plans generated after this point.
+- It also removes each plan's `floorplan_thumb_<id>` companion, which the old purge left behind -- a later plan reusing an id inherited the previous plan's picture. Hand-drawn plans are untouched. Confirmed cleared in the user's browser.
+- The prompt suite was never involved: `suite/*.json` holds the 160 briefs and is unchanged. What was emptied is the exported Project JSONs for the editor, which `scripts/build_suite_gallery.py` regenerates.
+
+## Environment
+
+- `ortools` was never declared in `pyproject.toml` while `solver.py` has imported `cp_model` since the first commit, and `anthropic` was missing too -- so every command carried `--with pytest --with shapely --with numpy --with ortools` by hand. That is both noise and a second, undeclared source of truth for what the project needs: the ad-hoc resolution picked different versions than a lock would.
+- Now `uv sync --all-extras` once, then `uv run pytest` and `uv run python scripts/...` work as written. Service and image-corpus deps are extras; pytest is a dev group. README updated to match.
+- Note: with the locked versions (shapely 2.1.2, numpy 2.5.2) the validator-latency test asserts a median under 10 ms and measured 13.9 ms while a suite run was using the machine. It passes idle. That assertion is load-sensitive, not a bound on the code.
+
+## Open
+
+Ranked by how many plans each affects in the paired suite. All four are defects
+in the generated plans, not rule bugs -- each rule was checked against real
+plans before being trusted.
+
+- `DESIGN.BEDROOM_THROUGH_TRAFFIC`, 8 plans. The layout gives no topology where every room reaches circulation without crossing a bedroom.
+- Interior habitable rooms with no possible window, ~10 plans. The slicing tree has no candidate that puts every habitable room on the perimeter. The architectural answer is a light shaft (`shaft` is already in the taxonomy, and Indian practice uses them constantly); nothing inserts one yet.
+- `BRIEF.ADJACENCY_UNMET` 7 plans, `TYPO.MISSING_ADJACENCY` 3.
+- `SYNTAX.LIVING_NOT_CORE`, 7 plans.
+- Four genuine feasibility failures: `det-11`, `det-33`, `det-40`, `det-50`. (The five `inf-*` INFEASIBLEs in the run are SUPPOSED to be infeasible and score 1.00.)
+- `place` checks, 23 plans: `_around_cands` yields only 6 poses, so "four chairs around the table" cannot be satisfied. Electrical symbols still collide with room labels in the renderer.
+- Track B (prompt -> `extract_spec` -> solve) has never been run end to end; ~$11 at opus rates.
+- The agent tool surface (`discover`/`inspect`/`apply`/`solve`/`look`) and `POST /api/agent` with SSE are unbuilt, so nothing drives the ops from a conversation yet.
