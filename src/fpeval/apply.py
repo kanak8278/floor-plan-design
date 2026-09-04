@@ -861,12 +861,31 @@ _HANDLERS: dict[str, Any] = {
 }
 
 
-def unimplemented() -> list[str]:
-    """Commands in the vocabulary with no handler.
+# The programme layer -- the constraints the solver reads, as opposed to the
+# drawn geometry -- is not wired into the document service. These commands are
+# in the vocabulary, are offered to the agent, validate cleanly, and then fail
+# at apply time with "recognised but not implemented".
+#
+# They are listed rather than quietly excluded because excluding them is what
+# hid the gap: `unimplemented()` used to subtract `SPEC_OPS`, so the "every
+# command has a handler" test passed while a third of the agent's vocabulary
+# did nothing. `tests/probe_agent.py` found it from the outside, and the agent
+# diagnosed it unaided -- "the whole programme layer is stubbed out in this
+# build".
+#
+# Wiring them needs a `DesignSpec` on the document plus a re-solve path
+# (`loop.repair` exists; nothing connects it to a `Document`).
+KNOWN_UNIMPLEMENTED = frozenset({
+    "add_room", "remove_room", "set_room_area", "set_room_aspect",
+    "set_room_zone", "set_room_priority", "set_adjacency",
+    "remove_adjacency", "set_entrance", "set_wet_grouping", "set_storeys",
+})
 
-    Asserted empty by `tests/test_commands.py`. A vocabulary entry with no
-    applier is the exact shape of bug that only shows up when a model emits
-    the command in front of a user.
+
+def unimplemented() -> list[str]:
+    """Every command in the vocabulary with no applier, spec ops included.
+
+    A vocabulary entry with no applier is the exact shape of bug that only
+    shows up when a model emits the command in front of a user.
     """
-    from .commands import SPEC_OPS
-    return sorted(set(TABLE) - set(_HANDLERS) - set(SPEC_OPS))
+    return sorted(set(TABLE) - set(_HANDLERS))

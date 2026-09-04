@@ -252,6 +252,32 @@ class Document:
 
     # --------------------------------------------------------- constructors
 
+    @staticmethod
+    def _adopt(design: Design) -> Design:
+        """Make a design addressable, in place.
+
+        Every room gets an anchor and every wall-bounded storey gets its faces
+        derived. Both are what identity rides on, and a design that arrives
+        without them loses every room name on its first geometry edit.
+
+        That is not hypothetical: `from_plan` skipped this, so a plan straight
+        out of the solver had zero anchors, and one `move_wall_parallel`
+        dropped all seven room names -- reconciliation fell through to
+        matching by exact wall set, which a wall move invalidates by
+        definition. `tests/probe_agent.py` caught it; the tests below pin it.
+
+        Deliberately NOT called when loading from storage. A stored document's
+        rooms already carry anchors, and mutating a design on load would
+        change its hash and make `verify_log` disagree with what was written.
+        """
+        from .roomid import ensure_anchors
+        from .faces import rederive_rooms
+        for st in design.storeys:
+            if st.walls and not st.rooms:
+                st.rooms, _gone, _fresh = rederive_rooms(st)
+            ensure_anchors(st.rooms)
+        return design
+
     @classmethod
     def empty(cls, design_id: str, *, name: str = "",
               north_deg: float = 0.0) -> "Document":
@@ -263,7 +289,9 @@ class Document:
 
     @classmethod
     def from_plan(cls, plan: Plan, *, name: str = "") -> "Document":
-        return cls(design=Design.single(plan, name=name))
+        """Adopt solver output. See `_adopt`: without it, this plan's rooms
+        have no anchors and lose their names on the first wall edit."""
+        return cls(design=cls._adopt(Design.single(plan, name=name)))
 
     @classmethod
     def from_project(cls, proj: dict) -> "Document":
@@ -291,7 +319,7 @@ class Document:
                 # named is matched onto its face and keeps its name.
                 rooms, _gone, _fresh = rederive_rooms(st)
                 st.rooms = rooms
-        return cls(design=design)
+        return cls(design=cls._adopt(design))
 
 
 def _now() -> str:

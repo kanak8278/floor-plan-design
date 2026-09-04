@@ -68,10 +68,40 @@ def divided_doc() -> Document:
 # the three properties
 # --------------------------------------------------------------------------
 
-def test_every_command_has_a_handler():
-    assert unimplemented() == [], (
+def test_every_geometry_command_has_a_handler():
+    from fpeval.apply import KNOWN_UNIMPLEMENTED
+    gap = sorted(set(unimplemented()) - KNOWN_UNIMPLEMENTED)
+    assert gap == [], (
         "these commands are in the vocabulary with no applier: "
-        f"{unimplemented()}")
+        f"{gap}")
+
+
+def test_the_unimplemented_list_is_exactly_the_programme_layer():
+    """The gap is declared, not hidden.
+
+    `unimplemented()` used to subtract `SPEC_OPS`, so this check passed while
+    a third of the agent's vocabulary did nothing at apply time. If a spec op
+    gets wired up, this test fails and the list has to shrink -- which is the
+    point.
+    """
+    from fpeval.apply import KNOWN_UNIMPLEMENTED
+    assert set(unimplemented()) == KNOWN_UNIMPLEMENTED, (
+        "unimplemented() and KNOWN_UNIMPLEMENTED have drifted: "
+        f"{sorted(set(unimplemented()) ^ KNOWN_UNIMPLEMENTED)}")
+
+
+def test_an_unimplemented_command_fails_loudly():
+    """The agent has to be able to tell the user. It does: observed live,
+    "set_room_zone is recognised by the applier but not implemented, so
+    nothing changed and the document is still at seq 0"."""
+    doc = box_doc()
+    rid = doc.design.active.rooms[0].id
+    before = doc.hash
+    res = doc.apply(Command(op="set_room_zone", source="agent",
+                            params={"room_id": rid, "preferred_zone": "NE"}))
+    assert not res.ok
+    assert "not implemented" in " ".join(res.errors)
+    assert doc.hash == before
 
 
 def test_replay_reproduces_the_document():
@@ -411,10 +441,18 @@ def test_at_seq_walks_back_to_any_point():
 
 
 def test_at_seq_zero_is_the_document_before_any_command():
+    """Note what "before any command" means now.
+
+    This used to assert `rooms == []`, which was only true because adoption
+    did not derive the faces -- the bug that lost every room name on the
+    first wall edit. Adoption now derives them, so the base document already
+    has its rooms, and they already have anchors.
+    """
     doc = box_doc()
     base = doc.at_seq(0)
-    assert base.active.rooms == []        # faces are derived, not authored
     assert len(base.active.walls) == 4
+    assert len(base.active.rooms) == 1
+    assert base.active.rooms[0].anchor is not None
 
 
 def test_state_hash_ignores_float_noise():
@@ -669,3 +707,60 @@ def test_a_wall_move_still_reports_what_it_destroyed():
         "wall_id": "w0", "direction": "south", "distance_mm": 500}))
     assert res.ok
     assert "Hall" in res.rooms_gone
+
+
+def test_an_adopted_solver_plan_has_anchors():
+    """A design that arrives without anchors loses every room name on its
+    first geometry edit, because reconciliation falls through to matching by
+    exact wall set — which a wall move invalidates by definition.
+
+    `Document.from_plan` skipped this, so plans straight out of the solver
+    were in exactly that state. Found by `tests/probe_agent.py`, which
+    reported "named 7 -> 0" after one wall move.
+    """
+    from fpeval.ir import Room
+    plan = Plan(id="g", level=0, walls=[
+        Wall("w0", P(0, 0), P(6000, 0), 230),
+        Wall("w1", P(6000, 0), P(6000, 4000), 230),
+        Wall("w2", P(6000, 4000), P(0, 4000), 230),
+        Wall("w3", P(0, 4000), P(0, 0), 230)],
+        rooms=[Room("r0", "Living", "living", ["w0", "w1", "w2", "w3"],
+                    [P(0, 0), P(6000, 0), P(6000, 4000), P(0, 4000)],
+                    24_000_000)])
+    assert plan.rooms[0].anchor is None, "the solver does not set anchors"
+    doc = Document.from_plan(plan, name="x")
+    assert all(r.anchor is not None for r in doc.design.active.rooms), \
+        "adoption must make every room addressable"
+
+
+def test_a_named_room_survives_a_wall_move_once_adopted():
+    """The end-to-end version: the name has to be there afterwards."""
+    from fpeval.ir import Room
+    plan = Plan(id="g", level=0, walls=[
+        Wall("w0", P(0, 0), P(6000, 0), 230),
+        Wall("w1", P(6000, 0), P(6000, 4000), 230),
+        Wall("w2", P(6000, 4000), P(0, 4000), 230),
+        Wall("w3", P(0, 4000), P(0, 0), 230)],
+        rooms=[Room("r0", "Master Bedroom", "master_bedroom",
+                    ["w0", "w1", "w2", "w3"],
+                    [P(0, 0), P(6000, 0), P(6000, 4000), P(0, 4000)],
+                    24_000_000)])
+    doc = Document.from_plan(plan, name="x")
+    res = doc.apply(Command(op="move_wall_parallel", source="agent", params={
+        "wall_id": "w0", "direction": "north", "distance_mm": 300}))
+    assert res.ok, res.errors
+    assert [r.name for r in doc.design.active.rooms] == ["Master Bedroom"]
+    assert res.rooms_gone == []
+
+
+def test_adopting_a_plan_with_no_rooms_derives_them():
+    """The editor persists only renamed rooms, so an adopted document usually
+    arrives with `rooms: []` even though the plan plainly has rooms."""
+    plan = Plan(id="g", level=0, walls=[
+        Wall("w0", P(0, 0), P(6000, 0), 230),
+        Wall("w1", P(6000, 0), P(6000, 4000), 230),
+        Wall("w2", P(6000, 4000), P(0, 4000), 230),
+        Wall("w3", P(0, 4000), P(0, 0), 230)])
+    doc = Document.from_plan(plan, name="x")
+    assert len(doc.design.active.rooms) == 1
+    assert doc.design.active.rooms[0].anchor is not None

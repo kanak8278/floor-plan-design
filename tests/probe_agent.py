@@ -143,9 +143,11 @@ def probe_add_room_to_brief() -> Probe:
                 "north-east. Do not re-solve yet, just record it.")
 
     def expect(before, after):
-        # A spec-level op does not change geometry until a re-solve, so the
-        # document is expected NOT to change. Success is a clean acceptance.
-        return (True, "spec-level op, geometry unchanged by design")
+        """A vacuous `True` here is why this probe reported "pass" while the
+        whole programme layer was stubbed out. A spec-level op must be
+        *accepted*; geometry not changing is not evidence of anything."""
+        return (False, "no spec op was accepted (the programme layer is "
+                       "not wired to the document)")
     return Probe("create/spec-room", ask, expect,
                  "spec-level: records intent, no geometry until re-solve")
 
@@ -248,7 +250,7 @@ def probe_move_room_zone() -> Probe:
                 "Record that in the brief.")
 
     def expect(before, after):
-        return (True, "spec-level zone change, no geometry until re-solve")
+        return (False, "no spec op was accepted (programme layer unwired)")
     return Probe("move/zone", ask, expect, "spec-level")
 
 
@@ -294,7 +296,7 @@ def probe_resize() -> Probe:
                 "Update the brief.")
 
     def expect(before, after):
-        return (True, "spec-level area change, no geometry until re-solve")
+        return (False, "no spec op was accepted (programme layer unwired)")
     return Probe("resize/area", ask, expect, "spec-level")
 
 
