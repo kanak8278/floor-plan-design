@@ -32,6 +32,7 @@ from ortools.sat.python import cp_model
 
 from .envelope import (HABITABLE, WET, AreaStatement, BylawProfile, RoomReq,
                        compute_envelope, mm2_to_m2, zone_vector)
+from .standards import OPEN_SPAN_MIN_MM
 from .ir import Opening, P, Plan, Room, Site, Stair, Wall
 
 GRID_MM = 10                      # solver granularity; IR stays exact mm
@@ -100,6 +101,12 @@ class LayoutSpec:
     """Everything the LLM is allowed to say about a layout."""
     programme: list[RoomReq]
     required_adjacency: list[tuple[str, str]] = field(default_factory=list)
+    # Pairs the brief wants as ONE space, not two rooms joined by a door. The
+    # typology table has said `relation="open"` since it was written and
+    # `bridge` mapped it to the same thing as "direct", so a living-cum-dining
+    # got a 900 mm doorway and `TYPO.NOT_ACTUALLY_OPEN` fired on it -- the
+    # system stating a rule, checking the rule, and having no way to satisfy it.
+    open_adjacency: list[tuple[str, str]] = field(default_factory=list)
     forbidden_adjacency: list[tuple[str, str]] = field(default_factory=list)
     # Signed preferences from the topology matrix: +1 required ... -1 forbidden.
     # Binary pairs cannot say "mildly discouraged", which is most of the table.
@@ -402,7 +409,10 @@ def _touching(a, b, need: float) -> tuple[str, float, float, float] | None:
     return None
 
 
-def _door_width(a: RoomReq, b: RoomReq) -> int:
+def _door_width(a: RoomReq, b: RoomReq,
+                open_pairs: frozenset = frozenset()) -> int:
+    if frozenset((a.id, b.id)) in open_pairs:
+        return OPEN_SPAN_MIN_MM
     if {"bathroom", "wc"} & {a.category, b.category}:
         return BATH_DOOR_W
     return DOOR_W
@@ -704,8 +714,9 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
 
     # hard: every door edge must stay wide enough to host a leaf. This is what
     # makes reachability a guarantee rather than a post-hoc hope.
+    open_pairs = frozenset(frozenset(p) for p in spec.open_adjacency)
     for (i, j, axis) in doors:
-        need = _g(_door_width(reqs[i], reqs[j]) + 2 * JAMB)
+        need = _g(_door_width(reqs[i], reqs[j], open_pairs) + 2 * JAMB)
         if axis == "x":
             los, his = (rects[i][1], rects[j][1]), (rects[i][3], rects[j][3])
         else:
@@ -1098,7 +1109,8 @@ def _glazing_runs(lo: int, hi: int, need_mm: int, cap_mm: int
 def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
                reqs: Sequence[RoomReq], doors: list[tuple[int, int, str]],
                rect_mm: tuple[int, int, int, int], st: AreaStatement,
-               ent: int, storey_height: int, provenance: dict
+               ent: int, storey_height: int, provenance: dict,
+               open_pairs: frozenset = frozenset(),
                ) -> tuple[Plan, list[str], list[str]]:
     X0, Y0, X1, Y1 = rect_mm
     walls = _extract_walls(rects, rect_mm, st.exterior_wall_mm,
@@ -1141,7 +1153,7 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
         if t is None:
             continue
         axis, coord, lo, hi = (t[0], int(t[1]), int(t[2]), int(t[3]))
-        width = _door_width(reqs[i], reqs[j])
+        width = _door_width(reqs[i], reqs[j], open_pairs)
         if hi - lo < width + 2 * JAMB:
             width = max(700, (hi - lo) - 2 * JAMB)
         w = _host(walls, axis, coord, lo, hi)
@@ -1445,8 +1457,31 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             nom, _cv = _nominal(nodes, root, rect_f, weights)
             sc = _score_nominal(nom, reqs, targets, rect_f, alw_mm, ent,
                                 st.north_deg, spec, req_adj, soft_adj)
-            cands.append((sc, nodes, root, order))
+            # A required adjacency was priced at 2500 inside `_score_nominal`,
+            # one nudge among a dozen, and at 1e7 in the cross-topology key --
+            # less than the 2e7 an interior habitable room costs. So "the
+            # utility must open off the kitchen" was a preference the ranking
+            # could outbid, and did: measured on the Godrej Woods unit the two
+            # rooms shared no wall at all and the utility opened off the master
+            # bedroom. Prohibitions were already hard ("a hard prohibition, not
+            # a cost"); requirements were not, and that asymmetry is the bug.
+            #
+            # Counting them as the FIRST sort key makes required adjacency
+            # dominate every other preference without making anything
+            # infeasible: topologies that miss a pair stay in the list and are
+            # still tried, they just go last.
+            unmet = sum(1 for i, j in req_adj
+                        if _touching(nom[i], nom[j], DOOR_W + 2 * JAMB) is None)
+            # And rooms that touch no circulation space at all. `_spanning_doors`
+            # builds a hub -- everything hangs off a public spine -- so a room
+            # with no circulation neighbour has to be doored off whatever IS
+            # next to it, which is how a bedroom becomes the only route to
+            # another bedroom, a bathroom, a study and the kitchen. That was
+            # priced at 5e6 in the cross-topology key and outbid.
+            marooned = len(_circ_isolated_ids(nom, reqs))
+            cands.append(((unmet + marooned, sc), nodes, root, order))
         cands.sort(key=lambda c: c[0])
+        cands = [(sc, n, r, o) for (_u, sc), n, r, o in cands]
         ranked_all = list(cands)
         cands = cands[:max(1, spec.max_topologies)]
 
@@ -1629,11 +1664,19 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             "note": ("Room.area is the centreline rectangle so rooms tile the "
                      "footprint exactly; clear_areas_m2 is carpet area"),
             "bylaw_setbacks_mm": dict(st.rules.setbacks_mm),
+            # An apartment unit has no plot, so "plot area" and "ground
+            # coverage" are not facts about it. Printing them anyway put
+            # "Ground coverage 99.6%" on a flat's drawing, which is not a
+            # near-miss on a bye-law -- it is a category error on the sheet.
+            "site_kind": ("apartment_unit"
+                          if type(profile).__name__ == "UnitInterior"
+                          else "plot"),
             "area_statement": st.to_dict()}
 
     plan, unreachable, no_win = _emit_plan(
         plan_id, best["rects"], reqs, best["doors"], rect_mm, st, ent,
-        storey_height, prov)
+        storey_height, prov,
+        frozenset(frozenset(p) for p in spec.open_adjacency))
 
     got = _adjacent_ids(best["rects"], reqs)
     unmet = [tuple(sorted(p)) for p in spec.required_adjacency

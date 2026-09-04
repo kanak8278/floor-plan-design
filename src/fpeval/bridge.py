@@ -50,7 +50,10 @@ RELAXED_MIN_WIDTH_MM: dict[str, int] = {
 }
 RELAXED_MIN_AREA_M2: dict[str, float] = {
     "bedroom": 6.5, "master_bedroom": 8.0, "living": 7.0,
-    "dining": 6.0, "study": 5.5, "kitchen": 4.2, "bathroom": 2.2,
+    # 3.5, not 4.2: Godrej Prakriti's kitchen is 1900 x 1900 mm = 3.61 m2 and
+    # it is built and sold. A compact profile that stops above the smallest
+    # real kitchen cannot draw the flats it exists for.
+    "dining": 6.0, "study": 5.5, "kitchen": 3.5, "bathroom": 2.2,
 }
 # Compact rooms are necessarily longer and thinner.
 RELAXED_MAX_ASPECT = 3.2
@@ -102,7 +105,7 @@ def canon(category: str) -> str:
 # straight from `envelope.bhk_programme` never got it.
 from .standards import (CONTENTS_FLOOR_M2 as SERVICE_FLOOR_M2,  # noqa: E402
                         SERVICE_TARGET_M2, SERVICE_TARGET_CAP_M2,
-                        MAX_ASPECT)
+                        MAX_ASPECT, AREA_WEIGHT)
 
 
 def cap_service_targets(prog) -> list[str]:
@@ -179,6 +182,14 @@ def spec_to_programme(spec: Any, *, relaxed: bool = False
         rq = RoomReq(
             id=getattr(r, "id", key), name=getattr(r, "name", "") or (t.display if t else key),
             category=key, target_m2=target,
+            # Tried and reverted: weighting by `standards.AREA_WEIGHT` here, so
+            # a living room pulls 1.8x harder than a bathroom the way
+            # `bhk_programme` does. It reads like the obvious fix for
+            # `DESIGN.LIVING_NOT_LARGEST` and measured worse -- the corpus
+            # match score fell 0.815 -> 0.708 and a unit that solved went
+            # infeasible, because these weights also drive `_allocate` and
+            # pulling area toward the living room drags every other room off
+            # the size the brief stated. Left as a note so it is not retried.
             weight=1.0 if getattr(r, "priority", 3) <= 2 else 0.7,
             vastu_zone=zone, is_entrance=is_entrance,
             # Measured off the corpus rather than a flat 2.6 for every room.

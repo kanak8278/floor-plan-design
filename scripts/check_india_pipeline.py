@@ -11,7 +11,7 @@ import copy, glob, json, os, sys
 from anthropic import Anthropic
 import _bootstrap  # noqa: F401
 from fpeval.imgclass import classify
-from fpeval.imgcorpus import verify, parse_mm
+from fpeval.imgcorpus import verify, parse_any
 from fpeval.plausible import check, canonical
 
 # The extraction contract lives in the library, not in a script.
@@ -31,7 +31,15 @@ def extract(path):
     return next(b.input for b in r.content if b.type == "tool_use")
 
 def to_rooms(ex):
-    return [{"name": r.get("name"), "dim_mm": parse_mm(r.get("dim_mm"))}
+    # The extraction schema emits `dim_primary`/`dim_secondary`; this read
+    # `dim_mm`, a key it never carries, so every room arrived with no
+    # dimension and `plausible.check` reported "no measurable rooms" on all
+    # twelve stored verdicts in `out/` -- against sheets that print
+    # 12'6"X11'6" on almost every room. `ingest_india.py` had it right.
+    # `parse_any` because most builder sheets are feet-inches only.
+    return [{"name": r.get("name"),
+             "dim_mm": parse_any(r.get("dim_primary"))
+                       or parse_any(r.get("dim_secondary"))}
             for r in ex.get("rooms", [])]
 
 def plot_m2(ex):

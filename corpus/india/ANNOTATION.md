@@ -61,3 +61,30 @@ ground truth; it is a negative control, marked `"usable": false` with the reason
 
 See the committed files. Fields are named to match `spec.py` `DesignSpec` so
 rung 1 is a direct comparison, not a mapping exercise.
+
+## Baseline
+
+`scripts/roundtrip.py --track A --ground-only` over the seven reconstruction
+targets, with `scripts/roundtrip_gallery.py` for the side-by-side:
+
+```
+example                          solved  prog  size  clean  score
+brigade-lakecrest-1353-2bhk           1  1.00  0.92   1.00  0.979
+divyasree-shettigere-1150-2bhk        1  1.00  0.90   1.00  0.975
+godrej-woods-1193-2bhk                1  1.00  0.91   0.20  0.779
+godrej-woods-1223-2bhk                1  1.00  0.89   0.20  0.773
+2qaajcs-2184-3bhk                     1  0.90  0.82   0.33  0.764
+godrej-prakriti-934-2bhk              1  1.00  0.81   0.17  0.745
+happho-30x40-duplex                   1  0.77  0.81   0.17  0.687
+MEAN of 7                          1.00  0.95  0.87   0.44  0.815
+```
+
+`--ground-only` because `generate.build` lays out one storey, so the two-storey
+duplex has to be briefed a floor at a time. That is rung 2 telling the truth,
+not a harness workaround.
+
+Constants calibrated off this corpus, each with the measurement in its comment:
+`standards.MAX_ASPECT`, `standards.CONTENTS_FLOOR_M2`, `standards.AREA_WEIGHT`,
+`spec.AreaQuote.DEFAULT_LOADING`. `scripts/measure_corpus_aspect.py` regenerates
+the aspect and area tables, and `test_aspect_caps_admit_every_real_room` fails if
+a cap drops onto the data.

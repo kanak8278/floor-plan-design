@@ -120,10 +120,23 @@ HABITABLE_VENT = ("living", "dining", "bedroom", "master_bedroom", "study")
 # search produced a 1.47 m2 utility, and a 600 x 650 washing machine plus its
 # door swing does not fit in 1.47 m2. Derived from the fixtures and the
 # clearances below, not from law, which is why it is a separate table.
+# Measured against the corpus (`scripts/measure_corpus_aspect.py` prints the
+# areas too): across 88 hand-transcribed rooms the real minima are
+#   utility 2.42 (median 3.11)   balcony 2.79   foyer 2.57   toilet 1.39
+#   bathroom 1.11 (median 3.74)  kitchen 3.61 (median 6.74)
+# `utility` was 3.5, ABOVE the real median, so every utility in every plan was
+# forced a third larger than the ones builders draw -- Godrej Woods prints
+# 2125 x 1230 mm. A floor has to sit under the data.
 CONTENTS_FLOOR_M2: dict[str, float] = {
-    "utility": 3.5,     # 600x650 machine + 900 mm standing space + door swing
+    "utility": 2.4,      # real min 2.42; a 600x650 machine plus standing room
     "bathroom": 2.8,     # NBC combined bath+WC, which is also what fits
     "kitchen": 5.0,      # NBC
+    # Below these a balcony is a ledge and a foyer is a doormat.
+    "balcony": 2.7,      # real min 2.79
+    "sitout": 5.0,       # real min 5.53, n=1
+    "foyer": 2.5,        # real min 2.57
+    "toilet": 1.3,       # real min 1.39
+    "powder": 2.0,       # real min 2.20
     "pooja": 1.2,        # 1000x500 mandir plus somewhere to stand
     "store": 1.2,
     # A 3000 mm storey needs 16 risers at the 190 mm cap, so 15 treads at the
@@ -172,6 +185,29 @@ SERVICE_TARGET_CAP_M2 = {
 # `solve_layout` had NO ceiling on any service room -- which is how a 4BHK
 # fixture produced a 17.3 m2 passage beside a 14.5 m2 master bedroom that could
 # not take a bed. Here so both the programme builder and the bridge can read it.
+
+
+# How wide an opening has to be before two rooms read as one space rather than
+# two joined by a door. Measured off the corpus: builder plans that advertise a
+# "living-cum-dining" leave the whole partition out or cap a 1800-2400 mm
+# span. A 900 mm door leaf does not make one room.
+OPEN_SPAN_MIN_MM = 1800
+
+
+# How hard each room pulls for area in the solver's objective. `bhk_programme`
+# has carried these since it was written; `bridge.spec_to_programme` flattened
+# every room to 1.0 or 0.7 by priority alone, so a brief that came through the
+# LLM lost the whole hierarchy -- the living room competed for floor on equal
+# terms with a bathroom, and `DESIGN.LIVING_NOT_LARGEST` fired on the result.
+AREA_WEIGHT: dict[str, float] = {
+    "living": 1.8, "family": 1.6, "dining": 1.0, "master_bedroom": 1.35,
+    "bedroom": 1.1, "servant": 0.6, "study": 0.9, "kitchen": 0.95,
+    "bathroom": 0.38, "toilet": 0.3, "powder": 0.3, "handwash": 0.25,
+    "utility": 0.45, "store": 0.35, "dress": 0.4, "pooja": 0.25,
+    "balcony": 0.5, "sitout": 0.5, "patio": 0.4, "terrace": 0.4,
+    "foyer": 0.4, "corridor": 0.3, "passage": 0.3, "stair": 0.5,
+    "shaft": 0.15,
+}
 
 
 # ------------------------------------------------------- measured room aspect

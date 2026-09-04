@@ -1117,12 +1117,16 @@ def _row_h(row: tuple) -> float:
 def _panel_rows(ctx: _Ctx, rooms, keys, carpet, areas, findings) -> list[tuple]:
     rows: list[tuple] = [("head", "AREA STATEMENT"), ("rule",)]
     pa = areas.get("plot")
-    if pa:
+    # A unit in a tower has no plot of its own, so plot area and ground
+    # coverage are not facts about it. The solver's derived footprint was being
+    # printed as "Plot area" with "Ground coverage 99.6%" beside it.
+    is_unit = (ctx.plan.provenance or {}).get("site_kind") == "apartment_unit"
+    if pa and not is_unit:
         rows.append(("kv", "Plot area", f"{_grp(sqft(pa))} SQ FT / {_m2(pa)} m²"))
     bu = areas.get("built_up", 0.0)
-    rows.append(("kv", "Built-up (ground)",
+    rows.append(("kv", "Unit footprint" if is_unit else "Built-up (ground)",
                  f"{_grp(sqft(bu))} SQ FT / {_m2(bu)} m²"))
-    if pa:
+    if pa and not is_unit:
         rows.append(("kv", "Ground coverage", f"{100.0 * bu / pa:.1f} %"))
     cp = areas.get("carpet", 0.0)
     rows.append(("kv", "Carpet (rooms)", f"{_grp(sqft(cp))} SQ FT / {_m2(cp)} m²"))

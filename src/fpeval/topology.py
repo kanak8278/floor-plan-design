@@ -517,6 +517,26 @@ def resolve(*, site_kind: str = "plot", plot_sqft: float | None = None,
                       "mid": "house_mid", "large": "villa"}[band]]
 
 
+def open_pairs(prog, scenario: Scenario) -> list[tuple[str, str]]:
+    """Room-id pairs the scenario wants as one continuous space.
+
+    `solver_pairs` folds `relation="open"` into `required`, which only makes
+    the two rooms touch. Being one space is a wider claim than sharing a wall,
+    and it needs a wider opening -- see `standards.OPEN_SPAN_MIN_MM`.
+    """
+    by_cat: dict[str, list[str]] = {}
+    for r in prog:
+        by_cat.setdefault(r.category, []).append(r.id)
+    out: list[tuple[str, str]] = []
+    for p in scenario.matrix().values():
+        if p.relation != "open" or p.forbidden:
+            continue
+        ha, hb = by_cat.get(p.a), by_cat.get(p.b)
+        if ha and hb and ha[0] != hb[0]:
+            out.append((ha[0], hb[0]))
+    return out
+
+
 def solver_pairs(prog, scenario: Scenario
                  ) -> tuple[list[tuple[str, str]], list[tuple[str, str]],
                             list[tuple[str, str, float]]]:

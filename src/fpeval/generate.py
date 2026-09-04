@@ -134,6 +134,11 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
                           carpet_sqft=sp.unit_area.resolved_carpet_sqft(),
                           storeys=int(sp.storeys or 1))
     req, forb, soft = relational_pairs(prog, sc, spec=sp)
+    # Pairs the typology wants as ONE space. `relational_pairs` folds them into
+    # `required`, which only makes them touch; the opening between them still
+    # got a 900 mm leaf and `TYPO.NOT_ACTUALLY_OPEN` fired on the result.
+    from .topology import open_pairs as _open_pairs
+    opens = _open_pairs(prog, sc)
 
     def budget(programme):
         """Envelope -> per-room target. Returns the area statement."""
@@ -153,6 +158,8 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
             LayoutSpec(programme=programme,
                        required_adjacency=[t for t in required
                                            if t[0] in ids and t[1] in ids],
+                       open_adjacency=[t for t in opens
+                                       if t[0] in ids and t[1] in ids],
                        forbidden_adjacency=[t for t in forbidden
                                             if t[0] in ids and t[1] in ids],
                        soft_adjacency=[t for t in softs

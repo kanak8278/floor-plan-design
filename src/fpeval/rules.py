@@ -1104,7 +1104,7 @@ def check_circulation(ctx: _Ctx) -> list[Finding]:
 # is normally built with no wall at all or a 2.4-3.0 m cased opening, and 1800
 # is the point where a person stops perceiving a threshold. Stated here so it
 # is arguable in one place.
-OPEN_SPAN_MIN_MM = 1800
+from .standards import OPEN_SPAN_MIN_MM  # noqa: E402
 
 
 def _widest_link_mm(ctx: _Ctx, ha: list[str], hb: list[str]) -> float:
@@ -1768,6 +1768,17 @@ def check_brief(ctx: _Ctx) -> list[Finding]:
         # reported both as missing on every plan that had them -- 29 of the 31
         # remaining BRIEF.ROOM_MISSING errors in the suite were a stair or a
         # parking space that was right there in the plan.
+        # A brief may name a category the solver cannot represent. `bridge`
+        # collapses twelve of them -- corridor and powder and toilet and
+        # handwash and dress and terrace among others -- so "the brief asks
+        # for 1 corridor(s); the plan has 0" was reported on a plan whose
+        # corridor was sitting there labelled `foyer`. `roomtypes` knows
+        # nothing about that mapping, so ask the module that owns it.
+        if not ids:
+            from .bridge import canon
+            k = canon(cat)
+            if k != cat and k != "unknown":
+                ids += by_cat.get(k, [])
         if not ids and cat == "stair":
             ids = [f"stair:{i}" for i, _ in
                    enumerate(getattr(ctx.plan, "stairs", ()) or ())]

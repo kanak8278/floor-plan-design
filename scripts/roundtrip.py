@@ -19,7 +19,6 @@ from fpeval.spec import DesignSpec, RoomSpec, AreaQuote, EntranceSpec, VastuSpec
 from fpeval.document import Document
 from fpeval.generate import build
 from fpeval.bridge import spec_to_programme, canon
-from fpeval import rules as R
 from fpeval.spatial import plan_png
 
 
@@ -277,7 +276,11 @@ def one(path: Path, track: str, client, time_limit: float, outdir: Path,
         row["ms"] = int((time.time() - t0) * 1000)
         return row
 
-    fnd = R.validate(plan)
+    # `build` already validated with `spec_to_brief(sp)`. Re-validating here
+    # with `brief=None` made `check_bylaws` treat every apartment unit as a
+    # plot and report setback and coverage errors on flats that have no plot --
+    # 8 of 18 errors across the corpus were this harness's own fault.
+    fnd = br.findings
     row["findings"] = [{"rule": f.rule_id, "sev": f.severity, "detail": f.detail}
                        for f in fnd]
     row["n_errors"] = sum(1 for f in fnd if f.severity == "error")

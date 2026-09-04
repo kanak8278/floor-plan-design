@@ -355,6 +355,8 @@ class RoomReq:
 
 
 # Typical Indian mid-market targets, m^2 carpet.
+from .standards import AREA_WEIGHT as _AW  # noqa: E402
+
 _T = {"living": 18.0, "kitchen": 9.0, "master": 13.0, "bedroom": 11.0,
       "bathroom": 3.6, "dining": 10.0, "pooja": 2.2, "utility": 3.5}
 
@@ -367,28 +369,32 @@ def bhk_programme(n_bed: int, *, baths: int | None = None, dining: bool = False,
         raise ValueError("n_bed must be >= 1")
     baths = baths if baths is not None else max(1, min(n_bed, 2 + (n_bed >= 4)))
     reqs = [RoomReq("living", "Living", "living",
-                    target_m2=living_m2 or _T["living"], weight=1.8,
+                    target_m2=living_m2 or _T["living"],
+                    weight=_AW["living"],
                     vastu_zone="NE", is_entrance=True),
             RoomReq("kitchen", "Kitchen", "kitchen",
-                    target_m2=_T["kitchen"], weight=0.95, vastu_zone="SE")]
+                    target_m2=_T["kitchen"], weight=_AW["kitchen"],
+                    vastu_zone="SE")]
     for i in range(n_bed):
         master = i == 0
         reqs.append(RoomReq(
             f"bed{i+1}", "Master Bedroom" if master else f"Bedroom {i+1}",
             "bedroom",
             target_m2=_T["master"] if master else _T["bedroom"],
-            weight=1.35 if master else 1.1,
+            weight=_AW["master_bedroom"] if master else _AW["bedroom"],
             vastu_zone="SW" if master else ("S" if i % 2 else "W")))
     for i in range(baths):
         reqs.append(RoomReq(f"bath{i+1}", f"Bathroom {i+1}", "bathroom",
-                            target_m2=_T["bathroom"], weight=0.38,
+                            target_m2=_T["bathroom"], weight=_AW["bathroom"],
                             vastu_zone="NW"))
     if dining:
         reqs.append(RoomReq("dining", "Dining", "dining",
-                            target_m2=_T["dining"], weight=1.0, vastu_zone="W"))
+                            target_m2=_T["dining"], weight=_AW["dining"],
+                            vastu_zone="W"))
     if pooja:
         reqs.append(RoomReq("pooja", "Pooja", "pooja",
-                            target_m2=_T["pooja"], weight=0.25, vastu_zone="NE"))
+                            target_m2=_T["pooja"], weight=_AW["pooja"],
+                            vastu_zone="NE"))
     if utility:
         reqs.append(RoomReq("utility", "Utility", "utility",
                             target_m2=_T["utility"], weight=0.35, vastu_zone="NW"))
