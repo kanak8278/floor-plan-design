@@ -40,6 +40,11 @@ import math
 from dataclasses import dataclass, field
 
 INTEGRATION_CAP = 12.0
+
+# Per-door-count ceilings on private-room integration, each the measured p99 of
+# real connected ResPlan plans. See `check` for the full distribution and why a
+# flat threshold was wrong.
+INTEGRATION_CAP_BY_CONN: dict[int, float] = {2: 1.10, 3: 1.55, 4: 1.65}
 PUBLIC = ("living", "dining", "foyer", "sitout")
 # The *public core* is whichever space the plan is organised around. Grouping
 # living with circulation is not a fudge: ResPlan labels the whole hall "living",
@@ -86,6 +91,10 @@ class PlanSyntax:
     # mean private integration / mean public integration. Should be well under 1.
     privacy_gradient: float = 0.0
     core: str = ""                     # the actual most-integrated room
+    # False when the door graph breaks into components. Every measure here is
+    # a depth on the justified graph and depth does not cross a component
+    # boundary, so `check` reports nothing at all in that case.
+    connected: bool = True
     notes: list[str] = field(default_factory=list)
 
 
@@ -115,6 +124,13 @@ def analyse(adj: dict[str, set[str]], meta: dict[str, tuple[str, str]],
 
     dk = diamond_value(k)
     ent_depths = _bfs_depths(adj, entrance) if entrance in adj else {}
+    if entrance in adj:
+        out.connected = len([v for v in ent_depths if v in meta]) == k
+    else:
+        seed = ids[0]
+        out.connected = len([v for v in _bfs_depths(adj, seed) if v in meta]) == k
+    if not out.connected:
+        out.notes.append("door graph is not connected; depth measures omitted")
 
     for i in ids:
         d = _bfs_depths(adj, i)
@@ -165,6 +181,14 @@ def check(s: PlanSyntax) -> list[tuple[str, str, float, str, list[str]]]:
     out = []
     if s.k < 3 or not s.nodes:
         return out
+    # Integration is a depth measure on the justified graph, and depth is
+    # undefined across components. On a plan with one unreachable room the
+    # numbers went to public_score -10.3 and the core landed on a bedroom, so
+    # this reported "the house is organised around the wrong room" when the
+    # real and already-reported fault was a missing door. Say nothing instead:
+    # GEO.UNREACHABLE_ROOM owns that defect.
+    if not s.connected:
+        return out
 
     if s.public_score <= 0 and s.living_relative:
         out.append(("SYNTAX.LIVING_NOT_CORE", "error", 0.9,
@@ -187,12 +211,41 @@ def check(s: PlanSyntax) -> list[tuple[str, str, float, str, list[str]]]:
 
     # A private room that is more integrated than the plan average is being used
     # as circulation -- the formal version of "traffic passes through a bedroom".
+    #
+    # The threshold has to depend on how many doors the room has, and the flat
+    # 1.05x this used to apply did not. Measured over ResPlan plans whose door
+    # graph is at least connected (265 of 1500 -- the rest carry too few doors
+    # to support any statement about circulation, median 6 doors for 8-10
+    # rooms), the ratio of a private room's integration to the plan average
+    # runs:
+    #
+    #     connectivity 1 : median 0.66   p95 0.84   p99 0.90   (n=199)
+    #     connectivity 2 : median 0.99   p95 1.06   p99 1.09   (n=319)
+    #     connectivity 3 : median 1.27   p95 1.54   p99 1.54   (n=177)
+    #     connectivity 4 : median 1.62   p95 1.64   p99 1.64   (n=6)
+    #
+    # A bedroom with an attached bath has two doors and sits AT the plan average
+    # in real houses, so 1.05x flagged the median real bedroom: the rule fired
+    # on 65% of real plans, as an error. The caps below are the measured p99 of
+    # each band, and connectivity 1 is exempt outright -- a terminal room
+    # strands nothing, so it cannot be a corridor whatever its integration says.
+    #
+    # Severity is `warn`: this is the statistical shadow of a defect that
+    # DESIGN.BEDROOM_THROUGH_TRAFFIC already reports as an error from the
+    # topology directly. Counting one flaw twice, once as law, distorts the
+    # score. `strict_review` can promote it.
     ints = [n.integration for n in s.nodes.values()]
     avg = sum(ints) / len(ints)
     for n in s.nodes.values():
-        if n.category in PRIVATE and n.integration > avg * 1.05:
-            out.append(("SYNTAX.PRIVATE_ROOM_INTEGRATED", "error", 0.8,
+        if n.category not in PRIVATE or n.connectivity <= 1 or avg <= 0:
+            continue
+        cap = INTEGRATION_CAP_BY_CONN.get(min(n.connectivity, 4),
+                                          INTEGRATION_CAP_BY_CONN[4])
+        if n.integration > avg * cap:
+            out.append(("SYNTAX.PRIVATE_ROOM_INTEGRATED", "warn", 0.8,
                         f"{n.name} has integration {n.integration:.2f} against a plan "
-                        f"average of {avg:.2f} and connectivity {n.connectivity}; it is "
-                        "functioning as circulation, not as a private room", [n.room_id]))
+                        f"average of {avg:.2f} and connectivity {n.connectivity} "
+                        f"(real plans with {n.connectivity} doors stay under "
+                        f"{cap:.2f}x); it is functioning as circulation, not as a "
+                        "private room", [n.room_id]))
     return out

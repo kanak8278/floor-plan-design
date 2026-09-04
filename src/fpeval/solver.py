@@ -108,6 +108,7 @@ class LayoutSpec:
     w_hub: float = 1.0        # reward the public core touching many rooms
     w_private: float = 1.0    # penalise a private room acting as a corridor
     w_soft_adj: float = 1.0   # weighted topology preferences
+    w_circ: float = 1.0       # charge a room with no contact to circulation
     # limits
     max_aspect_hard: float = 4.0
     time_limit_s: float = 8.0
@@ -440,14 +441,42 @@ def _score_nominal(rects, reqs: Sequence[RoomReq], targets: Sequence[float],
                 deg[i] += 1
                 deg[j] += 1
 
+    # `passage` belongs here. It was missing, and it is the solver's own
+    # circulation room -- `_programme` emits the "Hall" with category
+    # "passage" -- so the one room whose entire job is to touch everything got
+    # no reward for touching anything. On a 30x40 3BHK that produced a hall
+    # in contact with two rooms, a kitchen reachable only through a bedroom
+    # and a bathroom opening off another bathroom.
+    CIRC_CORE = ("living", "dining", "foyer", "passage", "stair")
     for i, r in enumerate(reqs):
-        if r.category in ("living", "dining", "foyer"):
+        if r.category in CIRC_CORE:
             # Reward the public core for being reachable from many rooms.
             pen -= spec.w_hub * 900.0 * deg[i] * (1.6 if r.category == "living" else 1.0)
         elif r.category in ("bedroom", "master_bedroom", "study"):
             # A private room touching more than two others will end up carrying
             # traffic. Two is enough: one to circulation, one to its own bath.
             pen += spec.w_private * 1400.0 * max(0, deg[i] - 2)
+
+    # A room that touches no circulation room at all can only be doored to
+    # something private or service, which is the through-traffic defect before
+    # the door graph is even chosen. Nothing charged for it, so the ranking
+    # happily returned layouts where it was unavoidable. A bathroom is exempt:
+    # hanging off its bedroom is the normal arrangement, not a fault.
+    circ = [i for i, r in enumerate(reqs) if r.category in CIRC_CORE]
+    if circ:
+        for i, r in enumerate(reqs):
+            if i in circ or r.category in ("bathroom", "wc", "balcony"):
+                continue
+            if not any(_touching(rects[i], rects[c], door_gap) for c in circ):
+                # Deliberately modest here, and decisive later. This score
+                # also decides which topologies survive truncation to
+                # `max_topologies`, so a charge big enough to dominate pushed
+                # feasible-but-imperfect topologies out of the pool entirely
+                # and a 20x30 1BHK went INFEASIBLE. The real work is done by
+                # `_circ_isolated` in the cross-topology key, which only ever
+                # compares topologies that already solved and so cannot cost
+                # us a solution.
+                pen += spec.w_circ * 2200.0
 
     for i, j, w in (soft_adj or ()):
         touching = _touching(rects[i], rects[j], door_gap) is not None
@@ -839,6 +868,25 @@ def _host(walls: list[Wall], axis: str, coord: int, lo: int, hi: int
     return best
 
 
+def _vent_need_m2(category: str, floor_m2: float) -> float:
+    """Glazed area NBC asks of one room, from `standards.VENTILATION`.
+
+    Read from the same table the validator reads, so the solver cannot drift
+    away from the rule it is being judged against.
+    """
+    from . import standards as SD
+    if category in ("bathroom", "wc"):
+        key = "bathroom"
+    elif category == "kitchen":
+        key = "kitchen"
+    elif category in SD.HABITABLE_VENT:
+        key = "habitable"
+    else:
+        return 0.0
+    std = SD.VENTILATION[key]
+    return max(std.window_frac_of_floor * floor_m2, std.min_window_m2)
+
+
 def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
                reqs: Sequence[RoomReq], doors: list[tuple[int, int, str]],
                rect_mm: tuple[int, int, int, int], st: AreaStatement,
@@ -885,7 +933,15 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
         if w is not None:
             place(w, (ex0 + ex1) // 2, FRONT_DOOR_W, "front_door")
 
+    # Glazing is SIZED, not stamped. This used to place one window per room at
+    # 45% of the wall run capped at 1800 mm, which is under NBC's 1 m2 per
+    # 10 m2 of floor for any room over ~21 m2 -- so every plan with a decent
+    # living room shipped with NBC.VENTILATION_HABITABLE as an error, and the
+    # solver had no idea. Compute the width the rule demands, then keep opening
+    # exterior edges until it is met, which is what a real plan does with a big
+    # room: two windows, not one impossible one.
     no_window: list[str] = []
+    win_h_mm = max(WIN_HEAD - WIN_SILL, 1)
     for i, r in enumerate(reqs):
         if r.category == "passage":
             continue
@@ -899,19 +955,30 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
             cands.append(("x", X0, y0, y1))
         if x1 == X1:
             cands.append(("x", X1, y0, y1))
-        placed = False
-        for axis, coord, lo, hi in sorted(cands, key=lambda c: c[2] - c[3]):
+
+        floor_m2 = (x1 - x0) * (y1 - y0) / 1e6
+        need_m2 = _vent_need_m2(r.category, floor_m2)
+        # A 10% margin: the validator measures glazing off the emitted opening
+        # geometry, and a width rounded down to the nearest 50 mm must not land
+        # a hair under the requirement.
+        need_mm = int(need_m2 * 1.10 * 1e6 / win_h_mm) if need_m2 > 0 else 0
+
+        got_mm = 0
+        for axis, coord, lo, hi in sorted(cands, key=lambda c: -(c[3] - c[2])):
             w = _host(walls, axis, coord, lo, hi)
             if w is None:
                 continue
-            wmax = 900 if r.category in ("bathroom", "wc") else 1800
-            width = max(600, min(wmax, int((hi - lo) * 0.45) // 50 * 50))
-            if hi - lo < width + 2 * JAMB:
+            run = hi - lo
+            room_cap = 900 if r.category in ("bathroom", "wc") else 3000
+            want = max(600, need_mm - got_mm)
+            width = min(room_cap, want, (run - 2 * JAMB) // 50 * 50)
+            if width < 600:
                 continue
             if place(w, (lo + hi) // 2, width, "window"):
-                placed = True
+                got_mm += width
+            if got_mm >= max(need_mm, 600):
                 break
-        if not placed:
+        if got_mm == 0:
             no_window.append(r.id)
 
     rooms: list[Room] = []
@@ -1111,6 +1178,14 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             pen += 1e6 * sum(1 for i, r in enumerate(reqs)
                              if _interior_cell(rects[i], rect_mm)
                              and (r.category in HABITABLE or r.category in WET))
+            # Contact with circulation is the same kind of property: a topology
+            # decides it, the cut positions cannot repair it, and CP-SAT's
+            # objective cannot see it. Ranking alone was not enough -- the
+            # nominal score only orders the attempts, and this key then chose
+            # between the feasible ones on cut geometry, so a topology that
+            # ranked first for having every room on the hall lost to a later
+            # one with a tighter objective and a kitchen behind a bedroom.
+            pen += 5e6 * _circ_isolated(rects, reqs)
             key = (pen, solver.ObjectiveValue())
             if best is None or key < best["key"]:
                 best = {
@@ -1269,6 +1344,25 @@ def _perturb(base: Sequence[int], ent: int, rng: random.Random) -> list[int]:
         o.remove(ent)
         o.insert(0, ent)
     return o
+
+
+def _circ_isolated(rects: dict[int, tuple], reqs: Sequence[RoomReq]) -> int:
+    """How many rooms touch no circulation room at all.
+
+    Baths and balconies are exempt: hanging off a bedroom is what they do.
+    """
+    circ = [i for i, r in enumerate(reqs)
+            if r.category in ("living", "dining", "foyer", "passage", "stair")]
+    if not circ:
+        return 0
+    door_gap = DOOR_W + 2 * JAMB
+    n = 0
+    for i, r in enumerate(reqs):
+        if i in circ or r.category in ("bathroom", "wc", "balcony"):
+            continue
+        if not any(_touching(rects[i], rects[c], door_gap) for c in circ):
+            n += 1
+    return n
 
 
 def _interior_cell(r: tuple, rect_mm: tuple[int, int, int, int]) -> bool:

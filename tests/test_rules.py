@@ -46,7 +46,8 @@ WALL_MM = 230
 def _build(rects: list[tuple[str, str, tuple[int, int, int, int]]],
            doors: list[tuple[int, int, str, int]],
            plot: tuple[int, int, int, int] | None,
-           north_deg: float, plan_id: str) -> Plan:
+           north_deg: float, plan_id: str,
+           windows: list[tuple[int, int, str, int]] | None = None) -> Plan:
     """Assemble a Plan from axis-aligned room rects given on wall CENTRELINES.
 
     Walls come from noding the union of room boundaries - the same operation
@@ -86,7 +87,7 @@ def _build(rects: list[tuple[str, str, tuple[int, int, int, int]]],
                                               (w.start.x, w.start.y)]).centroid)]
 
     openings: list[Opening] = []
-    for (dx, dy, kind, width) in doors:
+    for (dx, dy, kind, width) in list(doors) + list(windows or []):
         host, pos = None, 0.0
         for w in walls:
             L = w.length
@@ -104,7 +105,9 @@ def _build(rects: list[tuple[str, str, tuple[int, int, int, int]]],
         assert width <= host.length, f"door {width} > wall {host.length}"
         openings.append(Opening(id=f"o{len(openings)}", kind=kind,
                                 wall_id=host.id, position=round(pos, 6),
-                                width=width, sill=0, head=2100))
+                                width=width,
+                                sill=(900 if kind == "window" else 0),
+                                head=2100))
 
     site = Site(north_deg=north_deg)
     if plot is not None:
@@ -159,43 +162,72 @@ OX, OY = 1200, 2200
 
 
 def clean_plan(north_deg: float = 180.0) -> Plan:
-    """A deliberately NBC- and BBMP-compliant 3.5 BHK. The negative control.
+    """A deliberately compliant 3BHK + store. The negative control.
 
-    Every dimension is checked by hand: smallest habitable room 8.25 m^2 /
-    2500 mm wide (limits 7.5 / 2400), kitchen 7.92 m^2 / 2200 mm (5.0 / 1800),
+    Every dimension is checked by hand: smallest habitable room 9.18 m^2 /
+    2700 mm wide (limits 7.5 / 2400), kitchen 7.92 m^2 / 2200 mm (5.0 / 1800),
     baths 8.28 and 6.0 m^2 / 2300 and 2000 mm (2.8 / 1200), passage 1200 mm
-    (900), ceiling 3000 mm (2750). Footprint 112.9 m^2 on a 184 m^2 plot =
-    61.4% coverage and FAR 0.61 (caps 75% and 1.75).
+    (900), ceiling 3000 mm (2750). Footprint 111.6 m^2 on a 184 m^2 plot =
+    60.6% coverage and FAR 0.61 (caps 75% and 1.75).
+
+    Two things this fixture originally got wrong, both of which made it a
+    negative control that the validator correctly rejected:
+
+    * **No windows at all.** It asserted NBC compliance while every room was
+      sealed, so NBC.VENTILATION_HABITABLE and DESIGN.NO_WINDOW fired on six
+      rooms. Glazing is now sized per room against the 1 m^2-per-10 m^2 rule.
+    * **A chain of rooms behind bedrooms.** The rear half hung off the
+      bedrooms -- store behind a bath behind a bedroom, a fourth bedroom behind
+      the master -- which is exactly the through-traffic defect the rules
+      report. The passage is now a T: a front band plus a limb down the middle
+      that reaches the store and both rear rooms directly, so no room but a
+      bedroom's own bath or balcony sits behind a bedroom.
     """
     o = lambda x, y: (x + OX, y + OY)
     R = [
         ("Living",         "living",   (*o(0, 0),        *o(5400, 4500))),
         ("Kitchen",        "kitchen",  (*o(5400, 0),     *o(9000, 2200))),
         ("Bathroom 1",     "bathroom", (*o(5400, 2200),  *o(9000, 4500))),
-        ("Passage",        "living",   (*o(0, 4500),     *o(9000, 5700))),
+        # T-shaped circulation: the band across the front, the limb down the
+        # middle. Modelled as two rooms because the fixture is rectangles.
+        ("Passage",        "passage",  (*o(0, 4500),     *o(9000, 5700))),
+        ("Passage 2",      "passage",  (*o(3000, 5700),  *o(4200, 12400))),
         ("Bedroom 1",      "bedroom",  (*o(0, 5700),     *o(3000, 9000))),
-        ("Master Bedroom", "bedroom",  (*o(3000, 5700),  *o(6500, 9600))),
-        ("Bedroom 3",      "bedroom",  (*o(6500, 5700),  *o(9000, 9000))),
-        ("Bedroom 4",      "bedroom",  (*o(3000, 9600),  *o(6500, 12000))),
         ("Bathroom 2",     "bathroom", (*o(0, 9000),     *o(3000, 11000))),
-        ("Store",          "storage",  (*o(0, 11000),    *o(3000, 12000))),
-        ("Balcony",        "balcony",  (*o(6500, 9000),  *o(9000, 12000))),
+        ("Store",          "store",    (*o(0, 11000),    *o(3000, 12400))),
+        ("Master Bedroom", "bedroom",  (*o(4200, 5700),  *o(9000, 9000))),
+        ("Bedroom 3",      "bedroom",  (*o(4200, 9000),  *o(6900, 12400))),
+        ("Balcony",        "balcony",  (*o(6900, 9000),  *o(9000, 12400))),
     ]
     D = [
         (*o(2700, 0),     "front_door", 1050),   # entrance -> Living
         (*o(2700, 4500),  "door", 900),          # Living   -> Passage
         (*o(7200, 4500),  "door", 900),          # Bath 1   -> Passage
         (*o(5400, 1100),  "door", 900),          # Living   -> Kitchen
+        (*o(3600, 5700),  "door", 900),          # Passage  -> Passage 2
         (*o(1500, 5700),  "door", 900),          # Passage  -> Bedroom 1
-        (*o(4750, 5700),  "door", 900),          # Passage  -> Master
-        (*o(7750, 5700),  "door", 900),          # Passage  -> Bedroom 3
-        (*o(1500, 9000),  "door", 900),          # Bedroom1 -> Bath 2
-        (*o(1500, 11000), "door", 900),          # Bath 2   -> Store
-        (*o(7750, 9000),  "door", 900),          # Bedroom3 -> Balcony
-        (*o(4750, 9600),  "door", 900),          # Master   -> Bedroom 4
+        (*o(1500, 9000),  "door", 900),          # Bedroom1 -> Bath 2 (attached)
+        (*o(3000, 11700), "door", 900),          # Passage2 -> Store
+        (*o(4200, 7350),  "door", 900),          # Passage2 -> Master
+        (*o(4200, 10700), "door", 900),          # Passage2 -> Bedroom 3
+        (*o(6900, 10700), "door", 900),          # Bedroom3 -> Balcony
+    ]
+    # Glazing on exterior walls only, sill 900 head 2100 => 1.2 m^2 per metre
+    # of width. Sized against NBC's 1 m^2 per 10 m^2 of floor.
+    W = [
+        (*o(1350, 0),     "window", 1500),      # Living   (24.3 m2 -> 2.43)
+        (*o(4050, 0),     "window", 1500),      #   "      3.60 m2 total
+        (*o(7200, 0),     "window", 1500),      # Kitchen  (needs 1.00) 1.80
+        (*o(9000, 3350),  "window", 900),       # Bath 1   1.08
+        (*o(0, 5100),     "window", 900),       # Passage  1.08
+        (*o(0, 7350),     "window", 1500),      # Bedroom1 (9.9 -> 0.99) 1.80
+        (*o(0, 10000),    "window", 900),       # Bath 2   1.08
+        (*o(0, 11700),    "window", 900),       # Store    1.08
+        (*o(9000, 7350),  "window", 1800),      # Master   (15.8 -> 1.58) 2.16
+        (*o(5550, 12400), "window", 1500),      # Bedroom3 (9.2 -> 0.92) 1.80
     ]
     return _build(R, D, plot=(0, 0, 11500, 16000), north_deg=north_deg,
-                  plan_id="synth-clean")
+                  plan_id="synth-clean", windows=W)
 
 
 CLEAN_BRIEF = {"habitable_floors": 1, "stilt": False,
@@ -458,8 +490,12 @@ def test_bedroom_with_no_door_at_all_is_an_error():
     p = _drop_doors_between(p, "Bedroom 1", "Bathroom 2")
     hard = [f for f in validate(p, CLEAN_BRIEF, BENGALURU)
             if f.rule_id == "GEO.UNREACHABLE_ROOM" and f.severity == "error"]
-    assert len(hard) == 1, hard
-    assert "must have a door" in hard[0].detail
+    # Two, not one: the bath is attached to this bedroom and its only door was
+    # the one we removed, so isolating the bedroom isolates the bath with it.
+    names = {f.element_ids[0] if f.element_ids else "": f for f in hard}
+    assert len(hard) == 2, hard
+    assert all("must have a door" in f.detail for f in hard)
+    assert any("Bedroom 1" in f.detail for f in hard)
 
 
 def test_bedroom_behind_an_arch_but_with_its_own_door_only_warns():
@@ -477,7 +513,10 @@ def test_bedroom_behind_an_arch_but_with_its_own_door_only_warns():
 
 
 def test_doorless_store_only_warns():
-    p = _drop_doors_between(clean_plan(), "Bathroom 2", "Store")
+    # The store hangs off the passage limb now, not off the bath -- putting it
+    # behind a bath behind a bedroom was the through-traffic defect the fixture
+    # used to carry.
+    p = _drop_doors_between(clean_plan(), "Passage 2", "Store")
     fs = validate(p, CLEAN_BRIEF, BENGALURU)
     assert not [f for f in fs if f.severity == "error"]
 

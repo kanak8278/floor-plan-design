@@ -40,55 +40,72 @@ CASES = [
     ("20x30 3BHK",          20, 30, "N", 3, False),   # must be refused, not faked
 ]
 
-print(f"{'case':<24}{'status':<12}{'t_s':>6}{'rooms':>7}{'IoU':>9}"
-      f"{'err':>5}{'warn':>6}{'vastu':>7}{'svg_kb':>8}")
-print("-" * 84)
-fails = []
-for label, w, d, facing, bhk, expect_ok in CASES:
-    prog = programme(bhk)
-    t0 = time.time()
-    stmt = compute_envelope(w, d, road_facing=facing, profile=PROF, programme=prog)
-    res = solve_layout(w, d, LayoutSpec(programme=prog, entrance_room="living",
-                                        time_limit_s=12.0),
-                       road_facing=facing, profile=PROF, plan_id=f"itg-{w}x{d}-{bhk}")
-    el = time.time() - t0
-    status = str(getattr(res, "status", "?"))
-    plan = getattr(res, "plan", None)
+def run() -> list[str]:
+    """The whole chain over four cases. Returns the failure list.
 
-    if plan is None:
-        print(f"{label:<24}{status:<12}{el:6.1f}{'-':>7}{'-':>9}{'-':>5}{'-':>6}{'-':>7}{'-':>8}")
-        if expect_ok: fails.append(f"{label}: expected a plan, got {status}")
-        else:
-            groups = getattr(res, "infeasible_groups", None)
-            print(f"{'':24}  correctly refused; groups={groups}")
-        continue
+    This used to be module-level script code, so importing it ran the solver and
+    could `sys.exit(1)` -- which aborted pytest COLLECTION for the entire suite,
+    not just this file. A test has to be importable without doing anything.
+    """
+    print(f"{'case':<24}{'status':<12}{'t_s':>6}{'rooms':>7}{'IoU':>9}"
+          f"{'err':>5}{'warn':>6}{'vastu':>7}{'svg_kb':>8}")
+    print("-" * 84)
+    fails = []
+    for label, w, d, facing, bhk, expect_ok in CASES:
+        prog = programme(bhk)
+        t0 = time.time()
+        stmt = compute_envelope(w, d, road_facing=facing, profile=PROF, programme=prog)
+        res = solve_layout(w, d, LayoutSpec(programme=prog, entrance_room="living",
+                                            time_limit_s=12.0),
+                           road_facing=facing, profile=PROF, plan_id=f"itg-{w}x{d}-{bhk}")
+        el = time.time() - t0
+        status = str(getattr(res, "status", "?"))
+        plan = getattr(res, "plan", None)
 
-    findings = validate(plan, brief=None, profile=BENGALURU)
-    errs = [f for f in findings if f.severity == "error"]
-    warns = [f for f in findings if f.severity == "warn"]
-    vastu = [f for f in findings if f.rule_id.startswith("VASTU")]
+        if plan is None:
+            print(f"{label:<24}{status:<12}{el:6.1f}{'-':>7}{'-':>9}{'-':>5}{'-':>6}{'-':>7}{'-':>8}")
+            if expect_ok: fails.append(f"{label}: expected a plan, got {status}")
+            else:
+                groups = getattr(res, "infeasible_groups", None)
+                print(f"{'':24}  correctly refused; groups={groups}")
+            continue
 
-    fr = face_recovery(plan)
-    proj = to_project(plan); blob = json.dumps(proj)
-    ident = ir_identity(plan, from_project(proj))
-    svg = render(plan, "presentation")
-    svg_ann = render(plan, "annotated", findings=findings)
-    ET.fromstring(svg); ET.fromstring(svg_ann)          # must be well-formed
+        findings = validate(plan, brief=None, profile=BENGALURU)
+        errs = [f for f in findings if f.severity == "error"]
+        warns = [f for f in findings if f.severity == "warn"]
+        vastu = [f for f in findings if f.rule_id.startswith("VASTU")]
 
-    print(f"{label:<24}{status:<12}{el:6.1f}{len(plan.rooms):>7}"
-          f"{fr['area_iou']:>9.4f}{len(errs):>5}{len(warns):>6}"
-          f"{len(vastu):>7}{len(svg)/1024:>8.1f}")
+        fr = face_recovery(plan)
+        proj = to_project(plan); blob = json.dumps(proj)
+        ident = ir_identity(plan, from_project(proj))
+        svg = render(plan, "presentation")
+        svg_ann = render(plan, "annotated", findings=findings)
+        ET.fromstring(svg); ET.fromstring(svg_ann)          # must be well-formed
 
-    if not expect_ok: fails.append(f"{label}: expected refusal, got a plan")
-    if fr["area_iou"] < 0.99: fails.append(f"{label}: face IoU {fr['area_iou']:.4f}")
-    if errs: fails.append(f"{label}: {len(errs)} validator errors: "
-                          + ", ".join(f.rule_id for f in errs[:4]))
-    if not (ident["walls_equal"] and ident["openings_equal"] and ident["rooms_equal"]):
-        fails.append(f"{label}: Project round-trip not identity")
+        print(f"{label:<24}{status:<12}{el:6.1f}{len(plan.rooms):>7}"
+              f"{fr['area_iou']:>9.4f}{len(errs):>5}{len(warns):>6}"
+              f"{len(vastu):>7}{len(svg)/1024:>8.1f}")
 
-print("-" * 84)
-if fails:
-    print(f"FAIL ({len(fails)}):")
-    for f in fails: print("  -", f)
-    sys.exit(1)
-print("PASS — envelope -> solver -> validator -> renderer -> Project all agree")
+        if not expect_ok: fails.append(f"{label}: expected refusal, got a plan")
+        if fr["area_iou"] < 0.99: fails.append(f"{label}: face IoU {fr['area_iou']:.4f}")
+        if errs: fails.append(f"{label}: {len(errs)} validator errors: "
+                              + ", ".join(f.rule_id for f in errs[:4]))
+        if not (ident["walls_equal"] and ident["openings_equal"] and ident["rooms_equal"]):
+            fails.append(f"{label}: Project round-trip not identity")
+
+    print("-" * 84)
+    if fails:
+        print(f"FAIL ({len(fails)}):")
+        for f in fails:
+            print("  -", f)
+    else:
+        print("PASS -- envelope -> solver -> validator -> renderer -> Project agree")
+    return fails
+
+
+def test_end_to_end() -> None:
+    assert run() == []
+
+
+if __name__ == "__main__":
+    sys.exit(1 if run() else 0)

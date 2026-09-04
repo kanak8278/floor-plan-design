@@ -857,6 +857,15 @@ def buildable_polygon(plot: Polygon, band: PlotBand,
 # these rules score the shape of the door graph, not the sizes of the rooms.
 
 _PRIVATE = {"bedroom", "master_bedroom"}
+
+# Rooms a bedroom is allowed to be the only way into, with how many of each.
+# Two baths behind one bedroom is a jack-and-jill and legitimate; three is a
+# corridor wearing a bedroom's label. A dressing room counts here too -- it is
+# the same relationship as an attached bath.
+_BEDROOM_APPENDAGES: dict[str, int] = {
+    "bathroom": 2, "balcony": 2, "dressing": 1, "wardrobe": 1, "terrace": 1,
+}
+
 _CIRC = {"living", "dining", "foyer", "passage", "hall"}
 _MAX_DEPTH_FROM_ENTRANCE = 3
 
@@ -895,14 +904,40 @@ def check_circulation(ctx: _Ctx) -> list[Finding]:
     names = {r.id: r.name for r in ctx.rooms}
 
     # 1. A bedroom must not be a corridor. If removing it disconnects rooms that
-    #    are not its own attached bath, traffic passes through someone's bedroom.
+    #    are not its own private appendages, traffic passes through someone's
+    #    bedroom.
+    #
+    #    What counts as an appendage is measured, not assumed. Over the 265
+    #    ResPlan plans whose door graph is at least connected, the rooms found
+    #    hanging behind a private room are:
+    #
+    #        bathroom 416   balcony 232   kitchen 6   living 1   bedroom 1
+    #
+    #    So an attached bath and a bedroom balcony are what real houses do --
+    #    exactly the arrangement the brief asks for ("one balcony off the master
+    #    bedroom"). Exempting only the bath fired this error on 59% of real
+    #    plans; the balcony was the entire false-positive population. A kitchen,
+    #    a living room or a second bedroom behind a bedroom stays an error,
+    #    which is what the tail of that distribution says it should be.
+    # A room that is unreachable to begin with is stranded whichever room you
+    # remove, so it used to be blamed on every bedroom in the plan at once --
+    # dropping the kitchen's only door produced three BEDROOM_THROUGH_TRAFFIC
+    # errors, one of them naming a bedroom that does not touch the kitchen.
+    # Removing a door cannot make a bedroom into a corridor. Only rooms that
+    # ARE reachable can be stranded by passing through one, and an unreachable
+    # room is GEO.UNREACHABLE_ROOM's business.
+    base = _reach_without(a, entry, set()) if entry is not None else set()
     for rid, nb in a.items():
         if _cat(ctx, rid) not in _PRIVATE or entry is None or rid == entry:
             continue
         reach = _reach_without(a, entry, {rid})
-        stranded = [q for q in a if q != rid and q not in reach]
-        own_bath = [q for q in stranded if _cat(ctx, q) == "bathroom"]
-        if len(stranded) > len(own_bath) or len(own_bath) > 1:
+        stranded = [q for q in a if q != rid and q in base and q not in reach]
+        appendages = [q for q in stranded
+                      if _cat(ctx, q) in _BEDROOM_APPENDAGES]
+        over_cap = any(
+            sum(1 for q in stranded if _cat(ctx, q) == cat) > cap
+            for cat, cap in _BEDROOM_APPENDAGES.items())
+        if len(stranded) > len(appendages) or over_cap:
             lost = ", ".join(names.get(q, q) for q in stranded[:4])
             out.append(Finding(
                 "DESIGN.BEDROOM_THROUGH_TRAFFIC", "error", 1.0,

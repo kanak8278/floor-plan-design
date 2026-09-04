@@ -155,7 +155,20 @@ RESPLAN_KEYS = ("living", "kitchen", "bedroom", "bathroom", "balcony", "store")
 
 
 def get(key: str) -> RoomType | None:
-    return T.get(key)
+    """The type for a category key, resolving aliases.
+
+    The plain `T.get` this used to be returned None for any alias, and the
+    solver emits `category="passage"` -- an alias of `foyer`, not a key. So
+    every passage the solver produced resolved to None and silently skipped
+    every roomtypes-driven check (min width, needs_window, area band). A miss
+    that returns None looks like "no rule applies" and is indistinguishable
+    from "checked and fine", which is the worst way for a check to fail.
+    """
+    rt = T.get(key)
+    if rt is not None:
+        return rt
+    k = canonical(key)
+    return T.get(k) if k != "unknown" else None
 
 
 def canonical(name: str) -> str:

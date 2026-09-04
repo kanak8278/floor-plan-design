@@ -95,7 +95,12 @@ class LoopConfig:
 
 
 # Rule families, so a whole class can be switched without naming every id.
-FAMILIES = ("GEO", "NBC", "BYLAW", "VASTU", "DESIGN", "TYPO")
+# Every prefix the validator actually emits. This list was stuck at the first
+# six long after TOPO, SYNTAX, ZONE and BRIEF shipped, and because `allows()`
+# defaults an unlisted family to on, those four could not be switched off at
+# all -- the presets below silently kept them running.
+FAMILIES = ("GEO", "NBC", "BYLAW", "VASTU", "DESIGN", "TYPO",
+            "TOPO", "SYNTAX", "ZONE", "BRIEF")
 
 
 @dataclass
@@ -175,8 +180,9 @@ PRESETS: dict[str, AgentPolicy] = {
     # Concept stage: only hard geometry and law. Domain judgement and Vastu are
     # noise when the client is still deciding how many bedrooms they want.
     "concept": AgentPolicy(rules=RuleConfig(
-        families={"GEO": True, "NBC": True, "BYLAW": True,
-                  "VASTU": False, "DESIGN": False, "TYPO": False})),
+        families={"GEO": True, "NBC": True, "BYLAW": True, "BRIEF": True,
+                  "VASTU": False, "DESIGN": False, "TYPO": False,
+                  "TOPO": False, "SYNTAX": False, "ZONE": False})),
     # Everything on, and circulation judgement promoted to blocking.
     "strict_review": AgentPolicy(rules=RuleConfig(severity={
         "DESIGN.DEAD_END_CIRCULATION": "error",

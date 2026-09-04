@@ -704,6 +704,7 @@ LEVEL_FURNITURE = "furniture"
 
 DOOR_TYPES = ("single", "double", "sliding", "french", "pocket", "bifold",
               "opening", "garage")
+WINDOW_TYPES = ("standard", "fixed", "casement", "sliding", "bay")
 POSITION_WORDS = ("start", "quarter", "centre", "three_quarter", "end")
 COMPASS_MOVE = ("north", "north_east", "east", "south_east",
                 "south", "south_west", "west", "north_west")
@@ -838,6 +839,18 @@ OP_TABLE: dict[str, dict[str, Any]] = {
         "level": LEVEL_GEOMETRY, "required": ("wall_id", "position"),
         "optional": ("door_type", "width_mm"), "editor": "addDoor",
         "doc": "addDoor(wallId, position, doorType).",
+    },
+    "add_window": {
+        "level": LEVEL_GEOMETRY, "required": ("wall_id", "position"),
+        "optional": ("type", "width_mm", "height_mm", "sill_mm"),
+        "editor": "addWindow",
+        "doc": "addWindow(wallId, position, type) -- standard|fixed|casement|"
+               "sliding|bay. There was no window op at all before this.",
+    },
+    "update_window": {
+        "level": LEVEL_GEOMETRY, "required": ("window_id",),
+        "optional": ("width_mm", "height_mm", "sill_mm", "position"),
+        "editor": "updateWindow", "doc": "updateWindow(id, updates).",
     },
     "update_door": {
         "level": LEVEL_GEOMETRY, "required": ("door_id",),
@@ -1440,6 +1453,48 @@ def propose_patch_tool_schema(strict: bool = False) -> dict:
         "swing_direction": nullable({"type": "string", "enum": ["left", "right"]}),
         "flip_side": nullable({"type": "boolean"}),
         "room_type": nullable({"type": "string", "enum": list(EDITOR_ROOM_TYPES)}),
+        # ---- furniture level -------------------------------------------
+        # These were declared in OP_TABLE and missing here, which meant the
+        # model had no field to put them in: every furniture op was
+        # unexpressible through the one tool that proposes ops. Generated
+        # from the table now, and `schema_param_gaps()` fails the build if
+        # the two ever drift apart again.
+        "item": nullable({"type": "string",
+                          "description": "catalogue key, e.g. 'sofa', 'bed_queen'"}),
+        "item_id": nullable({"type": "string",
+                             "description": "id of a placed item, or its "
+                                            "catalogue key if unique"}),
+        "anchor": nullable({"type": "string", "enum": list(ANCHORS)}),
+        "of": nullable({"type": "string",
+                        "description": "the other item, for beside/facing/front_of"}),
+        "prefer": nullable({"type": "array", "items": {"type": "string",
+                                                       "enum": list(ZONES)}}),
+        "avoid": nullable({"type": "array", "items": {"type": "string",
+                                                      "enum": list(ZONES)}}),
+        "count": nullable({"type": "integer"}),
+        "align": nullable({"type": "string"}),
+        "clear_front_mm": nullable({"type": "number"}),
+        "gap_mm": nullable({"type": "number"}),
+        "abut": nullable({"type": "boolean"}),
+        "avoid_window": nullable({"type": "boolean"}),
+        "note": nullable({"type": "string"}),
+        "density": nullable({"type": "string", "enum": list(DENSITIES)}),
+        "add": nullable({"type": "array", "items": {"type": "string"}}),
+        "drop": nullable({"type": "array", "items": {"type": "string"}}),
+        "swap": nullable({"type": "array", "items": {"type": "string"},
+                          "description": "pairs, old then new"}),
+        "run": nullable({"type": "string", "enum": list(KITCHEN_RUNS)}),
+        "hob_zone": nullable({"type": "string", "enum": list(ZONES)}),
+        "sink_zone": nullable({"type": "string", "enum": list(ZONES)}),
+        "fridge_zone": nullable({"type": "string", "enum": list(ZONES)}),
+        "breakfast_counter": nullable({"type": "boolean"}),
+        # ---- openings --------------------------------------------------
+        "window_id": nullable({"type": "string"}),
+        "type": nullable({"type": "string",
+                          "enum": sorted(set(DOOR_TYPES) | set(WINDOW_TYPES)),
+                          "description": "door or window type, per the op"}),
+        "sill_mm": nullable({"type": "number",
+                             "description": "window sill height above floor"}),
     }
     params = {"type": "object", "properties": params_props,
               "required": [],          # see the docstring: union budget is 16
@@ -1447,7 +1502,8 @@ def propose_patch_tool_schema(strict: bool = False) -> dict:
 
     op_props = {
         "op": {"type": "string", "enum": sorted(OP_TABLE)},
-        "level": {"type": "string", "enum": [LEVEL_SPEC, LEVEL_GEOMETRY]},
+        "level": {"type": "string",
+                  "enum": [LEVEL_SPEC, LEVEL_GEOMETRY, LEVEL_FURNITURE]},
         "params": params,
         "description": {"type": "string",
                         "description": "homeowner-readable, imperative, says why"},
@@ -1471,6 +1527,24 @@ def propose_patch_tool_schema(strict: bool = False) -> dict:
             "additionalProperties": False}
 
 
+def schema_param_gaps() -> dict[str, list[str]]:
+    """Op params that `propose_patch_tool_schema` gives the model no field for.
+
+    Empty is the only acceptable answer. An op whose params are absent here is
+    declared but unreachable -- the model can name the op and then has nowhere
+    to put its arguments, which is how all six furniture ops sat unusable
+    through this tool while looking fully wired in `OP_TABLE`.
+    """
+    have = set(propose_patch_tool_schema()["properties"]["ops"]["items"]
+               ["properties"]["params"]["properties"])
+    out: dict[str, list[str]] = {}
+    for name, e in OP_TABLE.items():
+        miss = sorted((set(e["required"]) | set(e["optional"])) - have)
+        if miss:
+            out[name] = miss
+    return out
+
+
 def _coerce_op_params(d: dict) -> dict:
     """Undo the flat-schema compromises: drop nulls, restore numeric types."""
     d = dict(d or {})
@@ -1482,6 +1556,7 @@ def _coerce_op_params(d: dict) -> dict:
             except ValueError:
                 pass  # keeps 'midpoint' / position words
     for k in ("distance_mm", "thickness_mm", "height_mm", "width_mm",
+              "sill_mm", "clear_front_mm", "gap_mm",
               "min_sqft", "max_sqft", "min_aspect", "max_aspect"):
         if isinstance(p.get(k), str):
             try:
