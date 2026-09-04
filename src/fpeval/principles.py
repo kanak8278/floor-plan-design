@@ -52,7 +52,38 @@ PRINCIPLES: tuple[Principle, ...] = (
         "interleave a bedroom between two service rooms, or scatter bedrooms "
         "across opposite ends of the plan.",
         ("ZONE.PRIVATE_FRAGMENTED", "ZONE.PUBLIC_FRAGMENTED",
-         "DESIGN.BEDROOMS_SCATTERED", "DESIGN.DEAD_END_CIRCULATION")),
+         "DESIGN.BEDROOMS_SCATTERED", "DESIGN.DEAD_END_CIRCULATION",
+         "DESIGN.PUBLIC_CORE_SPLIT")),
+    Principle(
+        "P.SIZE_HIERARCHY",
+        "The living room is the biggest room in the house. Surplus floor area "
+        "belongs to the social space, not to a corridor and not to a bathroom: "
+        "if there is area left over, make the hall and dining larger, never the "
+        "passage. A bathroom bigger than a bedroom, or a passage wider than a "
+        "person needs, means area was parked where nobody asked for it.",
+        ("DESIGN.LIVING_NOT_LARGEST", "DESIGN.CIRCULATION_OVERSIZED",
+         "DESIGN.CIRCULATION_WIDE",
+         "DESIGN.BATH_OVERSIZED", "DESIGN.BATH_DISPROPORTIONATE",
+         "DESIGN.WET_AREA_EXCESSIVE"),
+        why="Measured on 400 real plans, the living room is the largest "
+            "habitable room in 98%. Our own solver used the passage as the "
+            "surplus sink and produced a 30 m2 hall beside a 10 m2 living."),
+    Principle(
+        "P.ONE_SOCIAL_SPACE",
+        "Living, dining and the hall read as one continuous place, not three "
+        "small rooms in different corners. In Indian usage the hall IS the "
+        "living room -- do not make them two rooms. Where a dining area sits "
+        "next to the living, join them with a wide opening rather than a "
+        "doorway, or do not wall them apart at all: a 900 mm door between them "
+        "makes two small rooms out of one good space. A foyer exists only "
+        "where there is a real arrival from the gate; otherwise the front door "
+        "opens into the living and there is no foyer to draw. A private or "
+        "service room wedged between the social rooms splits them in half and "
+        "halves what they are worth.",
+        ("DESIGN.PUBLIC_CORE_SPLIT", "ZONE.PUBLIC_FRAGMENTED",
+         "TYPO.MISSING_ADJACENCY", "TYPO.NOT_ACTUALLY_OPEN"),
+        why="The complaint that produced this rule: two half-sized social "
+            "spaces instead of one good one."),
     Principle(
         "P.ARRIVAL",
         "Arrival is a sequence: sitout or porch, then a foyer, then the hall. "
@@ -90,7 +121,8 @@ PRINCIPLES: tuple[Principle, ...] = (
         "at least one bath reachable without passing through a bedroom.",
         ("TOPO.ATTACHED_BATH_SHORTFALL", "TOPO.BATH_OVERSHARED",
          "TOPO.NO_COMMON_BATH", "TOPO.BATH_UNREACHABLE",
-         "DESIGN.SOLE_BATH_VIA_BEDROOM")),
+         "DESIGN.SOLE_BATH_VIA_BEDROOM", "DESIGN.NO_ENSUITE_MASTER",
+         "DESIGN.BATH_BEHIND_SERVICE", "DESIGN.BEDROOM_FAR_FROM_BATH")),
     Principle(
         "P.NO_WC_ONTO_FOOD",
         "A toilet must never open into a kitchen, and must not open onto or be "

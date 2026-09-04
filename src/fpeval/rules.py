@@ -58,8 +58,34 @@ _STAIR_RE = re.compile(r"stair|staircase", re.I)
 _MASTER_RE = re.compile(r"master", re.I)
 _WC_RE = re.compile(r"\bwc\b|water closet|toilet", re.I)
 
-HABITABLE = {"living", "bedroom"}
+# NBC 2016 Part 3: a habitable room is one used for living, sleeping, dining or
+# study. This set holds the BASE categories; use `_is_habitable` to test a
+# room, because a plan carries subtypes.
+#
+# `dining` and `study` were missing, and the codebase's own other two tables
+# already disagreed with that: both are in `envelope.NBC_MIN` and in
+# `standards.HABITABLE_VENT`, so a study was required to have a window and
+# budgeted against 7.5 m2 while being exempt from the 7.5 m2 check. A room can
+# be habitable for glazing and not habitable for area only by accident.
+#
+# `kitchen` and `pooja` are deliberately absent. The kitchen has its own
+# branch with its own minima, and a pooja room is not used for living or
+# sleeping -- it is `klass="habitable"` in the taxonomy, which is a different
+# question from NBC's.
+HABITABLE = {"living", "bedroom", "dining", "study"}
 NON_HABITABLE = {"balcony", "storage"}
+
+
+def _is_habitable(category: str) -> bool:
+    """Is this room habitable under NBC, subtypes included?
+
+    A plain `category in HABITABLE` skipped `master_bedroom` entirely -- no
+    minimum area, no minimum width, no ceiling height -- on every plan the
+    system has ever produced. It also skipped `guest_bedroom`. The most
+    important room in an Indian plan was the one room with no floor under it.
+    """
+    from . import roomtypes as rt
+    return any(k in HABITABLE for k in rt.counts_as(category))
 PRIVATE = {"bedroom", "bathroom"}       # must have a real door, never an arch
 # Shared boundary above which a doorless room is read as an open threshold
 # (open-plan kitchen, dining split, entry arch) instead of an isolated room.
@@ -642,7 +668,7 @@ def check_nbc(ctx: _Ctx) -> list[Finding]:
     out: list[Finding] = []
     nbc = ctx.profile.nbc
     hab = [r for r in ctx.rooms
-           if r.category in HABITABLE and r.id in ctx.polys and not _is_passage(r)]
+           if _is_habitable(r.category) and r.id in ctx.polys and not _is_passage(r)]
     single_room = len(hab) == 1
     ac_rooms = set(ctx.brief.get("air_conditioned_room_ids", []))
 
@@ -664,7 +690,7 @@ def check_nbc(ctx: _Ctx) -> list[Finding]:
                     [r.id], w, float(nbc.passage_min_width_mm)))
             continue
 
-        if r.category in HABITABLE:
+        if _is_habitable(r.category):
             req_a = (nbc.hab_min_area_single_room_m2 if single_room
                      else nbc.hab_min_area_m2)
             if a_m2 < req_a - 1e-6:
@@ -1011,6 +1037,28 @@ def check_circulation(ctx: _Ctx) -> list[Finding]:
 
 
 # ------------------------------------------------------------------ typology
+# Below this, a connection between two rooms reads as a doorway; above it, as
+# one continuous space. A judgement, not a measurement: Indian living-cum-dining
+# is normally built with no wall at all or a 2.4-3.0 m cased opening, and 1800
+# is the point where a person stops perceiving a threshold. Stated here so it
+# is arguable in one place.
+OPEN_SPAN_MIN_MM = 1800
+
+
+def _widest_link_mm(ctx: _Ctx, ha: list[str], hb: list[str]) -> float:
+    """The widest single opening joining any room in `ha` to any in `hb`."""
+    want = {(x, y) for x in ha for y in hb} | {(y, x) for x in ha for y in hb}
+    by_id = {o.id: o for o in getattr(ctx.plan, "openings", ()) or ()}
+    best = 0.0
+    for oid, ra, rb in ctx.door_edges:
+        if (ra, rb) not in want:
+            continue
+        o = by_id.get(oid)
+        if o is not None:
+            best = max(best, float(getattr(o, "width", 0) or 0))
+    return best
+
+
 def check_typology(ctx: _Ctx) -> list[Finding]:
     """Adjacency expectations that depend on the BUILDING, not on the room.
 
@@ -1052,6 +1100,22 @@ def check_typology(ctx: _Ctx) -> list[Finding]:
             continue                          # the room is not in this plan
         link = joined(rule.a, rule.b)
         sev = "error" if rule.weight >= 0.9 else "warn"
+        # "open" is a stronger claim than "direct" and was checked as though it
+        # were the same one, so a 900 mm door satisfied "sold as one
+        # living-cum-dining space". It is not one space if you walk through a
+        # doorway to get from half of it to the other half.
+        if rule.relation == "open" and link:
+            widest = _widest_link_mm(ctx, ha, hb)
+            if widest < OPEN_SPAN_MIN_MM:
+                out.append(Finding(
+                    "TYPO.NOT_ACTUALLY_OPEN", sev, rule.weight,
+                    f"{ty.display}: {rule.a} and {rule.b} are joined by a "
+                    f"{widest:.0f} mm doorway, so they read as two rooms. "
+                    f"{OPEN_SPAN_MIN_MM} mm or more is needed for them to be "
+                    "one continuous space"
+                    + (f" — {rule.why}" if rule.why else ""),
+                    (ha + hb)[:4], widest, float(OPEN_SPAN_MIN_MM)))
+            continue
         if rule.relation in ("direct", "open", "near") and not link:
             # `near` is satisfied by a shared boundary even with no door, so only
             # flag it when the rooms do not touch at all.
@@ -1202,6 +1266,185 @@ def _scenario_for(ctx: _Ctx):
                       storeys=int(ctx.brief.get("habitable_floors", 1)),
                       bedrooms=beds, kitchens=max(kits, 1),
                       has_two_living=livs >= 2)
+
+
+# ---------------------------------------------------------------------------
+# layout sense: the things a client notices first
+# ---------------------------------------------------------------------------
+#
+# These came out of reading our own output next to a critique of it. Every one
+# was visible at a glance on the drawing and invisible to the validator, which
+# is the worst combination: the plan looked checked.
+#
+# Each threshold below is measured on the 400-plan ResPlan set or argued from
+# the dimension, and the docstring says which. ResPlan carries only six
+# categories (bathroom, bedroom, balcony, living, kitchen, storage), so it can
+# calibrate the en-suite and hierarchy rules and cannot calibrate anything
+# about dining, utility or circulation. Where it cannot, the rule rests on a
+# dimensional argument rather than an invented percentile.
+
+# A passage is functional at roughly a metre wide; two people pass at 1.2 m.
+# Beyond this it is not circulation, it is unassigned floor that the solver had
+# nowhere else to put -- and `envelope.NBC_MIN` says so in as many words:
+# "passage: filler hall/corridor absorbing leftover area".
+PASSAGE_IS_A_ROOM_MM = 2100
+
+# Service rooms a bathroom must not hide behind.
+_SERVICE_ONLY = {"utility", "store", "storage", "kitchen", "shaft"}
+# What counts as one public zone.
+_PUBLIC = {"living", "dining", "foyer", "passage", "hall", "sitout"}
+
+
+def check_layout_sense(ctx: _Ctx) -> list[Finding]:
+    from . import roomtypes as rt
+    out: list[Finding] = []
+    a = _adj(ctx)
+    cat = {r.id: (r.category or "") for r in ctx.rooms}
+    name = {r.id: (r.name or r.id) for r in ctx.rooms}
+    area = {r.id: (ctx.polys[r.id].area / 1e6)
+            for r in ctx.rooms if r.id in ctx.polys}
+    req = (ctx.brief.get("requirements") or {})
+
+    def ids_of(*cats: str) -> list[str]:
+        want = set()
+        for c in cats:
+            want |= set(rt.subtypes_of(c))
+        return [r.id for r in ctx.rooms if cat[r.id] in want]
+
+    baths = set(ids_of("bathroom"))
+    beds = ids_of("bedroom")
+    livings = ids_of("living")
+
+    # ---- the master bedroom has no bathroom of its own ------------------
+    # Measured: 290 of 400 real plans (72%) give their largest bedroom a
+    # bathroom opening directly off it. Common but not universal, so this is
+    # a warning by default -- and an error when the brief asked for it, which
+    # `bhk_programme` does for every master bedroom it writes.
+    if beds and baths:
+        master = max(beds, key=lambda i: area.get(i, 0.0))
+        if not (baths & a.get(master, set())):
+            asked = bool(req.get("attached_bath")) or "master_bedroom" in (
+                req.get("rooms") or {})
+            out.append(Finding(
+                "DESIGN.NO_ENSUITE_MASTER", "error" if asked else "warn",
+                1.0 if asked else 0.6,
+                f"{name[master]} has no bathroom opening off it"
+                + (" and the brief asked for an en-suite" if asked else
+                   "; 72% of real plans give the main bedroom its own"),
+                [master] + sorted(baths)[:2]))
+
+    # ---- a bathroom you reach through the utility -----------------------
+    # No measurement needed: a bathroom whose only door is off a service room
+    # cannot be used without walking through the washing.
+    for b in sorted(baths):
+        nbrs = a.get(b, set())
+        if not nbrs:
+            continue
+        if all(cat.get(n, "") in _SERVICE_ONLY for n in nbrs):
+            via = ", ".join(sorted(name.get(n, n) for n in nbrs))
+            out.append(Finding(
+                "DESIGN.BATH_BEHIND_SERVICE", "error", 0.9,
+                f"{name[b]} is only reachable through {via}; a bathroom must "
+                "open off circulation or off the bedroom it serves",
+                [b] + sorted(nbrs)[:2]))
+
+    # ---- the living room is not the biggest room in the house -----------
+    # Measured: the living room is the largest habitable room in 392 of 400
+    # real plans (98%). At that prevalence an inversion is a defect, not a
+    # style, so this is an error.
+    hab = [i for i in area if _is_habitable(cat.get(i, ""))]
+    if livings and len(hab) > 1:
+        biggest = max(hab, key=lambda i: area[i])
+        if cat.get(biggest, "") != "living":
+            liv = max(livings, key=lambda i: area.get(i, 0.0))
+            out.append(Finding(
+                "DESIGN.LIVING_NOT_LARGEST", "error", 0.8,
+                f"{name[liv]} is {area.get(liv, 0):.1f} m² but "
+                f"{name[biggest]} is {area[biggest]:.1f} m²; the living room "
+                "is the largest habitable room in 98% of real plans",
+                [liv, biggest], area.get(liv, 0.0), area[biggest]))
+
+    # ---- circulation that is really unassigned floor --------------------
+    # Two severities, because "wide" and "wrong" are different claims.
+    #
+    # A wide corridor in a large house is not a defect, and a first version
+    # that made width alone an error fired on 66 of 100 suite plans -- which
+    # destroys the signal even though every one of them really did have a
+    # too-wide passage. The defect signature is not width, it is a passage
+    # that has been handed MORE floor than the living room: at that point the
+    # surplus was parked in circulation instead of in the social space, which
+    # is the actual complaint.
+    #
+    # `solver.py` does this by construction -- "absorb leftover area as a hall
+    # rather than bloating wet rooms" appends one `passage` room whose target
+    # IS the slack -- so the error case is the solver's own behaviour caught in
+    # the act, and the warn case is the ordinary consequence of it.
+    liv_area = max((area.get(i, 0.0) for i in livings), default=0.0)
+    for r in ctx.rooms:
+        if not _is_passage(r) or r.id not in ctx.polys:
+            continue
+        a_m2 = area.get(r.id, 0.0)
+        w = clear_width_mm(ctx.polys[r.id])
+        if liv_area and a_m2 > liv_area:
+            out.append(Finding(
+                "DESIGN.CIRCULATION_OVERSIZED", "error", 0.8,
+                f"{name[r.id]} is {a_m2:.1f} m², larger than the living room "
+                f"at {liv_area:.1f} m². Surplus floor belongs in the social "
+                "space, not in circulation",
+                [r.id], a_m2, liv_area))
+        elif w > PASSAGE_IS_A_ROOM_MM:
+            out.append(Finding(
+                "DESIGN.CIRCULATION_WIDE", "warn", 0.5,
+                f"{name[r.id]} is {w:.0f} mm wide at its narrowest -- wider "
+                "than circulation needs; that area would read better as part "
+                "of the living or dining space",
+                [r.id], w, float(PASSAGE_IS_A_ROOM_MM)))
+
+    # ---- the public rooms are not one place -----------------------------
+    # The complaint this came from: "living room and hall should be at one
+    # place, that will make them big together; if we have small spaces in the
+    # middle what is the usage". A public zone in two pieces means the client
+    # has two half-sized social spaces instead of one good one.
+    pub = [i for i in area if cat.get(i, "") in _PUBLIC]
+    if len(pub) > 1:
+        seen: set[str] = set()
+        clusters = 0
+        for i in pub:
+            if i in seen:
+                continue
+            clusters += 1
+            stack, group = [i], set()
+            while stack:
+                cur = stack.pop()
+                if cur in group:
+                    continue
+                group.add(cur)
+                for n in a.get(cur, ()):
+                    if n in pub and n not in group:
+                        stack.append(n)
+            seen |= group
+        if clusters > 1:
+            out.append(Finding(
+                "DESIGN.PUBLIC_CORE_SPLIT", "error", 0.9,
+                f"the public rooms sit in {clusters} disconnected groups "
+                f"({', '.join(name[i] for i in pub)}); living, dining and the "
+                "hall should read as one continuous space",
+                pub[:4], float(clusters), 1.0))
+
+    # ---- a bedroom with no bathroom near it -----------------------------
+    # Two doors: bedroom -> circulation -> bathroom. Three means crossing the
+    # house in the night.
+    if baths and beds:
+        for b in beds:
+            if baths & a.get(b, set()):
+                continue
+            near = any(baths & a.get(n, set()) for n in a.get(b, ()))
+            if not near:
+                out.append(Finding(
+                    "DESIGN.BEDROOM_FAR_FROM_BATH", "warn", 0.6,
+                    f"{name[b]} is more than two doors from any bathroom",
+                    [b]))
+    return out
 
 
 def check_zoning(ctx: _Ctx) -> list[Finding]:
@@ -1745,6 +1988,7 @@ def validate(plan: Plan, brief: dict | None = None,
     fs += check_circulation(ctx)
     fs += check_typology(ctx)
     fs += check_design_quality(ctx)
+    fs += check_layout_sense(ctx)
     fs += check_bathroom_topology(ctx)
     fs += check_zoning(ctx)
     fs += check_syntax(ctx)

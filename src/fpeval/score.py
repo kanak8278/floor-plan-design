@@ -355,6 +355,11 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         "must_place": list(t.must_place or []),
         "place_in": dict(t.place_in or {}),
         "vastu_zones": dict(t.vastu_zones or {}),
+        # `Truth.attached_bath` has existed all along and 19 of the 160
+        # examples set it, but it was never handed to the validator, so an
+        # en-suite the brief asked for was scored nowhere. It is the single
+        # most-noticed thing about an Indian plan.
+        "attached_bath": t.attached_bath,
     }
     brief = {"requirements": _reqs,
              "scenario": res.typology,
