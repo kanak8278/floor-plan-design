@@ -820,18 +820,30 @@ def test_the_command_and_patch_vocabularies_agree():
 
 
 def test_the_service_accepts_the_compass_spelling_everything_else_uses():
-    """`/generate` took "N"; briefs, ground truth and `spec.py` say "north"."""
+    """`/generate` took "N"; briefs, ground truth and `spec.py` say "north".
+
+    Note that a road side and a move direction are DIFFERENT vocabularies and
+    must not be conflated: a plot side is one of four because a plot is a
+    rectangle, while `move_wall_parallel` takes any of eight. An earlier cut of
+    this test asserted all eight were valid road sides, so it passed while
+    "south_west" raised a 500 inside `north_deg_for`.
+    """
     from service.app import GenerateIn
-    from fpeval.commands import COMPASS
-    for word in COMPASS:
+    from fpeval.envelope import ROAD_BEARING
+
+    for word, letter in (("north", "N"), ("east", "E"), ("south", "S"),
+                         ("west", "W"), ("N", "N"), ("W", "W")):
         got = GenerateIn(width_ft=30, depth_ft=40, programme=[],
                          road_facing=word).road_facing
-        assert got in ("N", "S", "E", "W", "NE", "NW", "SE", "SW"), (word, got)
+        assert got == letter, (word, got)
+        assert got in ROAD_BEARING
+
+    # A diagonal is refused at the boundary rather than raised inside it, and
     # "north_east" must not fold to "N" by taking the first character.
-    assert GenerateIn(width_ft=30, depth_ft=40, programme=[],
-                      road_facing="north_east").road_facing == "NE"
-    with pytest.raises(Exception):
-        GenerateIn(width_ft=30, depth_ft=40, programme=[], road_facing="banana")
+    for bad in ("north_east", "NE", "south_west", "banana"):
+        with pytest.raises(Exception):
+            GenerateIn(width_ft=30, depth_ft=40, programme=[],
+                       road_facing=bad)
 
 
 # ------------------------------------------------------------ the ruler itself
@@ -871,3 +883,86 @@ def test_a_deterministic_solve_reproduces_exactly():
     assert len(set(runs)) == 1, (
         "a deterministic solve returned different results on identical input; "
         f"candidates tried: {[r[1] for r in runs]}")
+
+
+# ------------------------------------------------- the editor's own floor id
+# `_h_replace_storey` copies id, level, name, storey_height and presentation
+# from the old storey onto the solved plan. It did not copy
+# `project_floor_id` -- the id the EDITOR knows the floor by -- so a solved
+# plan carried none and `project._floor_id_of` fell back to "floor-<id>".
+# The projection then described a floor called "floor-f1" while the client's
+# `activeFloorId` still said "f1", so the canvas matched nothing and drew
+# "Start building your floor plan" over a document holding twelve walls.
+#
+# The id survived every other command. It was lost only on `replace_storey`,
+# which is to say only on a SUCCESSFUL solve -- the one moment the user is
+# watching for geometry to appear.
+
+def test_the_editors_floor_id_survives_a_solve():
+    from fpeval.project import design_from_project, to_project
+    from fpeval.document import Document
+    from fpeval.commands import Command
+    from fpeval.envelope import bhk_programme, CityProfileAdapter
+    from fpeval.solver import LayoutSpec, solve_layout
+    from fpeval.bylaws import BENGALURU
+
+    # "f1" is an editor uid: not what we would derive, so it is an override.
+    proj = {"id": "proj-x", "name": "x", "activeFloorId": "f1",
+            "floors": [{"id": "f1", "name": "Ground", "level": 0,
+                        "walls": [], "doors": [], "windows": [], "rooms": []}]}
+    design = design_from_project(proj)
+    doc = Document(design=design, base=design)
+    assert to_project(doc.design)["floors"][0]["id"] == "f1"
+
+    prog = bhk_programme(2)
+    plan = solve_layout(
+        30, 40,
+        LayoutSpec(programme=prog,
+                   entrance_room=next(p.id for p in prog if p.is_entrance),
+                   time_limit_s=6.0, deterministic=True),
+        road_facing="E", profile=CityProfileAdapter(BENGALURU), plan_id="p").plan
+    assert plan is not None
+
+    res = doc.apply(Command(op="replace_storey",
+                            params={"storey_id": doc.design.active.id},
+                            source="solver"), payload=plan)
+    assert res.ok, res.errors
+
+    out = to_project(doc.design)
+    ids = [f["id"] for f in out["floors"]]
+    assert out["activeFloorId"] in ids, (
+        f"activeFloorId {out['activeFloorId']!r} names no floor in {ids} -- "
+        "the canvas would render nothing")
+    assert ids == ["f1"], f"the editor's floor id was renamed to {ids}"
+    assert len(out["floors"][0]["walls"]) > 0
+
+
+def test_findings_reach_the_client_as_sentences():
+    """`_findings_json` read `id`, `message` and `refs`; `Finding` has none of
+    them, so `message` fell through to the debug repr and `detail` -- the text
+    written for a human -- was dropped."""
+    from fpeval.document import Document
+    from fpeval.ir import Design
+    from fpeval.envelope import bhk_programme, CityProfileAdapter
+    from fpeval.solver import LayoutSpec, solve_layout
+    from fpeval.bylaws import BENGALURU
+    from service.documents import _findings_json
+
+    prog = bhk_programme(2)
+    plan = solve_layout(
+        30, 40,
+        LayoutSpec(programme=prog,
+                   entrance_room=next(p.id for p in prog if p.is_entrance),
+                   time_limit_s=6.0, deterministic=True),
+        road_facing="E", profile=CityProfileAdapter(BENGALURU), plan_id="p").plan
+    d = Design(id="x", storeys=[plan], active_storey_id=plan.id)
+
+    out = _findings_json(Document(design=d, base=d))
+    assert out, "a solved plan produced no findings at all"
+    for f in out:
+        assert f["rule_id"], f
+        assert f["detail"], f"{f['rule_id']} carries no human-readable detail"
+        # The repr leaks as "<W RULE.ID w=0.50 [4 vs 2]>"; a sentence does not.
+        assert not f["detail"].startswith("<"), f["detail"]
+        assert f["detail"] != f["rule_id"]
+    assert any(f["severity"] in ("error", "warn") for f in out)

@@ -24,7 +24,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from fpeval.bylaws import BENGALURU
-from fpeval.envelope import compute_envelope, CityProfileAdapter, RoomReq
+from fpeval.envelope import (compute_envelope, CityProfileAdapter, RoomReq,
+                             ROAD_BEARING)
 from fpeval.solver import solve_layout, LayoutSpec
 from fpeval.bridge import relational_pairs, resolve_scenario
 from fpeval.rules import validate as validate_plan
@@ -59,6 +60,12 @@ class RoomReqIn(BaseModel):
 
 # Long form to letter. "north_east" must not fold to "N" by taking the first
 # character, which is why this is a table and not a slice.
+#
+# The ACCEPTED set is `envelope.ROAD_BEARING`, not this table: a plot side is
+# one of four because a plot is a rectangle, and a first cut of this validator
+# accepted the eight-point compass, so "south_west" passed here and raised
+# inside `north_deg_for` -- a 500 where the whole point was to return a 422.
+# Deriving the set means the two cannot disagree again.
 _COMPASS_LETTER = {"north": "N", "south": "S", "east": "E", "west": "W",
                    "north_east": "NE", "north_west": "NW",
                    "south_east": "SE", "south_west": "SW",
@@ -83,10 +90,13 @@ class GenerateIn(BaseModel):
         an integrator using the spelling every other layer uses got a 500 with
         a stack trace from `compute_envelope` rather than a 422.
         """
-        v = (v or "N").strip().lower().replace("-", "_").replace(" ", "_")
-        letter = _COMPASS_LETTER.get(v, v.upper())
-        if letter not in ("N", "S", "E", "W", "NE", "NW", "SE", "SW"):
-            raise ValueError(f"road_facing must be a compass point, got {v!r}")
+        raw = (v or "N").strip()
+        key = raw.lower().replace("-", "_").replace(" ", "_")
+        letter = _COMPASS_LETTER.get(key, raw.upper())
+        if letter not in ROAD_BEARING:
+            raise ValueError(
+                f"road_facing must name the plot side facing the road, one of "
+                f"{sorted(ROAD_BEARING)} (or 'north'/'east'/...); got {raw!r}")
         return letter
     time_limit_s: float = 12.0
     storey_height: int = 3000

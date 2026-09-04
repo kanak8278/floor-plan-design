@@ -40,7 +40,12 @@ export const activeFloor = derived(currentProject, ($p) => {
   return $p.floors.find((f) => f.id === $p.activeFloorId) ?? $p.floors[0] ?? null;
 });
 
-export type Tool = 'select' | 'wall' | 'door' | 'window' | 'furniture' | 'text';
+// 'measure' and 'annotate' were missing while BuildPanel set both, so the
+// dimension and measure tools were reachable through a path the type did
+// not know about -- six svelte-check errors and no compiler help anywhere
+// those two values flow.
+export type Tool = 'select' | 'wall' | 'door' | 'window' | 'furniture'
+                 | 'text' | 'measure' | 'annotate';
 export const selectedTool = writable<Tool>('select');
 export const snapEnabled = writable<boolean>(true);
 /** When true, left-click drag pans the canvas instead of selecting */

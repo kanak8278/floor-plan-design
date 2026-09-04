@@ -899,6 +899,14 @@ def _h_replace_storey(d: Design, st: Optional[Plan], p: dict, payload) -> None:
     fresh.level = old.level
     fresh.name = old.name
     fresh.storey_height = old.storey_height
+    # The id the EDITOR knows this floor by. A solved plan carries none, so
+    # without this line `_floor_id_of` falls back to "floor-<id>" and the
+    # projection comes back naming a floor the client has never heard of --
+    # its `activeFloorId` still says "f1" while the only floor is "floor-f1",
+    # so the canvas finds nothing and reads "0 walls". The editor's floor id
+    # survived every other command and was lost precisely on a successful
+    # solve, which is the one moment the user is watching for geometry.
+    fresh.project_floor_id = old.project_floor_id
     # The sheet layer is the user's, not the solver's.
     fresh.presentation = copy.deepcopy(old.presentation)
     d.storeys[d.storeys.index(old)] = fresh

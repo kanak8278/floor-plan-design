@@ -48,10 +48,10 @@ if str(ROOT / "src") not in sys.path:
 
 from fpeval.commands import Command, Event                     # noqa: E402
 from fpeval.document import Document, LogEntry, state_hash      # noqa: E402
-from fpeval.ir import Design                                    # noqa: E402
+from fpeval.ir import Design, Plan                              # noqa: E402
 from fpeval.project import to_project, design_from_project      # noqa: E402
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_DB = os.environ.get("FPEVAL_DB", str(ROOT / "data" / "designs.db"))
 
 SCHEMA = """
@@ -83,6 +83,13 @@ CREATE TABLE IF NOT EXISTS commands (
   event_json  TEXT NOT NULL,
   hash_after  TEXT NOT NULL,
   at          TEXT NOT NULL,
+  -- The out-of-band input a command needed, as a Project-shaped blob. Only
+  -- `replace_storey` has one: a solved Plan, which cannot be recomputed
+  -- during replay because CP-SAT under a time limit is not reproducible.
+  -- Without it, replaying a solve refuses and the storey is LOST -- one undo
+  -- after a solve emptied the plan, 13 walls to 0, and `verify_log` reported
+  -- thirteen problems that were all one missing floor.
+  payload_json TEXT,
   PRIMARY KEY (design_id, seq)
 );
 
@@ -158,6 +165,35 @@ def _design_from_json(blob: str) -> Design:
     return design_from_project(json.loads(blob))
 
 
+def _payload_to_json(payload: Any) -> Optional[str]:
+    """A command's out-of-band input, as JSON, or None.
+
+    Today that is always a solved `Plan`, stored through the same Project
+    projection as the design so there is one deserialiser rather than two. The
+    cost is one plan per solve -- kilobytes, and a session has a handful --
+    which is the right trade against losing the floor on undo.
+    """
+    if payload is None:
+        return None
+    try:
+        if isinstance(payload, Plan):
+            d = Design(id="payload", storeys=[payload],
+                       active_storey_id=payload.id)
+            return json.dumps(to_project(d), separators=(",", ":"))
+    except Exception:
+        pass
+    return None
+
+
+def _payload_from_json(blob: Optional[str]) -> Any:
+    if not blob:
+        return None
+    try:
+        return _design_from_json(blob).active
+    except Exception:
+        return None
+
+
 def _doc_from_rows(base_json: str, design_json: str,
                    rows: Iterable[tuple], snapshots: Iterable[tuple]) -> Document:
     doc = Document(design=_design_from_json(design_json),
@@ -166,8 +202,9 @@ def _doc_from_rows(base_json: str, design_json: str,
         LogEntry(seq=seq,
                  command=Command.from_dict(json.loads(cmd_json)),
                  event=_event_from_json(evt_json),
-                 hash_after=hash_after)
-        for seq, cmd_json, evt_json, hash_after in rows
+                 hash_after=hash_after,
+                 payload=_payload_from_json(payload_json))
+        for seq, cmd_json, evt_json, hash_after, payload_json in rows
     ]
     doc.snapshots = [(seq, _design_from_json(blob)) for seq, blob in snapshots]
     return doc
@@ -207,11 +244,38 @@ class SqliteStore:
             # Durability over raw speed: a design is a person's work.
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.execute("PRAGMA foreign_keys=ON")
+            # Read the version BEFORE the script runs. `CREATE TABLE IF NOT
+            # EXISTS` cannot add a column to a table that already exists, so a
+            # v1 database keeps its old `commands` shape and only an explicit
+            # ALTER brings it forward. Writing the version first, as this did,
+            # meant an upgrade was never detectable.
+            was = None
+            try:
+                row = self._db.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'version'"
+                ).fetchone()
+                was = int(row[0]) if row else None
+            except sqlite3.Error:
+                pass                       # no schema_meta yet: a fresh file
             self._db.executescript(SCHEMA)
+            self._migrate(was)
             self._db.execute(
                 "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)",
                 ("version", str(SCHEMA_VERSION)))
             self._db.commit()
+
+    def _migrate(self, was: Optional[int]) -> None:
+        """Bring an existing file forward. Called with the lock held.
+
+        Additive and idempotent: every step is safe to run twice, because the
+        recorded version is not trustworthy on a file written by the code that
+        wrote the version before running the script.
+        """
+        cols = {r[1] for r in self._db.execute("PRAGMA table_info(commands)")}
+        if "payload_json" not in cols:
+            # v1 -> v2. Existing rows get NULL, which is honest: their solve
+            # payloads were never stored and cannot be recovered.
+            self._db.execute("ALTER TABLE commands ADD COLUMN payload_json TEXT")
 
     # ------------------------------------------------------------- designs
 
@@ -237,14 +301,16 @@ class SqliteStore:
             if row is None:
                 return None
             cmds = self._db.execute(
-                "SELECT seq, command_json, event_json, hash_after FROM commands "
-                "WHERE design_id = ? ORDER BY seq", (design_id,)).fetchall()
+                "SELECT seq, command_json, event_json, hash_after, payload_json "
+                "FROM commands WHERE design_id = ? ORDER BY seq",
+                (design_id,)).fetchall()
             snaps = self._db.execute(
                 "SELECT seq, design_json FROM snapshots WHERE design_id = ? "
                 "ORDER BY seq", (design_id,)).fetchall()
         return _doc_from_rows(
             row["base_json"], row["design_json"],
-            [(r["seq"], r["command_json"], r["event_json"], r["hash_after"])
+            [(r["seq"], r["command_json"], r["event_json"], r["hash_after"],
+              r["payload_json"])
              for r in cmds],
             [(r["seq"], r["design_json"]) for r in snaps])
 
@@ -264,13 +330,15 @@ class SqliteStore:
                 self._db.execute("BEGIN")
                 self._db.executemany(
                     "INSERT OR REPLACE INTO commands (design_id, seq, command_id,"
-                    " op, source, command_json, event_json, hash_after, at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " op, source, command_json, event_json, hash_after, at,"
+                    " payload_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [(design_id, e.seq, e.command.id, e.command.op,
                       e.command.source,
                       json.dumps(e.command.to_dict(), separators=(",", ":")),
                       json.dumps(e.event.to_dict(), separators=(",", ":")),
-                      e.hash_after, e.event.at or now) for e in entries])
+                      e.hash_after, e.event.at or now,
+                      _payload_to_json(e.payload)) for e in entries])
                 # Snapshots the Document decided to take, written through.
                 self._db.executemany(
                     "INSERT OR REPLACE INTO snapshots (design_id, seq, design_json)"
@@ -365,8 +433,9 @@ class SqliteStore:
             rows = self._db.execute(
                 "SELECT role, content_json FROM messages WHERE design_id = ? "
                 "ORDER BY ord", (design_id,)).fetchall()
-        return [{"role": r["role"], "content": json.loads(r["content_json"])}
-                for r in rows]
+        return sanitise_transcript(
+            [{"role": r["role"], "content": json.loads(r["content_json"])}
+             for r in rows])
 
     def save_transcript(self, design_id: str,
                         messages: Sequence[dict]) -> None:
@@ -400,6 +469,59 @@ class SqliteStore:
             self._db.close()
 
 
+# What the Messages API ACCEPTS as input, per block type. `model_dump()` emits
+# every field the SDK object carries, and some of those are output-only: a text
+# block comes back with `parsed_output`, a tool_use block with `caller` and
+# `toolset_name`. Storing them is harmless; sending them back is a hard 400,
+#
+#     messages.2.content.0.text.parsed_output: Extra inputs are not permitted
+#
+# and it only bites on the SECOND turn, because turn one hands the SDK its own
+# objects and turn two replays what was persisted. A whitelist rather than a
+# deny-list of the three known offenders, because the failure mode here IS the
+# SDK gaining a field we did not know about.
+_BLOCK_INPUT_FIELDS: dict[str, frozenset[str]] = {
+    "text": frozenset({"type", "text", "citations", "cache_control"}),
+    "thinking": frozenset({"type", "thinking", "signature"}),
+    "redacted_thinking": frozenset({"type", "data"}),
+    "tool_use": frozenset({"type", "id", "name", "input", "cache_control"}),
+    "tool_result": frozenset({"type", "tool_use_id", "content", "is_error",
+                              "cache_control"}),
+    "image": frozenset({"type", "source", "cache_control"}),
+    "document": frozenset({"type", "source", "title", "context",
+                           "citations", "cache_control"}),
+}
+
+
+def _sanitise_block(b: dict) -> dict:
+    """Drop output-only fields from one content block.
+
+    An unknown block type passes through untouched: a server-tool block we do
+    not model is better sent as-is than silently emptied.
+    """
+    keep = _BLOCK_INPUT_FIELDS.get(b.get("type"))
+    if keep is None:
+        return b
+    # A null `citations` is accepted but noise; an empty one is not meaningful.
+    return {k: v for k, v in b.items()
+            if k in keep and not (k == "citations" and not v)}
+
+
+def sanitise_transcript(messages: Sequence[dict]) -> list[dict]:
+    """Make a stored transcript usable as `messages` input again.
+
+    Applied on load as well as on save, because transcripts written before the
+    whitelist existed are already poisoned and would 400 forever otherwise.
+    """
+    out = []
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list):
+            c = [_sanitise_block(b) if isinstance(b, dict) else b for b in c]
+        out.append({**m, "content": c})
+    return out
+
+
 def _jsonable(content: Any) -> Any:
     """Anthropic content blocks are SDK objects, not dicts.
 
@@ -407,11 +529,15 @@ def _jsonable(content: Any) -> Any:
     `messages` input, including thinking blocks -- those must be replayed
     unchanged on the same model or the next turn loses the reasoning. The SDK
     objects expose `model_dump`; anything already plain passes through.
+
+    Output-only fields are stripped here, not on the way out, so what is on
+    disk is exactly what can be replayed. See `_BLOCK_INPUT_FIELDS`.
     """
     if content is None or isinstance(content, (str, int, float, bool)):
         return content
     if isinstance(content, dict):
-        return {k: _jsonable(v) for k, v in content.items()}
+        d = {k: _jsonable(v) for k, v in content.items()}
+        return _sanitise_block(d) if "type" in d else d
     if isinstance(content, (list, tuple)):
         return [_jsonable(v) for v in content]
     for attr in ("model_dump", "dict", "to_dict"):
@@ -468,10 +594,16 @@ class MemoryStore:
                 for k, v in self._docs.items()]
 
     def load_transcript(self, design_id: str) -> list[dict]:
-        return self._transcripts.get(design_id, [])
+        return sanitise_transcript(self._transcripts.get(design_id, []))
 
     def save_transcript(self, design_id: str, messages: Sequence[dict]) -> None:
-        self._transcripts[design_id] = [dict(m) for m in messages]
+        # Through the same serialiser as SQLite on purpose. Holding the SDK's
+        # own objects would make this store the only one that never exercises
+        # `_jsonable`, and a test against it would then pass while the
+        # deployed path returned blocks the API rejects -- which is exactly
+        # what happened with `parsed_output`.
+        self._transcripts[design_id] = [
+            {**m, "content": _jsonable(m.get("content"))} for m in messages]
 
     def close(self) -> None:
         self._docs.clear()

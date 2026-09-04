@@ -41,6 +41,14 @@
     text?: string;              // the reasoning summary, for thinking rows
   }
 
+  interface Finding {
+    rule_id: string;
+    severity: 'error' | 'warn' | 'info';
+    detail: string;
+    measured?: number | null;
+    required?: number | null;
+  }
+
   /** One assistant turn: what was asked, what it did, what it said. */
   interface Turn {
     id: string;
@@ -48,6 +56,11 @@
     activity: Activity[];
     events: DesignEvent[];
     rejected: { op: string; reason: string }[];
+    /** What the rules engine says about the plan this turn produced. The
+     *  service has always computed and sent these; nothing in the browser
+     *  read them, so every DESIGN / NBC / VASTU finding was discarded on
+     *  arrival and the validation layer was invisible in the product. */
+    findings: Finding[];
     reply: string;
     status: 'running' | 'done' | 'error';
     error?: string;
@@ -123,7 +136,8 @@
     draft = '';
     const turn: Turn = {
       id: `t-${Math.random().toString(36).slice(2, 9)}`,
-      ask: text, activity: [], events: [], rejected: [], reply: '',
+      ask: text, activity: [], events: [], rejected: [], findings: [],
+      reply: '',
       status: 'running', expanded: false, progress: 'Thinking…',
     };
     turns = [...turns, turn];
@@ -134,7 +148,7 @@
       turns = turns.map((x) => {
         if (x.id !== turn.id) return x;
         const next = { ...x, activity: [...x.activity], events: [...x.events],
-                       rejected: [...x.rejected] };
+                       rejected: [...x.rejected], findings: [...x.findings] };
         fn(next);
         next.progress = progressOf(next);
         return next;
@@ -246,7 +260,8 @@
         patch((t) => { t.reply += ev.delta; });
         break;
       case 'done':
-        patch((t) => { t.status = 'done'; t.seconds = ev.seconds; });
+        patch((t) => { t.status = 'done'; t.seconds = ev.seconds;
+                       t.findings = (ev.findings ?? []) as Finding[]; });
         ingestServerUpdate({ seq: ev.seq, hash: ev.hash, events: [] });
         if (ev.projection) adoptProjection(ev.projection);
         break;
@@ -261,6 +276,14 @@
       e.preventDefault();
       void send();
     }
+  }
+
+  let findingsOpen = $state<Set<string>>(new Set());
+
+  function toggleFindings(id: string) {
+    const next = new Set(findingsOpen);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    findingsOpen = next;
   }
 
   function toggle(id: string) {
@@ -392,6 +415,42 @@
               <span class="font-medium">{r.op}</span> refused — {r.reason}
             </div>
           {/each}
+        </div>
+      {/if}
+
+      <!-- what the rules engine found in the plan this turn produced -->
+      {#if t.findings.length}
+        {@const errs = t.findings.filter((f) => f.severity === 'error')}
+        {@const warns = t.findings.filter((f) => f.severity === 'warn')}
+        <div class="ml-3 pl-3 border-l-2 mt-1.5"
+             class:border-rose-300={errs.length}
+             class:border-gray-200={!errs.length}>
+          <button
+            type="button"
+            class="text-[11px] font-medium text-gray-500 hover:text-gray-700"
+            onclick={() => toggleFindings(t.id)}
+          >
+            {errs.length
+              ? `${errs.length} error${errs.length > 1 ? 's' : ''}`
+              : 'no errors'}{warns.length ? ` · ${warns.length} warning${warns.length > 1 ? 's' : ''}` : ''}
+            <span class="text-gray-400">{findingsOpen.has(t.id) ? '▾' : '▸'}</span>
+          </button>
+          <!-- Errors are always shown. A plan that breaks a rule the client
+               would notice is not something to hide behind a disclosure. -->
+          {#each errs as f}
+            <div class="text-xs leading-snug text-rose-700 mt-[2px]">
+              {f.detail}
+              <span class="font-mono text-[10px] text-rose-400">{f.rule_id}</span>
+            </div>
+          {/each}
+          {#if findingsOpen.has(t.id)}
+            {#each warns as f}
+              <div class="text-xs leading-snug text-amber-700 mt-[2px]">
+                {f.detail}
+                <span class="font-mono text-[10px] text-amber-400">{f.rule_id}</span>
+              </div>
+            {/each}
+          {/if}
         </div>
       {/if}
 

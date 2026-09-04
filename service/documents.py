@@ -114,12 +114,24 @@ def _findings_json(doc: Optional[Document]) -> list[dict[str, Any]]:
     except Exception:
         # A validator crash must not take the edit with it.
         return []
+    # `Finding` has no `id`, no `message` and no `refs`. Reading them meant
+    # `message` fell through to `str(f)` -- the terse debug repr,
+    # "<W DESIGN.WET_ROOMS_SPLIT w=0.50 [4 vs 2]>" -- while `detail`, the
+    # sentence written for a human, was dropped along with the element ids and
+    # the numbers. The client got a rule name and a weight and could not say
+    # what was wrong, which room, or by how much.
     return [{
-        "id": getattr(f, "id", "") or getattr(f, "rule_id", ""),
-        "rule_id": getattr(f, "rule_id", ""),
-        "severity": getattr(f, "severity", "info"),
-        "message": getattr(f, "message", str(f)),
-        "refs": list(getattr(f, "refs", []) or []),
+        "rule_id": f.rule_id,
+        "severity": f.severity,
+        "weight": f.weight,
+        "detail": f.detail,
+        # Kept under the old key too: the browser reads `message`, and a
+        # rename here would blank the panel rather than fix it.
+        "message": f.detail,
+        "element_ids": list(f.element_ids or []),
+        "refs": list(f.element_ids or []),
+        "measured": f.measured,
+        "required": f.required,
     } for f in findings]
 
 
@@ -254,7 +266,7 @@ def undo(design_id: str) -> dict[str, Any]:
     return {"design_id": design_id, "seq": doc.seq, "hash": doc.hash,
             "undone": event.to_dict() if event else None,
             "projection": doc.projection(),
-            "findings": _findings_json(design_id)}
+            "findings": _findings_json(doc)}
 
 
 @router.get("/api/designs/{design_id}/verify")

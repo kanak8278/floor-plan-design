@@ -423,3 +423,162 @@ def test_reattaching_after_a_restart_keeps_the_log(db_path):
         assert D.transcript("svc2")["messages"] == []
     finally:
         D.set_store(None)
+
+
+# ------------------------------------------------- output-only block fields
+# `model_dump()` emits every field the SDK object carries, and some are
+# output-only. A text block comes back with `parsed_output`, a tool_use block
+# with `caller` and `toolset_name`. Storing them is harmless; replaying them is
+#
+#     messages.2.content.0.text.parsed_output: Extra inputs are not permitted
+#
+# a hard 400 that only bites on the SECOND turn, because turn one hands the SDK
+# its own objects and turn two replays what was persisted. Found by driving the
+# real UI, not by any test: `MemoryStore` used to keep the SDK objects
+# untouched, so it was the one store that never exercised the serialiser.
+
+def test_output_only_block_fields_are_not_replayed(db_path):
+    class ParsedTextBlock:
+        def model_dump(self):
+            return {"type": "text", "text": "done", "citations": None,
+                    "parsed_output": {"rooms": 7}}
+
+    class ToolUseWithCaller:
+        def model_dump(self):
+            return {"type": "tool_use", "id": "tu_1", "name": "solve_layout",
+                    "input": {}, "caller": None, "toolset_name": None}
+
+    store = SqliteStore(db_path)
+    store.create("d1", box_doc())
+    store.save_transcript("d1", [{"role": "assistant", "content": [
+        ParsedTextBlock(), ToolUseWithCaller(),
+        {"type": "thinking", "thinking": "...", "signature": "sig"}]}])
+    store.close()
+
+    blocks = SqliteStore(db_path).load_transcript("d1")[0]["content"]
+    assert blocks[0] == {"type": "text", "text": "done"}
+    assert blocks[1] == {"type": "tool_use", "id": "tu_1",
+                         "name": "solve_layout", "input": {}}
+    # A thinking block's signature is NOT output-only: drop it and the next
+    # turn on the same model is rejected for the opposite reason.
+    assert blocks[2] == {"type": "thinking", "thinking": "...",
+                         "signature": "sig"}
+
+
+def test_an_unknown_block_type_is_passed_through(db_path):
+    """A server-tool block we do not model is better sent as-is than emptied."""
+    store = SqliteStore(db_path)
+    store.create("d1", box_doc())
+    store.save_transcript("d1", [{"role": "assistant", "content": [
+        {"type": "web_search_tool_result", "tool_use_id": "s1",
+         "content": [{"type": "web_search_result", "url": "http://x"}]}]}])
+    store.close()
+    back = SqliteStore(db_path).load_transcript("d1")[0]["content"][0]
+    assert back["type"] == "web_search_tool_result"
+    assert back["content"] == [{"type": "web_search_result", "url": "http://x"}]
+
+
+def test_both_stores_sanitise_identically(db_path):
+    """`MemoryStore` is what tests run against, so it must not be the lenient
+    one. It held the SDK's objects untouched, which is why this class of bug
+    reached the deployed path unseen."""
+    class Blk:
+        def model_dump(self):
+            return {"type": "text", "text": "hi", "parsed_output": {"a": 1}}
+
+    msgs = [{"role": "assistant", "content": [Blk()]}]
+    sq = SqliteStore(db_path); sq.create("d1", box_doc())
+    sq.save_transcript("d1", msgs)
+    mem = MemoryStore(); mem.create("d1", box_doc())
+    mem.save_transcript("d1", msgs)
+    assert mem.load_transcript("d1") == sq.load_transcript("d1")
+    sq.close()
+
+
+# ------------------------------------------------------ solve payload on disk
+# `replace_storey` carries a solved `Plan` as its payload because CP-SAT cannot
+# be re-solved identically during replay. The payload was deliberately not
+# persisted, on the argument that the cost was only "undo across a process
+# restart". That understated it: the service loads the document from the store
+# on EVERY request, so the payload was never available after the request that
+# created it. Undoing the second of two solves emptied the plan -- 13 walls to
+# 0 -- and `verify_log` reported thirteen problems that were all one lost floor.
+
+def test_a_solve_payload_survives_a_restart(db_path):
+    from fpeval.envelope import bhk_programme, CityProfileAdapter
+    from fpeval.solver import LayoutSpec, solve_layout
+    from fpeval.bylaws import BENGALURU
+
+    prog = bhk_programme(2)
+    res = solve_layout(
+        30, 40,
+        LayoutSpec(programme=prog,
+                   entrance_room=next(p.id for p in prog if p.is_entrance),
+                   time_limit_s=6.0, deterministic=True),
+        road_facing="E", profile=CityProfileAdapter(BENGALURU), plan_id="p1")
+    assert res.plan is not None
+
+    doc = box_doc()
+    store = SqliteStore(db_path)
+    store.create("d1", doc)
+    before = doc.seq
+    sid = doc.design.active.id
+    r = doc.apply(Command(op="replace_storey", params={"storey_id": sid},
+                          source="solver"), payload=res.plan)
+    assert r.ok, r.errors          # assert the apply, not just the storage
+    store.save_commands("d1", doc, [e for e in doc.log if e.seq > before])
+    store.close()
+
+    back = SqliteStore(db_path).load("d1")
+    entry = back.log[-1]
+    assert entry.command.op == "replace_storey"
+    assert entry.payload is not None, "the solved Plan was not persisted"
+    assert len(entry.payload.walls) == len(res.plan.walls)
+    # The point of persisting it: replay reproduces the document.
+    assert back.verify_log() == []
+
+
+def test_undoing_the_second_solve_keeps_the_first(db_path):
+    """The failure this whole column exists for."""
+    from fpeval.envelope import bhk_programme, CityProfileAdapter
+    from fpeval.solver import LayoutSpec, solve_layout
+    from fpeval.bylaws import BENGALURU
+
+    def solve(kitchen_m2: float):
+        prog = bhk_programme(2)
+        for r in prog:
+            if r.category == "kitchen":
+                r.target_m2 = kitchen_m2
+        return solve_layout(
+            30, 40,
+            LayoutSpec(programme=prog,
+                       entrance_room=next(p.id for p in prog if p.is_entrance),
+                       time_limit_s=6.0, deterministic=True),
+            road_facing="E", profile=CityProfileAdapter(BENGALURU),
+            plan_id="p").plan
+
+    first, second = solve(8.0), solve(13.0)
+    assert first is not None and second is not None
+
+    doc = box_doc()
+    store = SqliteStore(db_path)
+    store.create("d1", doc)
+    sid = doc.design.active.id
+    for plan in (first, second):
+        before = doc.seq
+        r = doc.apply(Command(op="replace_storey", params={"storey_id": sid},
+                              source="solver"), payload=plan)
+        assert r.ok, r.errors
+        store.save_commands("d1", doc, [e for e in doc.log if e.seq > before])
+    store.close()
+
+    # A new process, exactly as every request is.
+    reopened = SqliteStore(db_path)
+    doc2 = reopened.load("d1")
+    assert len(doc2.design.active.walls) == len(second.walls)
+    doc2.undo()
+    walls = len(doc2.design.active.walls)
+    assert walls == len(first.walls), (
+        f"undoing the second solve left {walls} walls; the first solve's "
+        f"{len(first.walls)} should have come back")
+    reopened.close()
