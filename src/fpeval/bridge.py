@@ -33,6 +33,8 @@ SPEC_TO_CANON: dict[str, str] = {
 
 SQFT_M2 = 10.7639
 
+from .spec import ROOM_CATEGORIES  # noqa: E402
+
 # NBC 2016 Part 3 sets 2400 mm as the minimum width of a habitable room and
 # 7.5 m2 as the minimum area. A rectangular tiling cannot fit a 2BHK on a 20x30
 # site under either: measured, the NBC minimum AREAS total 30.3 m2, internal
@@ -202,16 +204,58 @@ def spec_to_programme(spec: Any, *, relaxed: bool = False
         zone = getattr(r, "preferred_zone", None) or (t.vastu_zone if t else None)
         is_entrance = not entrance_set and key == "living"
         entrance_set = entrance_set or is_entrance
-        prog.append(RoomReq(
+        rq = RoomReq(
             id=getattr(r, "id", key), name=getattr(r, "name", "") or (t.display if t else key),
             category=key, target_m2=target,
             weight=1.0 if getattr(r, "priority", 3) <= 2 else 0.7,
             vastu_zone=zone, is_entrance=is_entrance,
-        ))
+        )
+        # `RoomSpec.optional` was read nowhere on the solve path, so a room the
+        # brief only guessed at was as mandatory as one the client asked for --
+        # and an over-specified brief could only come back INFEASIBLE. Carried
+        # as an attribute rather than a `RoomReq` field so nothing downstream
+        # has to know about it unless it wants to.
+        rq.optional = bool(getattr(r, "optional", False))   # declared field
+        rq.attached_bath = bool(getattr(r, "attached_bath", False))
+        # The brief's own area ceiling, which the solve path read nowhere. A
+        # client who says "master 150-190 sqft" means the upper figure too.
+        #
+        # Only honoured when it is TIGHTER than the category default, because
+        # `RoomSpec.__post_init__` fills `max_sqft` from `ROOM_CATEGORIES` and
+        # that erases the difference between a figure the client gave and a
+        # fallback we supplied. A narrower range is evidence someone narrowed
+        # it; the default is evidence of nothing.
+        #
+        # This matters for habitable rooms specifically: `RoomReq.max_area_m2`
+        # is deliberately None for them so they absorb the envelope's surplus
+        # -- capping every one at its table maximum would send that surplus
+        # back into the passage, which is the defect
+        # DESIGN.CIRCULATION_OVERSIZED exists to catch.
+        given_max = getattr(r, "max_sqft", None)
+        spec_cat = str(getattr(r, "category", "") or "")
+        info = ROOM_CATEGORIES.get(spec_cat)
+        default_max = getattr(info, "max_sqft", None) if info else None
+        if given_max and (default_max is None or given_max < default_max - 1e-6):
+            cap = float(given_max) / SQFT_M2
+            rq.max_area_m2 = (cap if rq.max_area_m2 is None
+                              else min(rq.max_area_m2, cap))
+        prog.append(rq)
     if relaxed:
         _apply_relaxed(prog)
         warn.append(relaxed_note(prog) or "relaxed profile requested but nothing to relax")
     return prog, warn
+
+
+def shed_optional(prog: list[RoomReq]) -> tuple[list[RoomReq], list[str]]:
+    """Split a programme into what was asked for and what was guessed.
+
+    Shared by both solve paths on purpose: `generate.build` and `score.run`
+    each need to retry without the nice-to-haves, and two copies of "which
+    rooms may be dropped" is how they come to disagree. Returns (kept, shed).
+    """
+    kept = [r for r in prog if not getattr(r, "optional", False)]
+    shed = [r.id for r in prog if getattr(r, "optional", False)]
+    return kept, shed
 
 
 def truth_to_programme(truth: Any, *, relaxed: bool = False

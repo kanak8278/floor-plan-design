@@ -837,7 +837,11 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
                 if reqs[j].category in PRIV and j in seen
                 and j not in ensuite_of]
         if beds:
-            beds.sort()
+            # A bedroom the brief asked to have an attached bath wins over one
+            # that merely happens to be next to the bathroom. Before this the
+            # tier was purely opportunistic and `attached_bath` was read
+            # nowhere, so a stated requirement was satisfied by luck.
+            beds.sort(key=lambda t: (not reqs[t[1]].attached_bath, t[0]))
             p, j, ax = beds[0]
             seen.add(i)
             ensuite_of[j] = i
@@ -1468,6 +1472,17 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             # it if nothing outranks it. Priced in the KEY rather than
             # rejected, so it can never cost us a plan.
             pen += 4e6 * _sole_bath_private(doors, reqs, ent)
+            # 8e5: below every item above it, deliberately. An en-suite the
+            # brief asked for and did not get is a stated client requirement
+            # missed, so it belongs in the key -- the door tiers can only
+            # connect what the tiling made adjacent, and no amount of door
+            # logic rescues a topology that put every bathroom away from the
+            # master. But it ranks under the interior-wet-room term because it
+            # is a preference, and because the Indian ground truth is largely
+            # silent on it: 127 of the 148 bedroom-bearing examples in `suite/`
+            # say nothing about `attached_bath`. Weighting it like law would
+            # distort layouts for a norm this market does not strongly hold.
+            pen += 8e5 * _ensuite_unmet(doors, reqs)
             key = (pen, solver.ObjectiveValue())
             passed.append((pen, solver.ObjectiveValue(),
                            {i: rects[i] for i in rects}))
@@ -1716,6 +1731,20 @@ def _perturb(base: Sequence[int], ent: int, rng: random.Random) -> list[int]:
         o.remove(ent)
         o.insert(0, ent)
     return o
+
+
+def _ensuite_unmet(doors: list[tuple[int, int, str]],
+                   reqs: Sequence[RoomReq]) -> int:
+    """Bedrooms that asked for an attached bath and have no bathroom door."""
+    baths = {i for i, r in enumerate(reqs) if r.category in ("bathroom", "wc")}
+    linked: set[int] = set()
+    for a, b, _ax in doors:
+        if a in baths:
+            linked.add(b)
+        if b in baths:
+            linked.add(a)
+    return sum(1 for i, r in enumerate(reqs)
+               if r.attached_bath and i not in linked)
 
 
 def _sole_bath_private(doors: list[tuple[int, int, str]],

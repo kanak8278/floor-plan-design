@@ -65,16 +65,28 @@ _add(RoomType("dining", "Dining", "habitable", True, True, 7.5, 2400, 2750,
 _add(RoomType("bedroom", "Bedroom", "habitable", True, True, 7.5, 2400, 2750,
               (9.0, 20.0), 2.4, None, (), needs_window=True, needs_own_door=True,
               floor_texture="light-oak", furnish_key="bedroom",
-              # A servant's room is habitable and gets a bedroom's minima and
-              # glazing: `spec.ROOM_CATEGORIES` already marks it habitable at
-              # 55-100 sqft, and it had no type at all here.
               aliases=("bedroom", "bed room", "bed rm", "guest bed", "kids room",
-                       "children", "servant", "servant room", "maid room"),
+                       "children"),
               short_aliases=("br",)))
 _add(RoomType("master_bedroom", "Master Bedroom", "habitable", True, True, 9.5, 2700, 2750,
               (12.0, 24.0), 2.4, "SW", ("NE",), needs_window=True, needs_own_door=True,
               floor_texture="light-oak", furnish_key="master_bedroom",
               aliases=("master bedroom", "master bed"), short_aliases=("mbr",)))
+# A servant's room is habitable -- it is slept in -- so it takes a habitable
+# room's minima and needs a window. It is NOT a bedroom, and that distinction
+# is the whole reason it has its own key.
+#
+# It had no type, so `bridge.canon` fell through to "bedroom" and the room
+# entered the solver AS a bedroom. `check_brief` then counted it: a 5BHK brief
+# with a servant room produced "expected 5 bedrooms, got 6", which is right
+# arithmetic on a wrong premise. Aliasing it to `bedroom` in `SUBTYPE_OF` would
+# have fixed the minima and kept the miscount, because `counts_as` answers both
+# "what are its minima" and "what request does it satisfy" with one word.
+_add(RoomType("servant", "Servant Room", "habitable", True, True, 7.5, 2400, 2750,
+              (5.0, 9.5), 2.4, "NW", ("NE",), needs_window=True,
+              floor_texture="light-oak", furnish_key="bedroom",
+              aliases=("servant", "servant room", "servants room", "maid room",
+                       "maids room", "help room"), short_aliases=("sr",)))
 _add(RoomType("study", "Study", "habitable", True, True, 7.5, 2400, 2750,
               (6.0, 16.0), 2.6, "N", (), needs_window=True,
               floor_texture="light-oak", furnish_key="study",

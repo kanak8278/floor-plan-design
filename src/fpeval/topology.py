@@ -32,6 +32,7 @@ Zone = Literal["public", "private", "service", "circulation", "outdoor"]
 Relation = Literal["direct", "open", "near", "separate", "any"]
 
 ZONE_OF: dict[str, Zone] = {
+    "servant": "private",
     "living": "public", "dining": "public", "foyer": "circulation",
     "sitout": "outdoor", "bedroom": "private", "master_bedroom": "private",
     "study": "private", "kitchen": "service", "utility": "service",

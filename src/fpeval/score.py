@@ -267,6 +267,36 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                        time_limit_s=time_limit_s),
             road_facing=facing, profile=prof,
             plan_id=f"{example.id}-{track}")
+        # A brief that guessed too generously should lose its guesses, not its
+        # house. Track B extraction adds rooms nobody mentioned -- measured,
+        # eleven from a one-line 3BHK brief -- and every one of them was
+        # mandatory, so five of ten prompts came back INFEASIBLE on cases that
+        # solve from ground truth.
+        if getattr(sr, "plan", None) is None:
+            from .bridge import shed_optional
+            kept, shed = shed_optional(prog)
+            if shed and kept:
+                warn.append("dropped the optional room(s) "
+                            + ", ".join(sorted(shed))
+                            + " -- the programme did not fit the site")
+                _keep = {r.id for r in kept}
+                sr = solve_layout(
+                    w_ft, d_ft,
+                    LayoutSpec(programme=kept,
+                               entrance_room=next(
+                                   (r.id for r in kept if r.is_entrance),
+                                   kept[0].id),
+                               max_aspect_hard=(RELAXED_MAX_ASPECT if relaxed else 2.8),
+                               required_adjacency=[p_ for p_ in req_adj
+                                                   if p_[0] in _keep and p_[1] in _keep],
+                               forbidden_adjacency=[p_ for p_ in forb_adj
+                                                    if p_[0] in _keep and p_[1] in _keep],
+                               soft_adjacency=[p_ for p_ in soft_adj
+                                               if p_[0] in _keep and p_[1] in _keep],
+                               time_limit_s=time_limit_s),
+                    road_facing=facing, profile=prof,
+                    plan_id=f"{example.id}-{track}-shed")
+                prog = kept
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"
         res.checks.append(Check("engine_ran", False, res.error))

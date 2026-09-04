@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .bridge import cap_service_targets, spec_to_programme
+from .bridge import cap_service_targets, shed_optional, spec_to_programme
 from .bylaws import BENGALURU
 from .commands import Command
 from .envelope import CityProfileAdapter, UnitInterior, compute_envelope
@@ -200,9 +200,8 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
     # about what did not fit.
     if getattr(res, "plan", None) is None and any(
             getattr(r, "optional", False) for r in sp.rooms):
-        keep_ids = {r.id for r in sp.rooms if not getattr(r, "optional", False)}
-        shed = [r.id for r in sp.rooms if r.id not in keep_ids]
-        kept = [r for r in prog if r.id in keep_ids]
+        kept, shed = shed_optional(prog)
+        keep_ids = {r.id for r in kept}
         if kept:
             warn.append("dropped the optional room(s) "
                         + ", ".join(sorted(shed))

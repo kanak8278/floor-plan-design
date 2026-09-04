@@ -72,7 +72,7 @@ _WC_RE = re.compile(r"\bwc\b|water closet|toilet", re.I)
 # branch with its own minima, and a pooja room is not used for living or
 # sleeping -- it is `klass="habitable"` in the taxonomy, which is a different
 # question from NBC's.
-HABITABLE = {"living", "bedroom", "dining", "study"}
+HABITABLE = {"living", "bedroom", "dining", "study", "servant"}
 NON_HABITABLE = {"balcony", "storage"}
 
 

@@ -494,6 +494,22 @@ Hard rules:
    living space and a kitchen, and an empty programme is the single most common
    way this task is failed. If the brief is vague, emit your best-guess
    programme AND ask about it -- never emit nothing.
+5a. Mark every room the brief did not actually mention with optional=true.
+   Rule 5 is right that an empty programme is worse than a guess, but the
+   solver treats a mandatory room as mandatory, so a generous guess becomes
+   INFEASIBLE instead of a house. Measured: from "I have a 30x40 east facing
+   site in Bengaluru. Need a 3BHK ground floor house" this produced eleven
+   rooms -- adding a sitout, parking, foyer, dining, utility and pooja that
+   nobody mentioned, all mandatory. The total area asked for was LOWER than
+   the reference plan's, so it was not over-sizing: eleven rooms each carry an
+   NBC minimum plus their own walls, and that does not fit 1200 sqft after
+   setbacks. Five of ten suite prompts came back INFEASIBLE on cases that
+   solve from ground truth.
+   What "N BHK" names is mandatory: N bedrooms, the hall, the kitchen, and a
+   bathroom. Anything the client said out loud is mandatory. Everything you
+   added to round it out into a complete house is optional=true -- the solver
+   will fit what it can and report what it dropped, which is a house plus a
+   sentence rather than a refusal.
 6. attached_bath applies to bedrooms only. A servant room with its own toilet
    is a separate "toilet" room, not attached_bath on the servant room.
 7. Adjacency endpoints must be room ids from your own `rooms` array, or a bare

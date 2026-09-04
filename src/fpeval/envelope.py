@@ -248,6 +248,7 @@ NBC_MIN: dict[str, tuple[int, float]] = {
     "bedroom":  (2400, 7.5),
     "dining":   (2400, 7.5),
     "study":    (2400, 7.5),
+    "servant":  (2400, 7.5),   # slept in, so a habitable room's minima
     "kitchen":  (1800, 5.0),
     "bathroom": (1200, 2.8),     # combined bath + WC
     "wc":       (900,  1.1),
@@ -258,7 +259,7 @@ NBC_MIN: dict[str, tuple[int, float]] = {
     "stair":    (900,  2.0),
     "passage":  (900,  1.0),   # filler hall/corridor absorbing leftover area
 }
-HABITABLE = {"living", "bedroom", "dining", "study"}
+HABITABLE = {"living", "bedroom", "dining", "study", "servant"}
 WET = {"kitchen", "bathroom", "wc", "utility"}
 
 # Vastu zone preferences, as compass bearings. Kitchen -> SE (Agni), master
@@ -290,6 +291,19 @@ class RoomReq:
     max_aspect: float = 2.6
     vastu_zone: str | None = None         # None -> VASTU_DEFAULT_ZONE
     is_entrance: bool = False
+    # The brief asked for a bathroom opening off this bedroom. Read nowhere
+    # before: `_spanning_doors` had `ensuite_of` as a CAP -- one en-suite per
+    # bedroom -- and nothing that made one happen, so whether the master got
+    # its attached bath was whatever the tiling happened to allow.
+    attached_bath: bool = False
+    # Nice-to-have: may be dropped and re-solved if the programme does not fit.
+    # A real field, not an attribute set after construction: `solve_layout`
+    # rebuilds the programme with `RoomReq(**{**r.__dict__})`, so an ad-hoc
+    # attribute lands in `__dict__` and comes back as an unexpected keyword.
+    # That cost a whole track B slice -- ten extractions, an hour, every one
+    # `not_run` -- because I asserted the attribute was free instead of
+    # grepping for who copies the object.
+    optional: bool = False
 
     def _nbc_row(self) -> tuple[int, float]:
         """The NBC row for this category, inherited by subtypes.
