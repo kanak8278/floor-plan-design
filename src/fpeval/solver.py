@@ -803,8 +803,15 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
     #    DESIGN.MULTIPLE_ATTACHED_BATHS: the second bath has no independent
     #    access, so nobody outside that bedroom can use it.
     ensuite_of: dict[int, int] = {}
+    n_baths = sum(1 for r in reqs if r.category == "bathroom")
     for i in range(n):
         if i in seen or reqs[i].category != "bathroom":
+            continue
+        # The only bathroom in the plan must never be an en-suite: everyone
+        # else would reach the toilet through someone's bedroom, which is
+        # DESIGN.SOLE_BATH_VIA_BEDROOM. Leave it to the later tiers, which
+        # prefer a non-private host.
+        if n_baths == 1:
             continue
         beds = [(p, j, ax) for p, j, ax in adj[i]
                 if reqs[j].category in PRIV and j in seen
@@ -903,23 +910,25 @@ def _emit_stairs(reqs: Sequence[RoomReq], rects: dict[int, tuple],
             rot = 0.0
         risers = max(2, math.ceil(storey_mm / std.riser_max_mm))
         need = SD.required_going_mm(risers, std.tread_min_mm)
-        # Two conditions, and picking on going alone met only one of them: a
-        # 3000 mm storey needs 16 risers, and NBC caps a flight at 12 before a
-        # landing, so a 16-riser STRAIGHT flight is non-compliant however long
-        # the room is. A turning flight has its landing at the turn.
+        # Choose the shape from the FLIGHT's dimensions, not the room's. Both
+        # were in scope and picking on the room's said an L-shape had 4660 mm
+        # of going while the flight actually emitted had 3460 -- a 231 mm
+        # tread against the 250 mm minimum, and NBC.STAIR_TREAD on 8 plans.
+        # The validator measures the flight, so the flight is what decides.
+        flight_w = max(std.width_min_mm, min(w, 1200))
+        flight_d = max(1200, d - 200)
         needs_landing = risers > std.risers_per_flight_max
         kind = "u-shaped"
         for cand in ("straight", "l-shaped", "u-shaped"):
             if cand == "straight" and needs_landing:
                 continue
-            if SD.developed_going_mm(d, w, cand) >= need:
+            if SD.developed_going_mm(flight_d, flight_w, cand) >= need:
                 kind = cand
                 break
         out.append(Stair(
             id=f"st{len(out)}", position=P((x0 + x1) // 2, (y0 + y1) // 2),
-            rotation=rot, width=max(std.width_min_mm, min(w, 1200)),
-            depth=max(1200, d - 200), riser_count=risers, direction="up",
-            stair_type=kind))
+            rotation=rot, width=flight_w, depth=flight_d,
+            riser_count=risers, direction="up", stair_type=kind))
     return out
 
 
@@ -1332,6 +1341,12 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
                              if _interior_cell(rects[i], rect_mm)
                              and r.category in WET)
             pen += 5e6 * _circ_isolated(rects, reqs)
+            # 4e6: worse than a room off circulation is not the claim -- this
+            # is a specific, very visible fault (the household's only toilet
+            # is inside a bedroom) and the last-resort door tier will produce
+            # it if nothing outranks it. Priced in the KEY rather than
+            # rejected, so it can never cost us a plan.
+            pen += 4e6 * _sole_bath_private(doors, reqs, ent)
             key = (pen, solver.ObjectiveValue())
             passed.append((pen, solver.ObjectiveValue(),
                            {i: rects[i] for i in rects}))
@@ -1580,6 +1595,29 @@ def _perturb(base: Sequence[int], ent: int, rng: random.Random) -> list[int]:
         o.remove(ent)
         o.insert(0, ent)
     return o
+
+
+def _sole_bath_private(doors: list[tuple[int, int, str]],
+                       reqs: Sequence[RoomReq], ent: int) -> int:
+    """1 if the plan's only bathroom can be reached only through a bedroom."""
+    baths = [i for i, r in enumerate(reqs) if r.category == "bathroom"]
+    if len(baths) != 1:
+        return 0
+    priv = {i for i, r in enumerate(reqs)
+            if r.category in ("bedroom", "master_bedroom", "study")}
+    adj: dict[int, set[int]] = {}
+    for a, b, _ax in doors:
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+    seen, stack = {ent}, [ent]
+    while stack:
+        u = stack.pop()
+        for v in adj.get(u, ()):
+            if v in seen or v in priv:
+                continue
+            seen.add(v)
+            stack.append(v)
+    return 0 if baths[0] in seen else 1
 
 
 def _circ_isolated_ids(rects: dict[int, tuple],

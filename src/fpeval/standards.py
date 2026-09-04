@@ -126,6 +126,11 @@ CONTENTS_FLOOR_M2: dict[str, float] = {
     "kitchen": 5.0,      # NBC
     "pooja": 1.2,        # 1000x500 mandir plus somewhere to stand
     "store": 1.2,
+    # A 3000 mm storey needs 16 risers at the 190 mm cap, so 15 treads at the
+    # 250 mm minimum = 3750 mm of going. Folded into two runs that is a well of
+    # roughly 2100 x 1900 mm. At the old 2.0 m2 the flight did not fit and the
+    # treads came out at 249 mm -- NBC.STAIR_TREAD on 8 plans.
+    "stair": 4.0,
 }
 
 
