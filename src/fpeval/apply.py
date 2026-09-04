@@ -383,19 +383,81 @@ _WINDOW_SIZE = {"standard": (1200, 900, 2100), "fixed": (1000, 900, 1900),
                 "bay": (2000, 600, 2100)}
 
 
+# Masonry either side of an opening. Below this the jamb is not buildable.
+OPENING_REVEAL_MM = 75
+
+
+def _wall_axis(w) -> tuple[bool, float, float, float]:
+    """(horizontal, lo, hi, other) for a wall, in absolute mm."""
+    horiz = abs(w.end.y - w.start.y) < abs(w.end.x - w.start.x)
+    if horiz:
+        return True, min(w.start.x, w.end.x), max(w.start.x, w.end.x), w.start.y
+    return False, min(w.start.y, w.end.y), max(w.start.y, w.end.y), w.start.x
+
+
+def _usable_run_mm(st: Plan, w, position: float) -> Optional[float]:
+    """How much wall an opening at `position` actually has to sit in.
+
+    Not the wall's length. The solver emits long spanning walls with
+    T-junctions mid-span, so a 10 m wall may be shared by the two rooms an
+    opening connects for only 1.4 m of its length. Checking width against the
+    wall let an opening be widened until it opened into a room it was never
+    between: measured live, `update_opening width_mm=1800` was accepted on a
+    1400 mm shared boundary because the host wall ran 10010 mm.
+
+    Returns None when the rooms cannot be determined, in which case the caller
+    falls back to the wall length rather than refusing something valid.
+    """
+    horiz, lo, hi, other = _wall_axis(w)
+    mid = lo + position * (hi - lo)
+    runs: list[tuple[float, float]] = []
+    for r in st.rooms:
+        if not r.polygon or len(r.polygon) < 3:
+            continue
+        xs = [q.x for q in r.polygon]
+        ys = [q.y for q in r.polygon]
+        rlo, rhi = (min(xs), max(xs)) if horiz else (min(ys), max(ys))
+        near = min(abs(min(ys) - other), abs(max(ys) - other)) if horiz \
+            else min(abs(min(xs) - other), abs(max(xs) - other))
+        # The room must sit against this wall and span the opening's centre.
+        if near <= 300 and rlo - 1 <= mid <= rhi + 1:
+            runs.append((rlo, rhi))
+    if not runs:
+        return None
+    # Two rooms means an interior opening and the shared run binds; one means
+    # an exterior wall and the room's own run binds.
+    take = runs[:2]
+    return max(0.0, min(r[1] for r in take) - max(r[0] for r in take))
+
+
+def _check_opening_fits(st: Plan, w, position: float, width: int,
+                        what: str) -> None:
+    run = _usable_run_mm(st, w, position)
+    limit = run if run is not None else w.length
+    need = width + 2 * OPENING_REVEAL_MM
+    if need > limit + 1:
+        where = ("the wall the rooms share" if run is not None
+                 else "the wall")
+        raise ApplyError(
+            f"{what}: {width} mm plus jambs needs {need:.0f} mm but "
+            f"{where} gives {limit:.0f} mm. An opening wider than that "
+            "spills past the boundary it is meant to sit in")
+
+
 def _h_add_door(d: Design, st: Plan, p: dict, _payload) -> None:
     oid = str(p["opening_id"])
     if st.opening(oid) is not None:
         raise ApplyError(f"opening {oid!r} already exists")
-    _wall(st, p["wall_id"])
+    w = _wall(st, p["wall_id"])
     dtype = str(p.get("door_type") or "single")
     kind = str(p.get("kind") or "door")
     if kind not in ("door", "front_door"):
         raise ApplyError("kind must be door or front_door")
+    _width = int(p.get("width_mm") or _DOOR_WIDTH.get(dtype, 900))
+    _check_opening_fits(st, w, _t(p["at"]), _width, "add_door")
     st.openings.append(Opening(
         id=oid, kind=kind, wall_id=str(p["wall_id"]), position=_t(p["at"]),
-        width=int(p.get("width_mm") or _DOOR_WIDTH.get(dtype, 900)),
-        sill=0, head=2100,
+        width=_width, sill=0, head=2100,
         subtype="" if dtype == _default_door_subtype(kind) else dtype,
     ))
 
@@ -408,7 +470,7 @@ def _h_add_window(d: Design, st: Plan, p: dict, _payload) -> None:
     oid = str(p["opening_id"])
     if st.opening(oid) is not None:
         raise ApplyError(f"opening {oid!r} already exists")
-    _wall(st, p["wall_id"])
+    w = _wall(st, p["wall_id"])
     wtype = str(p.get("window_type") or "standard")
     w_default, sill_default, head_default = _WINDOW_SIZE.get(
         wtype, _WINDOW_SIZE["standard"])
@@ -416,9 +478,11 @@ def _h_add_window(d: Design, st: Plan, p: dict, _payload) -> None:
     head = int(p.get("head_mm") if p.get("head_mm") is not None else head_default)
     if head <= sill:
         raise ApplyError(f"head {head} must be above sill {sill}")
+    _width = int(p.get("width_mm") or w_default)
+    _check_opening_fits(st, w, _t(p["at"]), _width, "add_window")
     st.openings.append(Opening(
         id=oid, kind="window", wall_id=str(p["wall_id"]), position=_t(p["at"]),
-        width=int(p.get("width_mm") or w_default), sill=sill, head=head,
+        width=_width, sill=sill, head=head,
         subtype="" if wtype == "standard" else wtype,
     ))
 
@@ -426,6 +490,9 @@ def _h_add_window(d: Design, st: Plan, p: dict, _payload) -> None:
 def _h_update_opening(d: Design, st: Plan, p: dict, _payload) -> None:
     o = _find(st.openings, p["opening_id"], "opening")
     if p.get("width_mm") is not None:
+        w = _wall(st, o.wall_id)
+        at = _t(p["at"]) if p.get("at") is not None else o.position
+        _check_opening_fits(st, w, at, int(p["width_mm"]), "update_opening")
         o.width = int(p["width_mm"])
     if p.get("at") is not None:
         o.position = _t(p["at"])

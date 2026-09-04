@@ -570,3 +570,57 @@ def test_two_openings_on_one_wall_never_overlap_in_a_solved_plan():
                         o.position * w.length + o.width / 2) for o in group)
         for (_, b), (a, _) in zip(spans, spans[1:]):
             assert a >= b - 1, f"openings overlap on {wid}: {spans}"
+
+
+# ---------------------------------------------------------------------------
+# an opening must fit the boundary it is meant to sit in
+# ---------------------------------------------------------------------------
+
+def test_an_opening_cannot_be_widened_past_the_boundary_it_connects():
+    """Width was checked against nothing at all -- not even the wall.
+
+    The solver emits long spanning walls with T-junctions mid-span, so the two
+    rooms an opening connects may share only a fraction of the host wall.
+    Measured live on a 40x60 3BHK: `update_opening width_mm=1800` was accepted
+    on a 1100 mm shared boundary because the host wall ran 10010 mm, and the
+    resulting opening spilled into a room it was never between.
+
+    Found by an A/B probe: the arm that could see the drawing refused to widen
+    past the shared run and said why; the arm that could not claimed to have
+    built the 1800 mm opening.
+    """
+    from fpeval.generate import build
+    doc = Document.empty("op", name="t")
+    for c in (agent("set_plot", width_ft=40, depth_ft=60, road_facing="east",
+                    city="bengaluru"),
+              agent("use_standard_programme", bedrooms=3, pooja=True,
+                    utility=True, dining=True)):
+        assert doc.apply(c).ok
+    assert build(doc, time_limit_s=12.0).ok
+
+    o = doc.design.active.openings[0]
+    wall = next(w for w in doc.design.active.walls if w.id == o.wall_id)
+    assert wall.length > 3000, "fixture needs a long spanning wall to be a test"
+
+    res = doc.apply(agent("update_opening", opening_id=o.id, width_mm=3000))
+    assert not res.ok, (
+        f"3000 mm opening accepted on a {wall.length:.0f} mm wall whose shared "
+        "run is far shorter")
+    assert "spills past" in " ".join(res.errors)
+    # and the original width is untouched
+    assert doc.design.active.opening(o.id).width == o.width
+
+
+def test_a_door_that_fits_is_still_allowed():
+    """The guard must discriminate. A standard door on a real boundary works."""
+    from fpeval.generate import build
+    doc = Document.empty("op2", name="t")
+    for c in (agent("set_plot", width_ft=30, depth_ft=40, road_facing="north"),
+              agent("use_standard_programme", bedrooms=2)):
+        assert doc.apply(c).ok
+    assert build(doc, time_limit_s=12.0).ok
+    st = doc.design.active
+    # widen an existing door by a little: that must be allowed where there is room
+    o = min(st.openings, key=lambda x: x.width)
+    res = doc.apply(agent("update_opening", opening_id=o.id, width_mm=o.width))
+    assert res.ok, res.errors
