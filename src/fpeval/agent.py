@@ -35,11 +35,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence
 
 from .commands import (
-    Command, TABLE, SYMBOLIC_OPS, catalogue, SYMBOLIC,
+    Command, TABLE, SYMBOLIC_OPS, SPEC_OPS, catalogue, SYMBOLIC, _ENUM_PARAMS,
 )
 from .document import Document, feed
 from .ir import Design, Plan
 from . import roomtypes as _rt
+from .principles import prompt_block
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 32000
@@ -51,6 +52,26 @@ are talking to are editing the same document: their mouse and your commands go
 through one log, so anything they do appears in your context and anything you do
 appears on their screen immediately.
 
+## Two layers, and which one to use
+
+A design has a **brief** (the programme: the plot, the room list, target areas,
+zones, adjacencies) and **geometry** (the walls, doors and windows actually
+drawn). They are separate, and both are in your context every turn.
+
+To create or substantially rearrange a plan, edit the brief and then call
+`solve_layout`. That compiles the brief into geometry with a CP-SAT solver.
+This is the only way to make a floor from nothing: there is no first wall to
+draw, wall references resolve only against walls that already exist, and you
+may not author coordinates.
+
+To adjust a plan that already exists, edit the geometry directly -- move a
+wall, add a window, rename a room. Do not re-solve for a change a single
+command makes, because solving discards the current layout and produces a new
+one, losing anything the user has arranged by hand.
+
+Editing the brief does NOT move a wall. The plan on screen stays as it was
+until you solve, and you will be told when the two are out of step.
+
 ## How you change the plan
 
 You emit **symbolic commands**. You never emit a coordinate, a wall endpoint, or
@@ -61,6 +82,29 @@ geometry. A command carrying a coordinate is rejected before it runs.
 
 Available commands:
 {catalogue}
+
+## What makes a plan good
+
+{principles}
+
+## What to assume, and what to ask
+
+Default rather than ask when a sensible default exists and getting it wrong is
+cheap to correct: one floor unless storeys are mentioned, standard wall
+thicknesses, door and window sizes, the front door on the road side, the usual
+Indian room sizes. "A 2BHK" fully determines the bedroom count; build it.
+
+The plot is different. A plan solved on the wrong plot looks exactly as
+finished as one solved on the right plot, and nothing on the drawing says
+which it is. So when the plot is not stated you may proceed on the standard
+site for that many bedrooms -- `solve_layout` will pick one and tell you --
+but you must say in your reply which plot you used and that it is an
+assumption. The same goes for the facing. Never present an assumed dimension
+as though the user gave it.
+
+If the user asks for something the site cannot hold, the solver says
+INFEASIBLE and names the constraints that clash. Report that as the answer it
+is, with what would have to give, rather than quietly dropping a room.
 
 ## How to work
 
@@ -113,9 +157,14 @@ def plan_digest(design: Design, *, max_walls: int = 60) -> str:
         return "The design has no storeys yet."
 
     lines: list[str] = []
+    # The id, not just the display name. Commands name ids, and this line used
+    # to print `st.name or st.id` -- so on a storey called "Ground Floor" the
+    # id never appeared anywhere in the context. The agent guessed
+    # "Ground Floor", "ground_floor", "ground", "storey_0" and "s0" in one
+    # turn and burned five refusals on a value nobody had given it.
     lines.append(f"DESIGN {design.name or design.id} -- "
                  f"{len(design.storeys)} storey(s), editing "
-                 f"'{st.name or st.id}' (level {st.level})")
+                 f"'{st.name}' id={st.id} (level {st.level})")
     if st.site.north_deg:
         lines.append(f"North: +Y axis is at bearing {st.site.north_deg:g} deg")
     if st.site.setbacks_mm:
@@ -171,6 +220,80 @@ def plan_digest(design: Design, *, max_walls: int = 60) -> str:
     return "\n".join(lines)
 
 
+def brief_digest(design: Design) -> str:
+    """The programme, which is a separate thing from the drawn geometry.
+
+    Room ids here are what every `set_room_*` command names, and they are not
+    the same set as the room ids in the plan: before a solve the plan has none,
+    and after one the solver may have added circulation the brief never asked
+    for. Printing both, labelled, is the only way the distinction survives
+    contact with a model.
+    """
+    sp = getattr(design, "spec", None)
+    if sp is None or (not sp.rooms and not sp.plot_width_ft):
+        return ("BRIEF: empty. Nothing has been asked for yet -- "
+                "`use_standard_programme` is the fastest way to start, and "
+                "`solve_layout` will assume a standard 2BHK if you call it "
+                "on an empty brief.")
+    lines = ["BRIEF (the programme; `solve_layout` compiles this into "
+             "geometry)"]
+    if sp.site_kind == "apartment_unit":
+        q = sp.unit_area
+        area = q.carpet_sqft or q.builtup_sqft or q.super_builtup_sqft
+        lines.append(f"  site: apartment unit"
+                     + (f", {area:g} sqft" if area else ", area not stated"))
+    else:
+        if sp.plot_width_ft and sp.plot_depth_ft:
+            lines.append(f"  plot: {sp.plot_width_ft:g} x {sp.plot_depth_ft:g} ft "
+                         f"({sp.plot_width_ft * sp.plot_depth_ft:g} sqft)"
+                         f"{', corner' if sp.corner_plot else ''}")
+        else:
+            lines.append("  plot: NOT STATED (solve_layout will assume the "
+                         "standard site for the bedroom count and say so)")
+    lines.append(f"  road facing: {sp.road_facing_side or 'not stated'}"
+                 f" | storeys: {sp.storeys} | city: {sp.city_profile}")
+    ent = sp.entrance
+    if ent is not None and (ent.side or ent.via_foyer):
+        lines.append(f"  entrance: {ent.side or 'not stated'}"
+                     f"{', via a foyer' if ent.via_foyer else ''}")
+    lines.append(f"  rooms ({len(sp.rooms)}):")
+    for r in sp.rooms:
+        rng = (f"{r.min_sqft:g}-{r.max_sqft:g} sqft"
+               if r.min_sqft and r.max_sqft else "size not set")
+        bits = [rng, f"priority {r.priority}"]
+        if r.preferred_zone:
+            bits.append(f"{r.preferred_zone} zone")
+        if r.attached_bath:
+            bits.append("en-suite")
+        if r.optional:
+            bits.append("optional")
+        lines.append(f"    {r.id}: {r.name or r.category} "
+                     f"cat={r.category} -- {', '.join(bits)}")
+    if sp.adjacency:
+        lines.append(f"  adjacency ({len(sp.adjacency)}):")
+        for a in sp.adjacency:
+            lines.append(f"    {a.a} {a.kind} {a.relation} {a.b}"
+                         + (f" -- {a.reason}" if a.reason else ""))
+    return "\n".join(lines)
+
+
+def _stale(doc: Document) -> bool:
+    """Has the brief changed since the geometry was last solved from it?
+
+    Worth stating explicitly rather than leaving the model to infer it: a brief
+    edit does not move a wall, so after `set_room_area` the plan on screen is
+    still the old one, and an agent that does not know that will report the
+    room as resized when nothing has changed.
+    """
+    last_solve = last_spec = 0
+    for e in doc.log:
+        if e.command.op == "replace_storey":
+            last_solve = e.seq
+        elif e.command.op in SPEC_OPS:
+            last_spec = e.seq
+    return last_spec > last_solve
+
+
 def turn_context(doc: Document, last_seen_seq: int,
                  findings: Sequence[Any] = ()) -> str:
     """The per-turn operator message: state, then what changed since.
@@ -180,7 +303,11 @@ def turn_context(doc: Document, last_seen_seq: int,
     prefix on every turn.
     """
     parts = ["CURRENT PLAN (authoritative -- this is the document, not a claim "
-             "about it)", plan_digest(doc.design)]
+             "about it)", plan_digest(doc.design), "", brief_digest(doc.design)]
+    if _stale(doc):
+        parts += ["", "The brief has changed since the geometry was solved. "
+                      "The plan above is the OLD layout. Call `solve_layout` "
+                      "to bring it in line, or say why you are not going to."]
     since = doc.events_since(last_seen_seq)
     if since:
         parts += ["", f"CHANGES SINCE YOUR LAST MESSAGE (seq {last_seen_seq} -> "
@@ -199,6 +326,120 @@ def turn_context(doc: Document, last_seen_seq: int,
 # tools
 # --------------------------------------------------------------------------
 
+# Every JSON type, for a parameter whose shape genuinely varies by command.
+ANY_TYPE: dict[str, Any] = {
+    "type": ["string", "number", "boolean", "object", "array", "null"]
+}
+
+# Per-parameter shapes for the flat union.
+#
+# The schema is one flat property bag across 40 commands rather than a 40-way
+# `oneOf`, for the reason `_symbolic_command_schema` documents: strict tool use
+# compiles the schema to a grammar and caps unions at 16. But flattening the
+# *structure* did not require flattening the *types*, and collapsing every
+# parameter to "any of the six JSON types" left the model guessing -- it sent
+# `setbacks_mm: 1200` where a per-side mapping was wanted, got a raw
+# `TypeError` back, and spent a turn recovering. A name is listed here only
+# when it means the same kind of thing on every command that takes it.
+PARAM_TYPES: dict[str, dict[str, Any]] = {
+    "setbacks_mm": {
+        "type": "object",
+        "description": "Millimetres per side, e.g. "
+                       "{\"front\": 1500, \"rear\": 1000, \"left\": 900, "
+                       "\"right\": 900}. Not a single number.",
+        "additionalProperties": {"type": "integer"},
+    },
+    "north_deg": {"type": "number",
+                  "description": "Bearing of the +Y axis, degrees clockwise "
+                                 "from north."},
+    "width_ft": {"type": "number", "description": "Plot frontage in feet."},
+    "depth_ft": {"type": "number", "description": "Plot depth in feet."},
+    "carpet_sqft": {"type": "number"},
+    "bedrooms": {"type": "integer", "minimum": 1, "maximum": 6},
+    "baths": {"type": "integer", "minimum": 0, "maximum": 6},
+    "storeys": {"type": "integer", "minimum": 1, "maximum": 4},
+    "min_sqft": {"type": "number"},
+    "max_sqft": {"type": "number"},
+    "min_aspect": {"type": "number"},
+    "max_aspect": {"type": "number"},
+    # 1..5, not a word. The applier accepts "high" as well because a model
+    # reaches for it, but the schema should ask for the number.
+    "priority": {"type": "integer", "minimum": 1, "maximum": 5,
+                 "description": "1 = must have, 5 = nice to have."},
+    "width_mm": {"type": "integer"},
+    "height_mm": {"type": "integer"},
+    "thickness_mm": {"type": "integer"},
+    "sill_mm": {"type": "integer"},
+    "head_mm": {"type": "integer"},
+    "depth_mm": {"type": "integer"},
+    "distance_mm": {"type": "integer"},
+    "riser_count": {"type": "integer"},
+    "rotation": {"type": "number"},
+    "opacity": {"type": "number", "minimum": 0, "maximum": 1},
+    "corner_plot": {"type": "boolean"},
+    "optional": {"type": "boolean"},
+    "attached_bath": {"type": "boolean"},
+    "via_foyer": {"type": "boolean"},
+    "avoid_direct_kitchen_view": {"type": "boolean"},
+    "locked": {"type": "boolean"},
+    "flip_side": {"type": "boolean"},
+    "pooja": {"type": "boolean"},
+    "utility": {"type": "boolean"},
+    "sit_out": {"type": "boolean"},
+    "parking": {"type": "boolean"},
+    "dining": {"type": "boolean"},
+    "study": {"type": "boolean"},
+    "store": {"type": "boolean"},
+    # Ids and free text.
+    "room_id": {"type": "string"}, "wall_id": {"type": "string"},
+    "opening_id": {"type": "string"}, "furniture_id": {"type": "string"},
+    "stair_id": {"type": "string"}, "column_id": {"type": "string"},
+    "element_id": {"type": "string"}, "storey_id": {"type": "string"},
+    "catalog_id": {"type": "string"}, "def_id": {"type": "string"},
+    "name": {"type": "string"}, "reason": {"type": "string"},
+    "text": {"type": "string"}, "category": {"type": "string"},
+    "value": ANY_TYPE,
+    # `at` is a fraction along a wall OR a position word, and `direction` is a
+    # compass bearing on a wall and up/down on a stair, so both stay open.
+    "at": ANY_TYPE, "direction": ANY_TYPE,
+    # Vocabularies the applier checks but the schema had no way to state.
+    "side": {"type": "string", "enum": ["north", "east", "south", "west"]},
+    "road_facing": {"type": "string",
+                    "enum": ["north", "east", "south", "west"]},
+    "facing": {"type": "string", "enum": ["north", "east", "south", "west"]},
+    "site_kind": {"type": "string", "enum": ["plot", "apartment_unit"]},
+    "kind": {"type": "string", "enum": ["required", "prohibited"]},
+    "relation": {"type": "string",
+                 "enum": ["adjacent", "direct_access", "visual", "same_floor"]},
+    "preferred_zone": {"type": "string",
+                       "enum": ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "C"]},
+    "zone": {"type": "string",
+             "enum": ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "C"]},
+    "a": {"type": "string",
+          "description": "A room id from the brief, or a room category."},
+    "b": {"type": "string",
+          "description": "A room id from the brief, or a room category."},
+    "start_ref": {"type": "string",
+                  "description": "An existing wall endpoint or point along it: "
+                                 "'w3:start', 'w3:end', 'w3@0.5'. There is no "
+                                 "way to reference the site or the envelope -- "
+                                 "on an empty floor use solve_layout instead "
+                                 "of trying to draw the first wall."},
+    "end_ref": {"type": "string", "description": "As start_ref."},
+    "storey": {"type": "integer", "minimum": 0,
+               "description": "Which floor this room belongs on; 0 is ground."},
+}
+
+# Enum parameters, taken from the table the applier validates against so the
+# two cannot disagree. `direction` is excluded because it means a compass
+# bearing on a wall and up/down on a stair, which one enum cannot say.
+PARAM_TYPES.update({
+    key: {"type": "string", "enum": list(allowed)}
+    for key, allowed in _ENUM_PARAMS.items()
+    if key != "direction" and key not in PARAM_TYPES
+})
+
+
 def _symbolic_command_schema() -> dict:
     """One flat schema over the symbolic vocabulary.
 
@@ -213,8 +454,7 @@ def _symbolic_command_schema() -> dict:
     for op in SYMBOLIC_OPS:
         spec = TABLE[op]
         for key in (*spec.required, *spec.optional):
-            params.setdefault(key, {"type": ["string", "number", "boolean",
-                                             "object", "array", "null"]})
+            params.setdefault(key, dict(PARAM_TYPES.get(key, ANY_TYPE)))
     return {
         "type": "object",
         "properties": {
@@ -255,6 +495,28 @@ TOOLS: list[dict] = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "solve_layout",
+        "description": "Compile the brief into geometry: run the layout "
+                       "solver and replace the floor with the result. This is "
+                       "how a plan is created from nothing and how a brief "
+                       "edit becomes visible. Anything the brief does not say "
+                       "is assumed from Indian norms and reported back to you "
+                       "-- relay those assumptions to the user, they cannot "
+                       "see them. Slow (seconds), so do not call it after "
+                       "every single edit; batch the brief changes, then "
+                       "solve once.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "One line for the change feed, e.g. "
+                                   "\"Lay out the 2BHK on the 30x40 plot\".",
+                },
+            },
+        },
+    },
+    {
         "name": "apply_commands",
         "description": "Apply symbolic commands to the document. Each is "
                        "validated and applied independently: you will be told "
@@ -282,6 +544,12 @@ def _run_tool(name: str, args: dict, ctx: ToolContext) -> str:
         return "\n".join(
             f"[{getattr(f, 'severity', '?')}] {getattr(f, 'rule_id', '')}: "
             f"{getattr(f, 'message', f)}" for f in fs[:40])
+    if name == "solve_layout":
+        from .generate import build, report
+        r = build(ctx.doc, reason=str(args.get("reason") or ""))
+        if r.event is not None:
+            ctx.events.append(r.event)
+        return report(r)
     if name == "apply_commands":
         raw = args.get("commands") or []
         cmds = [Command(op=str(c.get("op", "")),
@@ -346,7 +614,8 @@ def run_turn(
 
     system = [{
         "type": "text",
-        "text": SYSTEM.format(catalogue=catalogue(SYMBOLIC)),
+        "text": SYSTEM.format(catalogue=catalogue(SYMBOLIC),
+                              principles=prompt_block()),
         # The prefix is frozen and the catalogue is generated from a sorted
         # table, so this is byte-stable across turns and processes.
         "cache_control": {"type": "ephemeral"},
@@ -502,7 +771,8 @@ def stream_turn(
 
     system = [{
         "type": "text",
-        "text": SYSTEM.format(catalogue=catalogue(SYMBOLIC)),
+        "text": SYSTEM.format(catalogue=catalogue(SYMBOLIC),
+                              principles=prompt_block()),
         "cache_control": {"type": "ephemeral"},
     }]
 
