@@ -461,6 +461,12 @@ def _score_nominal(rects, reqs: Sequence[RoomReq], targets: Sequence[float],
             pen += (6000.0 if r.category in HABITABLE
                     else 6000.0 if r.category in OUTDOOR_ROOMS
                     else 1500.0 if r.category in WET else 0.0)
+        else:
+            # Has an exterior wall, but perhaps not enough of one. 2000 per m2
+            # of shortfall puts a room 2.6 m2 short at 5200, next to the 6000
+            # charged for having no wall at all -- the same defect, priced
+            # continuously instead of as a cliff.
+            pen += 2000.0 * _glazing_deficit_m2(rects[i], rect, r.category)
         z = r.zone()
         if z and spec.w_vastu > 0:
             # Scaled to match the CP-SAT objective: there, 1 m^2 of area error
@@ -1482,6 +1488,14 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             # silent on it: 127 of the 148 bedroom-bearing examples in `suite/`
             # say nothing about `attached_bath`. Weighting it like law would
             # distort layouts for a norm this market does not strongly hold.
+            # 3e6: NBC.VENTILATION_HABITABLE is an error and the top defect
+            # in the suite, so it belongs above the interior-wet-room term.
+            # Under circulation isolation, though: a short facade can also be
+            # answered by making the room smaller, whereas a room with no door
+            # to circulation has no answer but a different layout.
+            pen += 3e6 * sum(1 for i, r in enumerate(reqs)
+                             if _glazing_deficit_m2(rects[i], rect_mm,
+                                                    r.category) > 0.05)
             pen += 8e5 * _ensuite_unmet(doors, reqs)
             key = (pen, solver.ObjectiveValue())
             passed.append((pen, solver.ObjectiveValue(),
@@ -1792,6 +1806,66 @@ def _circ_isolated_ids(rects: dict[int, tuple],
 
 def _circ_isolated(rects: dict[int, tuple], reqs: Sequence[RoomReq]) -> int:
     return len(_circ_isolated_ids(rects, reqs))
+
+
+def _exterior_run_mm(r: tuple, rect_mm: tuple[int, int, int, int]) -> int:
+    """Total length of this room's edges that lie on the building perimeter."""
+    x0, y0, x1, y1 = r
+    X0, Y0, X1, Y1 = rect_mm
+    # The +/-1 slack matches the guard in `_score_nominal`, which asks the same
+    # question. Without it the two could disagree about a room sitting half a
+    # millimetre off the boundary: one would call it exterior and the other
+    # would compute no run at all.
+    run = 0
+    if y0 <= Y0 + 1:
+        run += x1 - x0
+    if y1 >= Y1 - 1:
+        run += x1 - x0
+    if x0 <= X0 + 1:
+        run += y1 - y0
+    if x1 >= X1 - 1:
+        run += y1 - y0
+    return run
+
+
+# What fraction of an exterior run can actually become glass. `_glazing_runs`
+# places openings up to 3000 mm with a 600 mm pier between and a 100 mm jamb at
+# each end, so a long wall tops out near 3000/3600 of its length.
+GLAZED_FRACTION = 0.80
+
+
+def _glazing_deficit_m2(r: tuple, rect_mm: tuple[int, int, int, int],
+                        category: str) -> float:
+    """Glazing NBC demands, minus what this room's outside walls can carry.
+
+    The ranking already charged a room with NO exterior edge, and charged
+    nothing at all for a room whose exterior edge is simply too SHORT. Those
+    are the same defect at two magnitudes: NBC wants 1 m2 of glass per 10 m2
+    of floor, so a 46 m2 living room needs ~4.6 m2, which is about 4.2 m of
+    sash at a 1200 mm window height -- and no wall shorter than that can
+    provide it however the openings are subdivided.
+
+    That gap became the top defect the day surplus floor started going to
+    habitable rooms instead of the passage: NBC.VENTILATION_HABITABLE went
+    from 9 plans to 14 and NBC.VENTILATION_KITCHEN from 4 to 9. Widening the
+    sizer to place several windows per wall recovered 2 of those 5, and the
+    rest are not a sizer problem -- the solver put a big room where there is
+    not enough facade to light it, and only the layout can fix that.
+
+    Returns 0.0 for a room with no exterior edge at all: that case is already
+    priced, heavily, and double-charging it would change a tuned behaviour
+    while pretending to add a new one.
+    """
+    run = _exterior_run_mm(r, rect_mm)
+    if run <= 0:
+        return 0.0
+    floor_m2 = (r[2] - r[0]) * (r[3] - r[1]) / 1e6
+    need = _vent_need_m2(category, floor_m2)
+    if need <= 0:
+        return 0.0
+    win_h = max(WIN_HEAD - WIN_SILL, 1)
+    capacity = max(0, run - 2 * JAMB) * GLAZED_FRACTION * win_h / 1e6
+    return max(0.0, need - capacity)
 
 
 def _interior_cell(r: tuple, rect_mm: tuple[int, int, int, int]) -> bool:
