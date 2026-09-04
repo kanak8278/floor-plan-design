@@ -791,3 +791,44 @@ def test_wet_grouping_required_makes_it_an_error():
              (6000, 3000, "door", 900), (10000, 3000, "door", 900)]
     got = sense(rects, doors, {"requirements": {"wet_grouping": "required"}})
     assert got["DESIGN.WET_ROOMS_SPLIT"].severity == "error"
+
+
+# --------------------------------------------------------- vocabulary coherence
+# Two modules naming the same parameter with different alphabets is the shape of
+# bug that hides best: each half is internally consistent, both pass their own
+# tests, and the op is simply unreachable. `move_wall_parallel` was unreachable
+# through the repair loop for exactly this reason -- `llm.py` validated
+# `direction` as "north", `apply_ops` looked up "NORTH", and no spelling
+# survived both. Nothing detected it because nothing compared the two tables.
+
+def test_every_direction_the_validator_accepts_can_be_applied():
+    from fpeval.llm import COMPASS_MOVE
+    from fpeval.apply_ops import _DIR_VEC
+    unreachable = [d for d in COMPASS_MOVE if d.upper() not in _DIR_VEC]
+    assert not unreachable, (
+        f"{unreachable} pass PatchOp.validate and are rejected by the applier, "
+        "so the op cannot be reached with any spelling")
+
+
+def test_the_command_and_patch_vocabularies_agree():
+    """`commands.COMPASS` and `llm.COMPASS_MOVE` name the same eight points."""
+    from fpeval.commands import COMPASS
+    from fpeval.llm import COMPASS_MOVE
+    assert set(COMPASS) == set(COMPASS_MOVE), (
+        f"only in COMPASS: {sorted(set(COMPASS) - set(COMPASS_MOVE))}; "
+        f"only in COMPASS_MOVE: {sorted(set(COMPASS_MOVE) - set(COMPASS))}")
+
+
+def test_the_service_accepts_the_compass_spelling_everything_else_uses():
+    """`/generate` took "N"; briefs, ground truth and `spec.py` say "north"."""
+    from service.app import GenerateIn
+    from fpeval.commands import COMPASS
+    for word in COMPASS:
+        got = GenerateIn(width_ft=30, depth_ft=40, programme=[],
+                         road_facing=word).road_facing
+        assert got in ("N", "S", "E", "W", "NE", "NW", "SE", "SW"), (word, got)
+    # "north_east" must not fold to "N" by taking the first character.
+    assert GenerateIn(width_ft=30, depth_ft=40, programme=[],
+                      road_facing="north_east").road_facing == "NE"
+    with pytest.raises(Exception):
+        GenerateIn(width_ft=30, depth_ft=40, programme=[], road_facing="banana")

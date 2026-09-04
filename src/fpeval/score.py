@@ -130,6 +130,23 @@ def _rescale_to_budget(prog, stmt) -> None:
             r.target_m2 = round(float(b.budget_m2), 2)
 
 
+class _TruthAdjacency:
+    """A suite example's truth, wearing the `.adjacency` shape `bridge` expects.
+
+    Truth states adjacency as category pairs (`adjacent`, `not_adjacent`);
+    `spec.DesignSpec` states it as `Adjacency` records. Adapting here keeps the
+    subtype resolution and distinct-host choice in `bridge` as one copy instead
+    of two that drift.
+    """
+
+    def __init__(self, truth: Any) -> None:
+        from .spec import Adjacency
+        self.adjacency = (
+            [Adjacency(a=a, b=b, kind="required") for a, b in (truth.adjacent or [])]
+            + [Adjacency(a=a, b=b, kind="prohibited")
+               for a, b in (truth.not_adjacent or [])])
+
+
 def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         spec: Any = None, policy=None) -> Result:
     res = Result(example_id=example.id, track=track)
@@ -194,66 +211,25 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
         from .bridge import cap_service_targets
         for note in cap_service_targets(prog):
             warn.append(note)
-        from .bridge import RELAXED_MAX_ASPECT
-        from . import topology as TP
-        beds = sum(1 for r in prog if r.category in ("bedroom", "master_bedroom"))
-        # topology.py supersedes the coarser typology table: 10 scenarios keyed
-        # on typology x size band, with a signed preference matrix rather than
-        # binary pairs.
-        sc = TP.resolve(site_kind=("apartment_unit" if is_unit else "plot"),
-                        plot_sqft=(None if is_unit else plot_sqft),
-                        carpet_sqft=(sum(v for k, v in (t.area_quote_sqft or {}).items()
-                                         if "carpet" in k) or None),
-                        storeys=int(t.storeys or 1), bedrooms=beds,
-                        kitchens=sum(1 for r in prog if r.category == "kitchen"),
-                        has_two_living=sum(1 for r in prog if r.category == "living") >= 2)
+        from .bridge import RELAXED_MAX_ASPECT, resolve_scenario, relational_pairs
+        sc = resolve_scenario(
+            prog, site_kind=("apartment_unit" if is_unit else "plot"),
+            plot_sqft=(None if is_unit else plot_sqft),
+            carpet_sqft=(sum(v for k, v in (t.area_quote_sqft or {}).items()
+                             if "carpet" in k) or None),
+            storeys=int(t.storeys or 1))
         res.foyer = decide_foyer(sc.key, sum(r.target_m2 for r in prog) or 60.0,
                                  asked=_asked)
         if res.foyer.wanted and not any(r.category == "foyer" for r in prog):
             prog.append(_RR(id="foyer", name="Foyer", category="foyer",
                             target_m2=4.0, weight=0.6))
             warn.append(f"foyer added: {res.foyer.reason}")
-        req_adj, forb_adj, soft_adj = TP.solver_pairs(prog, sc)
-
-        # The brief's OWN adjacency requests, on top of the scenario defaults.
-        # These were only ever used to CHECK the result, never to drive the
-        # solve, so "a balcony off the master bedroom" never reached the solver
-        # and failed on 22 of the detailed examples. A stated requirement has to
-        # be an input, not just an assertion.
-        _by_cat: dict[str, list[str]] = {}
-        for _r in prog:
-            _by_cat.setdefault(_r.category, []).append(_r.id)
-
-        def _pick(cat: str) -> str | None:
-            ids = _by_cat.get(cat)
-            if ids:
-                return ids[0]
-            # "master_bedroom" may be realised as the first bedroom.
-            if cat == "master_bedroom":
-                b = _by_cat.get("bedroom")
-                return b[0] if b else None
-            if cat == "bedroom":
-                b = _by_cat.get("master_bedroom")
-                return b[0] if b else None
-            return None
-
-        _used: set[str] = set()
-        for _ca, _cb in (t.adjacent or []):
-            _a, _b = _pick(_ca), _pick(_cb)
-            if _a and _b and _a != _b:
-                # Distinct hosts where the brief asks for several of one type:
-                # "one balcony off the living, one off the master" needs two
-                # different balconies, not the same one twice.
-                _cands = [i for i in _by_cat.get(_ca, []) if i not in _used] \
-                    or _by_cat.get(_ca, [_a])
-                _a = _cands[0]
-                _used.add(_a)
-                req_adj.append((_a, _b))
-        for _ca, _cb in (t.not_adjacent or []):
-            for _x in _by_cat.get(_ca, []):
-                for _y in _by_cat.get(_cb, []):
-                    if _x != _y:
-                        forb_adj.append((_x, _y))
+        # Scenario defaults plus what this example's truth asks for. Truth
+        # states adjacency as category pairs; `relational_pairs` speaks
+        # `spec.Adjacency`, so the pairs are lifted into that shape rather than
+        # re-resolved here -- the subtype and distinct-host logic is one copy.
+        req_adj, forb_adj, soft_adj = relational_pairs(
+            prog, sc, spec=_TruthAdjacency(t))
         res.typology = sc.key
         res.scenario = sc
         sr = solve_layout(

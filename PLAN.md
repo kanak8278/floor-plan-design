@@ -106,7 +106,8 @@ the canvas responds at pointer speed — but that is a *prediction*, reconciled
 against the service by state hash, and the cost of it being wrong is one
 repaint rather than a corrupted document.
 
-See `CHAT_AGENT_DESIGN.md` for the command algebra and the event log.
+See `DECISIONS.md` #7-#9 for the substrate: one applier, persisted room
+identity, and the IR as a superset of the editor's model.
 
 ## 3. The tool surface — few tools, deep parameters
 

@@ -59,19 +59,14 @@ _MASTER_RE = re.compile(r"master", re.I)
 _WC_RE = re.compile(r"\bwc\b|water closet|toilet", re.I)
 
 # NBC 2016 Part 3: a habitable room is one used for living, sleeping, dining or
-# study. This set holds the BASE categories; use `_is_habitable` to test a
-# room, because a plan carries subtypes.
+# study. These are the BASE categories; use `_is_habitable` to test a room,
+# because a plan carries subtypes. Must agree with `envelope.NBC_MIN` and
+# `standards.HABITABLE_VENT` -- a room habitable for glazing and not for area
+# is a table drift, not a design.
 #
-# `dining` and `study` were missing, and the codebase's own other two tables
-# already disagreed with that: both are in `envelope.NBC_MIN` and in
-# `standards.HABITABLE_VENT`, so a study was required to have a window and
-# budgeted against 7.5 m2 while being exempt from the 7.5 m2 check. A room can
-# be habitable for glazing and not habitable for area only by accident.
-#
-# `kitchen` and `pooja` are deliberately absent. The kitchen has its own
-# branch with its own minima, and a pooja room is not used for living or
-# sleeping -- it is `klass="habitable"` in the taxonomy, which is a different
-# question from NBC's.
+# `kitchen` and `pooja` are deliberately absent: the kitchen has its own branch
+# with its own minima, and a pooja room is `klass="habitable"` in the taxonomy,
+# which is a different question from NBC's.
 HABITABLE = {"living", "bedroom", "dining", "study", "servant"}
 NON_HABITABLE = {"balcony", "storage"}
 
@@ -943,24 +938,16 @@ def check_circulation(ctx: _Ctx) -> list[Finding]:
     #    are not its own private appendages, traffic passes through someone's
     #    bedroom.
     #
-    #    What counts as an appendage is measured, not assumed. Over the 265
-    #    ResPlan plans whose door graph is at least connected, the rooms found
-    #    hanging behind a private room are:
-    #
-    #        bathroom 416   balcony 232   kitchen 6   living 1   bedroom 1
-    #
-    #    So an attached bath and a bedroom balcony are what real houses do --
-    #    exactly the arrangement the brief asks for ("one balcony off the master
-    #    bedroom"). Exempting only the bath fired this error on 59% of real
-    #    plans; the balcony was the entire false-positive population. A kitchen,
-    #    a living room or a second bedroom behind a bedroom stays an error,
-    #    which is what the tail of that distribution says it should be.
-    # A room that is unreachable to begin with is stranded whichever room you
-    # remove, so it used to be blamed on every bedroom in the plan at once --
-    # dropping the kitchen's only door produced three BEDROOM_THROUGH_TRAFFIC
-    # errors, one of them naming a bedroom that does not touch the kitchen.
-    # Removing a door cannot make a bedroom into a corridor. Only rooms that
-    # ARE reachable can be stranded by passing through one, and an unreachable
+    #    What counts as an appendage is measured. Over the 265 ResPlan plans
+    #    with a connected door graph, the rooms hanging behind a private room
+    #    are: bathroom 416, balcony 232, kitchen 6, living 1, bedroom 1. So an
+    #    attached bath and a bedroom balcony are what real houses do -- and
+    #    what the brief asks for. Exempting only the bath fired on 59% of real
+    #    plans, the balcony being the entire false-positive population. A
+    #    kitchen, living room or second bedroom behind a bedroom stays an
+    #    error, per the tail of that distribution.
+    # Only rooms that ARE reachable can be stranded by passing through one.
+    # Removing a door cannot make a bedroom into a corridor; an unreachable
     # room is GEO.UNREACHABLE_ROOM's business.
     base = _reach_without(a, entry, set()) if entry is not None else set()
     for rid, nb in a.items():
@@ -1272,27 +1259,20 @@ def _scenario_for(ctx: _Ctx):
 # layout sense: the things a client notices first
 # ---------------------------------------------------------------------------
 #
-# These came out of reading our own output next to a critique of it. Every one
-# was visible at a glance on the drawing and invisible to the validator, which
-# is the worst combination: the plan looked checked.
+# Defects visible at a glance on the drawing and invisible to the validator --
+# the worst combination, because the plan looked checked.
 #
-# None of these is calibrated on ResPlan, deliberately. `brief.py` documents
+# None of these is calibrated on ResPlan, deliberately: `brief.py` documents
 # that corpus as having geography that "points away from India", so it cannot
-# establish an Indian-market norm -- and it nearly did: an earlier cut of the
-# en-suite rule cited "72% of real plans" from ResPlan and put a warning on 71
-# of 100 of our own plans for a preference this market does not hold strongly.
-# One of the very signals `brief.py` cites as un-Indian is "two bathrooms
-# modal for a two-bedroom unit", which is that statistic.
+# establish an Indian-market norm. ResPlan keeps one job here, in
+# `test_false_positive_rate_on_real_plans` -- a rule that fires on real built
+# houses ANYWHERE is suspect, whatever the market. That is soundness, not
+# calibration.
 #
-# ResPlan keeps one legitimate job here, in `test_false_positive_rate_on_real
-# _plans`: a rule that fires on real built houses ANYWHERE is suspect,
-# whatever the market. That is a soundness check, not a calibration.
-#
-# So each threshold below rests on the Indian sources we have -- the area
-# bands in `spec.ROOM_CATEGORIES`, the adjacency table in
-# `spec.DEFAULT_ADJACENCY`, the typology expectations in `typology.py`, and
-# the stated requirements in `suite/` -- or on a dimensional argument, and the
-# comment says which. Where no Indian source settles it, there is no rule.
+# So each threshold rests on an Indian source -- the area bands in
+# `spec.ROOM_CATEGORIES`, `spec.DEFAULT_ADJACENCY`, `typology.py`, the stated
+# requirements in `suite/` -- or on a dimensional argument, and says which.
+# Where no Indian source settles it, there is no rule.
 
 # A passage is functional at roughly a metre wide; two people pass at 1.2 m.
 # Beyond this it is not circulation, it is unassigned floor that the solver had
@@ -1361,20 +1341,11 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
     livings = ids_of("living")
 
     # ---- an en-suite the brief asked for is missing ---------------------
-    # Fires ONLY when the brief asked. It used to warn otherwise, on the
-    # strength of "290 of 400 real plans (72%) give their largest bedroom an
-    # en-suite" -- measured on ResPlan, which `brief.py` documents as having
-    # geography that "points away from India", citing *two bathrooms modal for
-    # a two-bedroom unit* as one of the signals. That is the very statistic I
-    # had used. Calibrating an Indian-market norm on a non-Indian corpus put a
-    # warning on 71 of 100 plans for a preference this market does not
-    # strongly hold.
-    #
-    # The Indian ground truth in `suite/` cannot replace the number: 127 of its
-    # 148 bedroom-bearing examples (86%) say nothing about `attached_bath` at
-    # all, and two state 0 explicitly. Silence is not evidence of a norm in
-    # either direction, so no default finding is issued. Asking for something
-    # and not getting it is still an error.
+    # Fires ONLY when the brief asked. There is no Indian source for a default:
+    # 127 of the 148 bedroom-bearing examples in `suite/` (86%) say nothing
+    # about `attached_bath` and two state 0 explicitly. Silence is not evidence
+    # of a norm in either direction, so no default finding is issued. Asking
+    # for one and not getting it is still an error.
     if beds and baths:
         master = max(beds, key=lambda i: area.get(i, 0.0))
         asked = bool(req.get("attached_bath"))
@@ -1401,16 +1372,11 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
                 [b] + sorted(nbrs)[:2]))
 
     # ---- the living room is not the biggest room in the house -----------
-    # Grounded in our own Indian area bands rather than in ResPlan. In
-    # `spec.ROOM_CATEGORIES` the living room tops out at 280 sqft, above every
-    # other habitable room -- master bedroom 250, bedroom 180, dining 170,
-    # kitchen 150, study 130 -- so a plan where something else is larger has
-    # inverted the hierarchy the brief itself encodes.
-    #
-    # The first version cited "the largest habitable room in 392 of 400 real
-    # plans (98%)", which is a ResPlan measurement. The conclusion survives
-    # the change of source; the citation had to, because ResPlan is documented
-    # as non-Indian and this is an Indian-market rule.
+    # Grounded in our own Indian area bands. In `spec.ROOM_CATEGORIES` the
+    # living room tops out at 280 sqft, above every other habitable room --
+    # master bedroom 250, bedroom 180, dining 170, kitchen 150, study 130 -- so
+    # a plan where something else is larger has inverted the hierarchy the
+    # brief itself encodes.
     hab = [i for i in area if _is_habitable(cat.get(i, ""))]
     if livings and len(hab) > 1:
         biggest = max(hab, key=lambda i: area[i])
@@ -1424,20 +1390,15 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
                 [liv, biggest], area.get(liv, 0.0), area[biggest]))
 
     # ---- circulation that is really unassigned floor --------------------
-    # Two severities, because "wide" and "wrong" are different claims.
+    # Two severities, because "wide" and "wrong" are different claims. A wide
+    # corridor in a large house is not a defect -- width alone as an error
+    # fired on 66 of 100 suite plans and destroyed the signal. The defect
+    # signature is a passage handed MORE floor than the living room: the
+    # surplus was parked in circulation instead of the social space.
     #
-    # A wide corridor in a large house is not a defect, and a first version
-    # that made width alone an error fired on 66 of 100 suite plans -- which
-    # destroys the signal even though every one of them really did have a
-    # too-wide passage. The defect signature is not width, it is a passage
-    # that has been handed MORE floor than the living room: at that point the
-    # surplus was parked in circulation instead of in the social space, which
-    # is the actual complaint.
-    #
-    # `solver.py` does this by construction -- "absorb leftover area as a hall
-    # rather than bloating wet rooms" appends one `passage` room whose target
-    # IS the slack -- so the error case is the solver's own behaviour caught in
-    # the act, and the warn case is the ordinary consequence of it.
+    # `solver.py` does this by construction, appending one `passage` room whose
+    # target IS the slack, so the error case is that behaviour caught in the
+    # act and the warn case is its ordinary consequence.
     liv_area = max((area.get(i, 0.0) for i in livings), default=0.0)
     for r in ctx.rooms:
         if not _is_passage(r) or r.id not in ctx.polys:
@@ -1491,21 +1452,13 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
                 pub[:4], float(clusters), 1.0))
 
     # ---- wet rooms in more groups than one plumbing line can serve -----
-    # `principles.P.WET_GROUPING` has always said "stack and group wet rooms.
-    # Kitchen, bathrooms and utility should share walls or a plumbing line",
-    # and its `enforced_by` named DESIGN.KITCHEN_FAR_FROM_PARKING -- a rule
-    # about parking. So the principle went into the agent's prompt, the
-    # `wet_grouping` field went into the brief, `set_wet_grouping` went into
-    # the command vocabulary, and nothing enforced any of it.
+    # Enforces `principles.P.WET_GROUPING`, whose `enforced_by` used to name a
+    # parking rule -- so the principle was in the agent's prompt, the
+    # `wet_grouping` field was in the brief, `set_wet_grouping` was in the
+    # command vocabulary, and nothing enforced any of it.
     #
-    # Found by the visual review: it reported `wet-rooms-split` on 2 of 6
-    # plans and the engine had no rule id to match it against. That is the one
-    # job a paid, unrepeatable checker can honestly hold -- finding the rules
-    # nobody wrote.
-    #
-    # Two groups is normal and not a defect: one line serving the kitchen and
-    # utility, another serving the bathrooms. Three means the plan is paying
-    # for a third stack.
+    # Two groups is normal: one line serving kitchen and utility, another
+    # serving the bathrooms. Three means the plan pays for a third stack.
     wet = [i for i in area if cat.get(i, "") in _WET_ROOMS]
     if len(wet) > 2:
         groups, seen = 0, set()
@@ -1670,15 +1623,14 @@ def check_standards(ctx: _Ctx) -> list[Finding]:
 
 
 # ----------------------------------------------------------- brief conformance
-# The BRIEF family answers "did we build what was asked for", as distinct from
-# NBC ("is it legal") and DESIGN ("is it a good house"). It exists because these
-# gaps were previously visible only as a suite score: 22 adjacency requests were
-# quietly unmet with nothing in the plan's own findings to say so, which means
-# neither the user nor the repair loop could see them.
+# BRIEF answers "did we build what was asked for", as distinct from NBC ("is it
+# legal") and DESIGN ("is it a good house"). Without it, an unmet request is
+# visible only as a suite score -- 22 adjacency requests were quietly unmet
+# with nothing in the plan's own findings, so neither the user nor the repair
+# loop could see them.
 #
-# Severity follows how the brief said it. An explicit request -- "a balcony off
-# the master bedroom" -- is an error when unmet: the client asked, we did not
-# deliver. A preference the brief merely implied is a warning.
+# Severity follows how the brief said it: an explicit request unmet is an
+# error, a merely implied preference is a warning.
 def check_brief(ctx: _Ctx) -> list[Finding]:
     req = ctx.brief.get("requirements") or {}
     if not req:

@@ -57,8 +57,7 @@ cd vendor/openPlan3D && npx vite dev --port 5199
 | `DOMAIN.md` | domain survey: what to borrow, what to build, space syntax |
 | `SPACES.md` | every space in a home: purpose, position, and the rules that fall out |
 | `RULES.md` | the flat checklist: 100 implemented rules and 62 gaps, one line each |
-| `COUPLING.md` | audit: which of the 100 rules the solver can actually act on |
-| `REVIEW.md` | recall pass: what an eye catches on rendered plans that no rule does |
+| `AUDITS.md` | the open items from four audits: coupling state per rule, and what no rule catches |
 | `FEATURES_AUDIT.md` | OpenPlan3D inventory, read from source |
 | `PROGRESS.md` | chronological log, one line per verified step |
 

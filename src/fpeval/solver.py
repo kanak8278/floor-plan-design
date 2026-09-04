@@ -118,24 +118,11 @@ class LayoutSpec:
     # limits
     max_aspect_hard: float = 4.0
     time_limit_s: float = 8.0
-    # Measured over the ten-case plot matrix (20x30 1BHK .. 50x80 5BHK), mean
-    # absolute area deviation from target and median wall clock:
-    #
-    #     candidates / pool     mean dev   worst    median time
-    #        4 /  24              11.9%     23.6%      0.26 s
-    #       12 /  48              11.2%     25.5%      1.14 s
-    #       24 /  96              10.9%     21.4%      1.68 s
-    #       48 /  96               8.8%     15.9%      1.73 s
-    #       48 / 200              10.4%     25.6%      2.64 s
-    #
-    # The old 4/24 was not saving time worth having -- it used 0.26 s of an
-    # 8 s budget and then returned the best of the first four feasible
-    # topologies it happened to meet. On a 30x40 3BHK asking for a 26 m2
-    # living room it returned 15.8 m2 (30.5% mean deviation) while handing a
-    # bathroom 7.1 m2; at 48/96 the same brief returns 22.8 m2. Deeper is not
-    # monotonically better -- 200 is worse than 96, because the per-candidate
-    # CP-SAT budget is time_limit/candidates and a deeper pool also contains
-    # worse topologies.
+    # 48/96 measured best over the ten-case plot matrix (20x30 1BHK .. 50x80
+    # 5BHK): mean area deviation 8.8% against 11.9% at 4/24 and 10.4% at
+    # 48/200, median 1.73 s of an 8 s budget. Deeper is not monotonically
+    # better -- the per-candidate CP-SAT budget is time_limit/candidates, and a
+    # deeper pool also holds worse topologies.
     candidates: int = 48                      # *feasible* topologies to collect
     max_topologies: int = 96                  # ranked topologies CP-SAT may try
     tree_samples: int = 400                   # topologies scored cheaply first
@@ -654,17 +641,13 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
         dev = m.NewIntVar(0, W * H, f"dev{i}")
         m.Add(dev >= area - tgt)
         m.Add(dev >= tgt - area)
-        # Weighted by the room's own weight, normalised so the total pressure
-        # on area is unchanged. It used to be one flat coefficient for every
-        # room, which made a square metre missing from the living room cost
-        # exactly what a square metre missing from a bathroom costs. Because
-        # the rooms tile a fixed rectangle the signed deviations must sum to a
-        # constant, so a flat L1 objective is nearly degenerate: the solver was
-        # free to take the whole shortfall out of the living room, and did.
-        # Measured on a 30x40 3BHK, asking for a bigger hall got a smaller one
-        # -- ask 14 -> 16.3, ask 18 -> 20.6, ask 22 -> 17.9, ask 26 -> 15.8.
-        # Every one of those solves reported OPTIMAL, because they were: the
-        # objective could not tell those layouts apart.
+        # Weighted by the room's own weight, normalised so total pressure on
+        # area is unchanged. A flat coefficient is nearly degenerate here:
+        # rooms tile a fixed rectangle, so signed deviations sum to a constant
+        # and the solver can take the whole shortfall out of one room. It did
+        # -- on a 30x40 3BHK, asking for a bigger hall got a smaller one (ask
+        # 18 -> 20.6 m2, ask 26 -> 15.8), every solve honestly OPTIMAL because
+        # the objective could not tell those layouts apart.
         ca = int(round(spec.w_area * AREA_SCALE * 100.0
                        * max(r.weight, 0.2) / w_mean))
         if ca:
@@ -763,16 +746,11 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
     """
     CIRC = {"living", "dining", "foyer", "stair", "passage"}
     PRIV = {"bedroom", "master_bedroom", "study"}
-    # A wet room is always a leaf. The service fallback used to accept any
-    # connected host that was not an overloaded bedroom, so a bathroom could
-    # host another bathroom -- one WC opening into another. It also made the
-    # first bath a two-door room, and two door swings in a 3.4 m2 bathroom
-    # leave nowhere for the WC itself: the furnisher rejected it with
-    # "door_swing(106); faces_door(14)" and shipped a bathroom with no fixtures.
-    # `pooja` too: a shrine is not a corridor, and the same two-door problem
-    # left a 1657 x 1617 mm pooja room with no mandir in it. A store or a
-    # utility may still host -- reaching a store through the utility is a real
-    # arrangement, not a fault.
+    # A wet room is always a leaf, and so is `pooja`. Hosting makes the host a
+    # two-door room, and two door swings in a 3.4 m2 bathroom leave nowhere for
+    # the WC -- the furnisher rejects it and ships a bathroom with no fixtures.
+    # A store or utility may still host: reaching a store through the utility
+    # is a real arrangement, not a fault.
     LEAF_ONLY = {"bathroom", "wc", "balcony", "shaft", "pooja"}
 
     adj: dict[int, list[tuple[int, int, str]]] = {i: [] for i in range(n)}
@@ -1444,11 +1422,10 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
                               for v in mm.rects[i]) for i in mm.rects}
             # Required adjacency, window access and circulation contact are
             # properties of the *topology*, not of the cut positions, so
-            # CP-SAT's objective cannot see them. Fold them into the
-            # cross-topology comparison instead, or a topology that solves
-            # tightly but strands a bedroom with no exterior wall will win.
-            # The order of these three is a design decision, so it is stated
-            # rather than left to whatever the constants happened to be:
+            # CP-SAT's objective cannot see them. They belong in the
+            # cross-topology comparison, or a topology that solves tightly but
+            # strands a bedroom with no exterior wall wins. The order is a
+            # design decision, so it is stated rather than implied:
             #
             #   1. a habitable room with no exterior wall     2e7
             #   2. a required adjacency the client asked for  1e7
@@ -1457,10 +1434,7 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             # (1) outranks (2) because it is law, not preference: a bedroom
             # with no window fails NBC 2016 Part 3 Cl 8.2.5 and cannot be
             # built, whereas a kitchen that does not touch the living room is a
-            # brief miss the client can be asked about. It used to sit at 1e6,
-            # bottom of the three, and every single ventilation error in the
-            # suite -- 43 of 43 -- was a habitable room with no exterior edge
-            # rather than an undersized window.
+            # brief miss the client can be asked about.
             got = _adjacent_ids(rects, reqs)
             pen = 2e7 * sum(1 for i, r in enumerate(reqs)
                             if _interior_cell(rects[i], rect_mm)
@@ -1478,21 +1452,19 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             # it if nothing outranks it. Priced in the KEY rather than
             # rejected, so it can never cost us a plan.
             pen += 4e6 * _sole_bath_private(doors, reqs, ent)
-            # 8e5: below every item above it, deliberately. An en-suite the
-            # brief asked for and did not get is a stated client requirement
-            # missed, so it belongs in the key -- the door tiers can only
-            # connect what the tiling made adjacent, and no amount of door
-            # logic rescues a topology that put every bathroom away from the
-            # master. But it ranks under the interior-wet-room term because it
-            # is a preference, and because the Indian ground truth is largely
-            # silent on it: 127 of the 148 bedroom-bearing examples in `suite/`
-            # say nothing about `attached_bath`. Weighting it like law would
-            # distort layouts for a norm this market does not strongly hold.
-            # 3e6: NBC.VENTILATION_HABITABLE is an error and the top defect
-            # in the suite, so it belongs above the interior-wet-room term.
-            # Under circulation isolation, though: a short facade can also be
-            # answered by making the room smaller, whereas a room with no door
-            # to circulation has no answer but a different layout.
+            # 8e5, below everything above it. An unmet en-suite belongs in
+            # the key -- door tiers can only connect what the tiling made
+            # adjacent, and no door logic rescues a topology that put every
+            # bathroom away from the master -- but it is a preference, and the
+            # Indian ground truth is largely silent: 127 of the 148
+            # bedroom-bearing examples in `suite/` say nothing about
+            # `attached_bath`. Weighting it like law would distort layouts for
+            # a norm this market does not strongly hold.
+            # 3e6: NBC.VENTILATION_HABITABLE is an error and the top suite
+            # defect, so above the interior-wet-room term -- but under
+            # circulation isolation, because a short facade can also be
+            # answered by shrinking the room, whereas no door to circulation
+            # has no answer but a different layout.
             pen += 3e6 * sum(1 for i, r in enumerate(reqs)
                              if _glazing_deficit_m2(rects[i], rect_mm,
                                                     r.category) > 0.05)

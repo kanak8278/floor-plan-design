@@ -1,50 +1,40 @@
-"""The topology domain model: zones, bathroom kinds, and a weighted adjacency
-preference matrix per scenario.
+"""Zones, bathroom kinds, and a weighted adjacency preference matrix per scenario.
 
 Built because the solver had no relational vocabulary at all. Measured against
-400 real ResPlan plans versus 90 of ours:
-
-    metric                         real      ours
-    living is the core            97.0%      3.3%
-    public_score (median)        +1.426    -0.460
-    living_relative (median)       2.53      1.01
-    privacy_gradient (median)      0.39      1.02
-
-Ours have no spatial hierarchy whatsoever. Those real-plan figures are the
-targets in `SYNTAX_TARGETS` below.
+400 real ResPlan plans versus 90 of ours -- living is the core in 97.0% of real
+plans and 3.3% of ours; median public_score +1.426 against -0.460. Ours had no
+spatial hierarchy whatsoever. Those figures are the targets in `SYNTAX_TARGETS`.
 
 **What ResPlan can and cannot settle.** It is South Asian, so the region is
 right, but it labels only six room types -- living, kitchen, bedroom, bathroom,
 balcony, storage (`resplan.py:52`) -- and it is unit-level and single-floor,
 median 110 m². So it settles the *skeleton*: is the living room the core, does
 privacy grade with depth. It settles nothing about pooja, sitout, utility,
-store, foyer, servant, parking or the compound, which is to say nothing about
+store, foyer, servant, parking or the compound -- which is to say nothing about
 the part of this file that is Indian rather than generic. Those preferences come
-from Indian plot-housing practice and from the Bengaluru builder plans behind
-`typology.py`, and the numbers in `SYNTAX_TARGETS` do not validate them. Do not
-reach for a ResPlan figure to justify a rule about a room ResPlan cannot see.
+from Indian plot-housing practice and the Bengaluru builder plans behind
+`typology.py`. Do not reach for a ResPlan figure to justify a rule about a room
+ResPlan cannot see.
 
 Three design choices worth stating:
 
-* **Weighted preferences, not binary pairs.** The layout-optimisation literature
-  converges on an adjacency *preference matrix*; our solver took a list of
-  required pairs at a flat penalty, which cannot express "mildly discouraged".
-  One signed weight covers required / preferred / neutral / discouraged /
-  forbidden.
+* **Weighted preferences, not binary pairs.** One signed weight covers
+  required / preferred / neutral / discouraged / forbidden. A list of required
+  pairs at a flat penalty cannot express "mildly discouraged".
 * **Scenario = typology x size band.** A 20x30 2BHK cannot have a separate
-  dining room and a 50x80 villa must. The same rule table for both is wrong in
-  one direction or the other.
-* **Indian-centric by construction, not by calibration.** The prohibitions here
-  are the ones Indian practice actually holds -- a WC off the kitchen, a shrine
-  sharing a wall with a toilet or sitting under the stair, a toilet off the
-  dining, a bedroom door into the kitchen -- and the typologies are the ones
-  that exist on Indian plots, including rental floors and the joint-family house
-  with two kitchens on one floor. Where a rule has no measured backing, it says
-  so in its `why` rather than borrowing a foreign number.
+  dining room and a 50x80 villa must. One table for both is wrong in one
+  direction or the other.
+* **Indian-centric by construction, not by calibration.** The prohibitions are
+  the ones Indian practice holds -- a WC off the kitchen, a shrine sharing a
+  wall with a toilet or sitting under the stair, a toilet off the dining, a
+  bedroom door into the kitchen -- and the typologies are the ones that exist
+  on Indian plots, including rental floors and the joint-family house with two
+  kitchens on one floor. Where a rule has no measured backing its `why` says
+  so rather than borrowing a foreign number.
 
 Stilt parking is deliberately absent from the scenarios: it is an area and
-height question, and `bylaws.py` already carries it as `stilt+3` / `stilt+4`
-with `max_habitable_floors` excluding the stilt. Nothing topological changes.
+height question, and `bylaws.py` carries it as `stilt+3` / `stilt+4` with
+`max_habitable_floors` excluding the stilt. Nothing topological changes.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field

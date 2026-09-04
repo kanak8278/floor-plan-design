@@ -259,9 +259,17 @@ def apply_furniture_ops(plan: Plan, ops: list[Any]) -> ApplyResult:
 # Mirrors OpenPlan3D's project.ts. Every mutation is expressed symbolically by
 # the agent -- a compass direction and a distance, a normalised position along a
 # wall -- and turned into millimetres here, so the coordinate ban holds.
+# Both spellings, because three modules disagreed and the disagreement made
+# `move_wall_parallel` unreachable: `llm.py` validates `direction` against
+# `COMPASS_MOVE` ("north"), this applier upper-cased it to "NORTH" and found
+# nothing, so the long form passed validation and was rejected here while the
+# short form was rejected by validation. No spelling worked end to end.
 _DIR_VEC = {"N": (0, 1), "S": (0, -1), "E": (1, 0), "W": (-1, 0),
             "NE": (0.7071, 0.7071), "NW": (-0.7071, 0.7071),
-            "SE": (0.7071, -0.7071), "SW": (-0.7071, -0.7071)}
+            "SE": (0.7071, -0.7071), "SW": (-0.7071, -0.7071),
+            "NORTH": (0, 1), "SOUTH": (0, -1), "EAST": (1, 0), "WEST": (-1, 0),
+            "NORTH_EAST": (0.7071, 0.7071), "NORTH_WEST": (-0.7071, 0.7071),
+            "SOUTH_EAST": (0.7071, -0.7071), "SOUTH_WEST": (-0.7071, -0.7071)}
 # Defaults from the fork's own door/window palette.
 _DOOR_W = {"single": 900, "double": 1500, "sliding": 1800, "french": 1500,
            "pocket": 900, "bifold": 1800, "opening": 1000, "garage": 2400}

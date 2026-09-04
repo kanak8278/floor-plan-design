@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from fpeval.bylaws import BENGALURU
 from fpeval.envelope import compute_envelope, CityProfileAdapter, RoomReq
@@ -57,6 +57,15 @@ class RoomReqIn(BaseModel):
     is_entrance: bool = False
 
 
+# Long form to letter. "north_east" must not fold to "N" by taking the first
+# character, which is why this is a table and not a slice.
+_COMPASS_LETTER = {"north": "N", "south": "S", "east": "E", "west": "W",
+                   "north_east": "NE", "north_west": "NW",
+                   "south_east": "SE", "south_west": "SW",
+                   "northeast": "NE", "northwest": "NW",
+                   "southeast": "SE", "southwest": "SW"}
+
+
 class GenerateIn(BaseModel):
     width_ft: float
     depth_ft: float
@@ -64,6 +73,21 @@ class GenerateIn(BaseModel):
     road_facing: str = "N"
     north_deg: float | None = None
     entrance_room: str | None = None
+
+    @field_validator("road_facing")
+    @classmethod
+    def _compass_letter(cls, v: str) -> str:
+        """Accept "east" as well as "E".
+
+        Briefs, suite ground truth and `spec.py` all spell this out in full, so
+        an integrator using the spelling every other layer uses got a 500 with
+        a stack trace from `compute_envelope` rather than a 422.
+        """
+        v = (v or "N").strip().lower().replace("-", "_").replace(" ", "_")
+        letter = _COMPASS_LETTER.get(v, v.upper())
+        if letter not in ("N", "S", "E", "W", "NE", "NW", "SE", "SW"):
+            raise ValueError(f"road_facing must be a compass point, got {v!r}")
+        return letter
     time_limit_s: float = 12.0
     storey_height: int = 3000
     render: bool = True
