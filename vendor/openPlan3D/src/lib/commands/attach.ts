@@ -14,8 +14,8 @@
  */
 import { get } from 'svelte/store';
 import {
-  attach, setTransport, reset, busState,
-  type Command, type SyncReply, type DesignEvent,
+  attach, setTransport, reset, busState, findings,
+  type Command, type SyncReply, type DesignEvent, type Finding,
 } from '$lib/commands/bus';
 import { currentProject } from '$lib/stores/project';
 import type { Project } from '$lib/models/types';
@@ -62,6 +62,9 @@ export async function attachDocument(project: Project): Promise<AttachResult> {
       // The service sends a projection only when something was refused, i.e.
       // when the optimistic state and the document can have parted company.
       if (reply.projection) adoptProjection(reply.projection);
+      // Findings ride along on every reply: a mouse edit can break the plan,
+      // so the panel must not depend on an agent turn to learn about it.
+      if (reply.findings) findings.set(reply.findings as Finding[]);
       return {
         seq: reply.seq,
         hash: reply.hash,
@@ -75,6 +78,7 @@ export async function attachDocument(project: Project): Promise<AttachResult> {
     attach(designId, body.seq ?? 0, body.hash ?? '',
            (body.events ?? []) as DesignEvent[]);
     if (body.reattached && body.projection) adoptProjection(body.projection);
+    if (body.findings) findings.set(body.findings as Finding[]);
     return { ok: true, designId, rooms: body.rooms };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);

@@ -28,6 +28,7 @@
    * overrides in `app.css` carry the panel into dark mode unchanged.
    */
   import { eventLog, busState, markEventsSeen, ingestServerUpdate,
+           findings as docFindings,
            type DesignEvent } from '$lib/commands/bus';
   import { adoptProjection } from '$lib/commands/attach';
   import { currentProject } from '$lib/stores/project';
@@ -278,6 +279,12 @@
     }
   }
 
+  let showDocFindings = $state(false);
+  // The live document's findings, as distinct from a turn's. A hand edit
+  // changes these and produces no turn at all.
+  const liveErrors = $derived($docFindings.filter((f) => f.severity === 'error'));
+  const liveWarns = $derived($docFindings.filter((f) => f.severity === 'warn'));
+
   let findingsOpen = $state<Set<string>>(new Set());
 
   function toggleFindings(id: string) {
@@ -308,12 +315,42 @@
       {:else if bus.status === 'syncing'}syncing{bus.pending.length ? ` · ${bus.pending.length} queued` : ''}
       {:else}{bus.error ?? 'error'}{/if}
     </span>
+    {#if liveErrors.length || liveWarns.length}
+      <button
+        type="button"
+        class="ml-auto shrink-0 px-1.5 rounded text-[11px] font-medium"
+        class:bg-rose-50={liveErrors.length}
+        class:text-rose-700={liveErrors.length}
+        class:text-gray-500={!liveErrors.length}
+        title={$docFindings.map((f) => `${f.severity}: ${f.detail}`).join('\n')}
+        onclick={() => (showDocFindings = !showDocFindings)}
+      >
+        {liveErrors.length ? `${liveErrors.length} error${liveErrors.length > 1 ? 's' : ''}` : ''}
+        {liveErrors.length && liveWarns.length ? ' · ' : ''}
+        {liveWarns.length ? `${liveWarns.length} warning${liveWarns.length > 1 ? 's' : ''}` : ''}
+      </button>
+    {/if}
     {#if bus.hash}
-      <span class="ml-auto font-mono text-gray-400 shrink-0" title="document hash">
+      <span class="font-mono text-gray-400 shrink-0" class:ml-auto={!liveErrors.length && !liveWarns.length} title="document hash">
         {bus.hash.slice(0, 8)}
       </span>
     {/if}
   </div>
+
+  <!-- The document's own findings, expanded from the strip. Above the feed
+       because they are the state of the plan right now, not a past event. -->
+  {#if showDocFindings && $docFindings.length}
+    <div class="px-3 py-2 border-b border-gray-100 shrink-0 max-h-48 overflow-y-auto">
+      {#each [...liveErrors, ...liveWarns] as f}
+        <div class="text-xs leading-snug mt-[3px]"
+             class:text-rose-700={f.severity === 'error'}
+             class:text-amber-700={f.severity !== 'error'}>
+          {f.detail}
+          <span class="font-mono text-[10px] opacity-60">{f.rule_id}</span>
+        </div>
+      {/each}
+    </div>
+  {/if}
 
   <div bind:this={feedEl} class="flex-1 overflow-y-auto px-3 py-3">
     {#if !ownEvents.length && !turns.length}

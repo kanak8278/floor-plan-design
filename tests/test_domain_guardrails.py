@@ -966,3 +966,77 @@ def test_findings_reach_the_client_as_sentences():
         assert not f["detail"].startswith("<"), f["detail"]
         assert f["detail"] != f["rule_id"]
     assert any(f["severity"] in ("error", "warn") for f in out)
+
+
+# ------------------------------------------------- dragging a wall end
+# `move_wall_parallel` and `move_wall_by` were made graph-aware after a probe
+# caught them tearing the wall graph. `move_wall_endpoint` -- the handler a
+# MOUSE emits -- kept the raw two-line version that moves one endpoint and
+# nothing else, so the corner opens, the ring stops being a closed face, and
+# `rederive_rooms` loses every room's identity while the command reports
+# success.
+#
+# Found by validating a real editing session: 24 endpoint drags left a 2BHK
+# whose master bedroom and en-suite formed an island with no door to the rest
+# of the house. The doors were still there; the faces they had been placed
+# between were not.
+
+def _closed_box(w: int = 6000, h: int = 4000):
+    from fpeval.ir import Plan, Wall, P, Site
+    from fpeval.faces import rederive_rooms
+    walls = [Wall(id="w0", start=P(0, 0), end=P(w, 0), thickness=230, height=3000),
+             Wall(id="w1", start=P(w, 0), end=P(w, h), thickness=230, height=3000),
+             Wall(id="w2", start=P(w, h), end=P(0, h), thickness=230, height=3000),
+             Wall(id="w3", start=P(0, h), end=P(0, 0), thickness=230, height=3000)]
+    plan = Plan(id="g", walls=walls, site=Site())
+    rooms, _lost, _new = rederive_rooms(plan)
+    plan.rooms = rooms
+    assert len(plan.rooms) == 1
+    return plan
+
+
+def test_dragging_a_wall_end_keeps_the_corner_closed():
+    from fpeval.ir import Design
+    from fpeval.document import Document
+    from fpeval.commands import Command
+
+    plan = _closed_box()
+    design = Design(id="g", storeys=[plan], active_storey_id="g")
+    doc = Document(design=design, base=design)
+    res = doc.apply(Command(op="move_wall_endpoint",
+                            params={"wall_id": "w0", "endpoint": "end",
+                                    "position": {"x": 7000, "y": 0}},
+                            source="user"))
+    assert res.ok, res.errors
+    after = doc.design.active
+    assert not res.rooms_gone, (
+        f"the drag destroyed {res.rooms_gone}; the corner opened")
+    assert len(after.rooms) == 1, (
+        f"{len(after.rooms)} faces after the drag; the ring is not closed")
+    # The neighbour that shared the old vertex came along.
+    w1 = next(w for w in after.walls if w.id == "w1")
+    assert (w1.start.x, w1.start.y) == (7000, 0), (
+        f"w1 still starts at {(w1.start.x, w1.start.y)}, so the corner is open")
+
+
+def test_a_drag_does_not_move_a_wall_that_merely_ends_nearby():
+    """The tolerance is 2 mm on purpose: loose enough for coordinates that
+    have been through a cm round trip, tight enough not to capture a wall that
+    genuinely ends somewhere else."""
+    from fpeval.ir import Design, Wall, P
+    from fpeval.document import Document
+    from fpeval.commands import Command
+
+    plan = _closed_box()
+    stray = Wall(id="w9", start=P(6000, 500), end=P(5000, 500),
+                 thickness=230, height=3000)
+    plan.walls.append(stray)
+    design = Design(id="g", storeys=[plan], active_storey_id="g")
+    doc = Document(design=design, base=design)
+    res = doc.apply(Command(op="move_wall_endpoint",
+                            params={"wall_id": "w0", "endpoint": "end",
+                                    "position": {"x": 7000, "y": 0}},
+                            source="user"))
+    assert res.ok, res.errors
+    w9 = next(w for w in doc.design.active.walls if w.id == "w9")
+    assert (w9.start.x, w9.start.y) == (6000, 500), "an unrelated wall moved"

@@ -68,7 +68,13 @@ _WC_RE = re.compile(r"\bwc\b|water closet|toilet", re.I)
 # with its own minima, and a pooja room is `klass="habitable"` in the taxonomy,
 # which is a different question from NBC's.
 HABITABLE = {"living", "bedroom", "dining", "study", "servant"}
-NON_HABITABLE = {"balcony", "storage"}
+# `storage` is not a taxonomy key -- the room type is `store` -- so this set
+# matched balconies and nothing else, and the softening its own use site
+# describes ("balconies and stores are routinely entered through a sliding
+# unit the source data labels a window, so they only ever warn") never applied
+# to a store. Both spellings, and read through `_is_soft_entry` so subtypes
+# count.
+NON_HABITABLE = {"balcony", "store", "storage"}
 
 
 def _is_habitable(category: str) -> bool:
@@ -81,7 +87,25 @@ def _is_habitable(category: str) -> bool:
     """
     from . import roomtypes as rt
     return any(k in HABITABLE for k in rt.counts_as(category))
-PRIVATE = {"bedroom", "bathroom"}       # must have a real door, never an arch
+# Must have a real door, never an arch. Base categories only -- test with
+# `_is_private`, because a flat `category in PRIVATE` misses `master_bedroom`,
+# `guest_bedroom`, `toilet` and `wc`. That exempted the MASTER bedroom from the
+# privacy rule written for bedrooms: a sealed-off master with its own en-suite
+# reported `warn`, so a plan whose main bedroom cannot be entered at all read
+# as advisory. Same shape as the `_is_habitable` bug above, in a second table.
+PRIVATE = {"bedroom", "bathroom"}
+
+
+def _is_private(category: str) -> bool:
+    from . import roomtypes as rt
+    return any(k in PRIVATE for k in rt.counts_as(category))
+
+
+def _is_soft_entry(category: str) -> bool:
+    """A room the corpus routinely enters through something not modelled as a
+    door, so an absent door is a warning rather than a defect."""
+    from . import roomtypes as rt
+    return any(k in NON_HABITABLE for k in rt.counts_as(category))
 # Shared boundary above which a doorless room is read as an open threshold
 # (open-plan kitchen, dining split, entry arch) instead of an isolated room.
 # 1200 mm is the narrowest arch that gets built: a door leaf is 900 mm, so a
@@ -538,6 +562,20 @@ def _check_reachability(ctx: _Ctx) -> list[Finding]:
         has_door.add(b)
 
     cats = {r.id: r.category for r in ctx.rooms}
+    # A room can carry a door and still be sealed off, if that door leads only
+    # to another room in the same cut-off component. A master bedroom whose one
+    # door opens into its own en-suite, with the pair walled away from the
+    # hall, is the case that shipped: both rooms were in `has_door`, both were
+    # walkable across some threshold, so both reported `warn` and a plan you
+    # cannot enter the main bedroom of read as advisory.
+    island = {rid for rid in ctx.polys
+              if rid not in door_seen and rid in has_door}
+    # Whether WE drew this plan. `_open_threshold_edges` treats a wide doorless
+    # boundary as "probably a door nobody recorded", which is right for
+    # ResPlan and for a hand-drawn Project and wrong for solver output, where
+    # every opening is one we chose to place. Provenance is the only thing that
+    # distinguishes the two, and it is already on the Plan.
+    authored_here = (ctx.plan.provenance or {}).get("source") == "cpsat-solver"
     names = {r.id: r.name for r in ctx.rooms}
     for rid in ctx.polys:
         if rid in door_seen:
@@ -547,14 +585,32 @@ def _check_reachability(ctx: _Ctx) -> list[Finding]:
         if rid not in open_seen:
             # Balconies and stores are routinely entered through a sliding unit
             # the source data labels a window, so they only ever warn.
-            soft = cats.get(rid) in NON_HABITABLE
+            soft = _is_soft_entry(cats.get(rid) or "")
             sev = "warn" if soft else "error"
             wt = 0.6 if soft else 1.0
             why = "landlocked: no door and no open threshold"
-        elif cats.get(rid) in PRIVATE and rid not in has_door:
+        elif _is_private(cats.get(rid) or "") and rid not in has_door:
             # Privacy is not negotiable: a bedroom or bathroom needs a real
             # door, so a doorless one stays an error even when it is walkable.
             sev, wt, why = "error", 1.0, "a bedroom/bathroom must have a door"
+        elif _is_private(cats.get(rid) or "") and authored_here:
+            # It HAS a door, and still no route from the entrance through
+            # doors. On imported data that is usually an unmodelled opening --
+            # erroring on it took this rule to a 10.3% plan-level false
+            # positive rate on ResPlan, which is why the tier below exists.
+            #
+            # On our OWN output the premise does not hold. We placed every
+            # opening in this plan, so a missing door is not a gap in the
+            # record, it is a room you cannot walk into. The master bedroom of
+            # a solved 2BHK reported `warn` on exactly this path: its one door
+            # opened into its own en-suite and the pair was sealed off from the
+            # hall, so `rid in has_door` was true and the plan shipped.
+            sev, wt = "error", 1.0
+            why = ("its only door(s) lead into the same cut-off group, so "
+                   "there is no way in from the entrance"
+                   if rid in island else
+                   "no door on the route from the entrance, and this plan's "
+                   "openings are all deliberate")
         else:
             sev, wt = "warn", 0.6
             why = (f"reached only across a {widest:.0f} mm open threshold "

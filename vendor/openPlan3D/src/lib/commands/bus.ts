@@ -111,6 +111,22 @@ export const busState = writable<BusState>({
  */
 export const eventLog = writable<DesignEvent[]>([]);
 
+/** What the rules engine says about the document as it stands now.
+ *
+ *  Findings describe the CURRENT document, not a turn, which is why they live
+ *  here and not in the chat panel: a mouse drag can break a plan just as an
+ *  agent edit can. The service returns them on every command reply and this
+ *  store used not to exist, so all of them were dropped -- 81 hand edits that
+ *  sealed a master bedroom off from the rest of the house reported nothing. */
+export interface Finding {
+  rule_id: string;
+  severity: 'error' | 'warn' | 'info';
+  detail: string;
+  element_ids?: string[];
+}
+
+export const findings = writable<Finding[]>([]);
+
 /** Events the user has not seen in the chat yet, for the unread dot. */
 export const unseenEvents = writable<number>(0);
 
@@ -330,7 +346,11 @@ export function ingestServerUpdate(update: {
   hash: string;
   events?: DesignEvent[];
   projection?: unknown;
+  findings?: Finding[];
 }): void {
+  // `undefined` means "this reply carried none", which is not the same as
+  // "the document is clean" -- only replace when the server actually spoke.
+  if (update.findings) findings.set(update.findings);
   if (update.events?.length) {
     const incoming = update.events.map((e) => ({ ...e, pending: false }));
     eventLog.update((log) => {

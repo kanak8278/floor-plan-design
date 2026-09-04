@@ -273,10 +273,51 @@ def _h_add_wall_between(d: Design, st: Plan, p: dict, _payload) -> None:
     ))
 
 
+# Two endpoints count as the same junction within this. The IR is integer
+# millimetres and a solve emits shared corners exactly, so this is really only
+# slack for coordinates that have already been through a drag or a cm round
+# trip. Kept tight on purpose: a loose tolerance drags a genuinely separate
+# wall that happens to end nearby.
+VERTEX_TOL_MM = 2
+
+
 def _h_move_wall_endpoint(d: Design, st: Plan, p: dict, _payload) -> None:
+    """Drag one wall end, taking the junction it sits in with it.
+
+    Moving the endpoint alone opens the corner. The ring stops being a closed
+    face, `rederive_rooms` finds different faces or none, and every room on the
+    storey loses its identity, name and category -- while the command reports
+    success. `_move_wall` below carries the same lesson and was fixed;
+    `move_wall_parallel` and `move_wall_by` route through the graph-aware
+    `apply_ops.drag_attached`. This handler, which is the one a MOUSE emits,
+    kept the raw two-line version.
+
+    Found by validating a real session: 24 endpoint drags left a 2BHK whose
+    master bedroom and en-suite formed an island with no door to the rest of
+    the house -- the corners had opened, the faces were re-derived, and the
+    doors no longer joined the rooms they were placed between.
+
+    Only exact-vertex coincidence is followed, not T-junctions mid-span.
+    Stretching a wall whose middle carries another wall's end is a different
+    operation with a different right answer, and guessing at it here would
+    move geometry the user did not touch.
+    """
     w = _wall(st, p["wall_id"])
     point = _pt(p["position"])
-    if p["endpoint"] == "start":
+    which = p["endpoint"]
+    old = w.start if which == "start" else w.end
+
+    def same(q) -> bool:
+        return abs(q.x - old.x) <= VERTEX_TOL_MM and abs(q.y - old.y) <= VERTEX_TOL_MM
+
+    for o in st.walls:
+        if o is w:
+            continue
+        if same(o.start):
+            o.start = point
+        if same(o.end):
+            o.end = point
+    if which == "start":
         w.start = point
     else:
         w.end = point
