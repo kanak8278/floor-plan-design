@@ -46,6 +46,10 @@ VASTU_SCALE = 50                  # applied to (x0+x1), i.e. 2x centroid
 DOOR_W = 900                      # interior door leaf, mm
 FRONT_DOOR_W = 1050
 BATH_DOOR_W = 750
+# Outdoor rooms that are tiled with the plan (a balcony is a room in the
+# tiling; a lawn is a site element). Each one must reach the perimeter.
+OUTDOOR_ROOMS = ("balcony", "sitout", "patio", "terrace")
+
 JAMB = 100                        # clear either side of an opening in its wall
 WIN_SILL, WIN_HEAD = 900, 2100
 DOOR_HEAD = 2100
@@ -439,7 +443,14 @@ def _score_nominal(rects, reqs: Sequence[RoomReq], targets: Sequence[float],
         if not (x0 <= X0 + 1 or x1 >= X1 - 1 or y0 <= Y0 + 1 or y1 >= Y1 - 1):
             # No exterior edge means no window. For a habitable room that is an
             # NBC ventilation failure, not a preference, so it is priced high.
+            # A balcony, sitout or patio with no edge on the perimeter is not
+            # a balcony at all -- it is an internal void with nothing to open
+            # onto, which is what DESIGN.BALCONY_ENCLOSED says. Priced with
+            # the habitable rooms, not below the wet ones, because unlike a
+            # windowless bathroom (which an exhaust fan can rescue) there is
+            # no version of an interior balcony that works.
             pen += (6000.0 if r.category in HABITABLE
+                    else 6000.0 if r.category in OUTDOOR_ROOMS
                     else 1500.0 if r.category in WET else 0.0)
         z = r.zone()
         if z and spec.w_vastu > 0:
@@ -1334,7 +1345,8 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             got = _adjacent_ids(rects, reqs)
             pen = 2e7 * sum(1 for i, r in enumerate(reqs)
                             if _interior_cell(rects[i], rect_mm)
-                            and r.category in HABITABLE)
+                            and (r.category in HABITABLE
+                                 or r.category in OUTDOOR_ROOMS))
             pen += 1e7 * sum(1 for pr in spec.required_adjacency
                              if frozenset(pr) not in got)
             pen += 1e6 * sum(1 for i, r in enumerate(reqs)
