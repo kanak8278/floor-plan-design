@@ -465,13 +465,38 @@ def north_deg_for(road_facing: str, north_deg: float | None = None) -> float:
     return (ROAD_BEARING[rf] + 180.0) % 360.0
 
 
+# The centre, spelled both ways the codebase spells it. `spec.ZONES` says
+# "centre", `apply._zone` normalises to "C", and neither is a bearing.
+CENTRE_ZONES = frozenset({"centre", "center", "C"})
+
+
 def zone_vector(zone: str, north_deg: float) -> tuple[float, float]:
     """Unit vector in plan coordinates pointing at a compass zone.
 
     With north_deg = bearing of +Y, a bearing b sits at clockwise angle
     (b - north_deg) from +Y, i.e. (sin, cos) of that angle.
+
+    The centre returns the zero vector, and an unknown zone does too rather
+    than raising. `VASTU_BEARING` holds the eight compass points; the centre
+    -- the Brahmasthan -- is the middle of the plan and has no bearing at all,
+    so there is no direction to point. `spec.ZONES` has always listed "centre"
+    as valid and `suite.py` has always accepted it, and this function raised
+    `KeyError` on it, which killed the whole solve. The first ever track B run
+    hit it on four of its first ten examples, `base-01` among them: extraction
+    read "pooja in the centre" correctly, and the solver crashed.
+
+    Zero means "no directional pull", which is the honest answer for a room
+    that wants the middle: the Vastu term stops pushing it toward any edge. It
+    does not actively pull it inward -- that would need a distance-to-centre
+    term rather than a direction -- and `VastuConfig.brahmasthan_open` says we
+    would rather keep the middle open anyway.
     """
-    theta = math.radians(VASTU_BEARING[zone] - north_deg)
+    if zone in CENTRE_ZONES:
+        return (0.0, 0.0)
+    bearing = VASTU_BEARING.get(zone)
+    if bearing is None:
+        return (0.0, 0.0)
+    theta = math.radians(bearing - north_deg)
     return (math.sin(theta), math.cos(theta))
 
 

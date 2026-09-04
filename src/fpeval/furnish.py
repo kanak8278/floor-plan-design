@@ -599,12 +599,22 @@ def zone_score(bearing: float, prefer: Sequence[str], avoid: Sequence[str]) -> f
     Continuous rather than in/out because a hob 20 deg off SE is not a failure
     and a hard test would drop the hob in most real kitchens.
     """
+    # A zone with no bearing -- the centre, or anything unrecognised -- is
+    # skipped rather than looked up. `VASTU_BEARING` holds the eight compass
+    # points only, and indexing it directly raised `KeyError: 'centre'` in
+    # `zone_vector`; the same two lookups here had the same hole. A furniture
+    # rule that prefers "the centre" has no direction to prefer, so it should
+    # express no preference, not crash the furnisher.
+    bearings = lambda zs: [b for b in (VASTU_BEARING.get(z) for z in zs)
+                           if b is not None]
     s = 0.5
-    if prefer:
-        best = min(_ang_gap(bearing, VASTU_BEARING[z]) for z in prefer)
+    pref_b = bearings(prefer or ())
+    if pref_b:
+        best = min(_ang_gap(bearing, b) for b in pref_b)
         s = max(0.0, 1.0 - best / 90.0)
-    if avoid:
-        near = min(_ang_gap(bearing, VASTU_BEARING[z]) for z in avoid)
+    avoid_b = bearings(avoid or ())
+    if avoid_b:
+        near = min(_ang_gap(bearing, b) for b in avoid_b)
         s *= max(0.0, min(1.0, near / 90.0))
     return s
 

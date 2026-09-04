@@ -628,3 +628,49 @@ def test_a_door_that_fits_is_still_allowed():
     o = min(st.openings, key=lambda x: x.width)
     res = doc.apply(agent("update_opening", opening_id=o.id, width_mm=o.width))
     assert res.ok, res.errors
+
+
+def test_the_centre_zone_does_not_crash_the_solver():
+    """`spec.ZONES` lists "centre" and `suite.py` validates it, and
+    `envelope.zone_vector` raised `KeyError` on it, killing the solve.
+
+    Found by the first ever track B run: 4 of its first 10 examples came back
+    `not_run` with `KeyError: 'centre'`, `base-01` -- the simplest example in
+    the suite -- among them. Extraction had read "pooja in the centre"
+    correctly; the solver could not represent it.
+
+    Asserted as a property over the whole zone vocabulary, because the same
+    hole existed in two more places in `furnish.py` and a test naming only
+    "centre" would not have found those.
+    """
+    from fpeval.envelope import zone_vector, VASTU_BEARING
+    from fpeval.spec import ZONES
+    for z in ZONES:
+        vx, vy = zone_vector(z, 0.0)          # must not raise
+        assert isinstance(vx, float) and isinstance(vy, float)
+    # every zone the spec accepts either has a bearing or is the centre
+    from fpeval.envelope import CENTRE_ZONES
+    for z in ZONES:
+        assert z in VASTU_BEARING or z in CENTRE_ZONES, (
+            f"{z!r} is a valid spec zone with no bearing and no centre "
+            "handling, so anything indexing VASTU_BEARING will raise on it")
+    # and the applier's spelling of the centre is handled too
+    assert zone_vector("C", 0.0) == (0.0, 0.0)
+
+
+def test_a_centre_zone_room_solves_end_to_end():
+    from fpeval.spec import default_indian_spec
+    from fpeval.bridge import spec_to_programme
+    from fpeval.envelope import compute_envelope, CityProfileAdapter
+    from fpeval.solver import solve_layout, LayoutSpec
+    from fpeval.bylaws import BENGALURU as _B
+    sp = default_indian_spec()
+    sp.rooms[0].preferred_zone = "centre"
+    prog, _ = spec_to_programme(sp)
+    P = CityProfileAdapter(_B)
+    compute_envelope(30, 40, road_facing="E", profile=P, programme=prog)
+    res = solve_layout(30, 40,
+                       LayoutSpec(programme=prog, entrance_room=prog[0].id,
+                                  time_limit_s=8.0),
+                       road_facing="E", profile=P, plan_id="centre")
+    assert res.plan is not None, res.status
