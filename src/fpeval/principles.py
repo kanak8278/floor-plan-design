@@ -122,7 +122,7 @@ PRINCIPLES: tuple[Principle, ...] = (
         ("TOPO.ATTACHED_BATH_SHORTFALL", "TOPO.BATH_OVERSHARED",
          "TOPO.NO_COMMON_BATH", "TOPO.BATH_UNREACHABLE",
          "DESIGN.SOLE_BATH_VIA_BEDROOM", "DESIGN.NO_ENSUITE_MASTER",
-         "DESIGN.BATH_BEHIND_SERVICE", "DESIGN.BEDROOM_FAR_FROM_BATH")),
+         "DESIGN.BATH_BEHIND_SERVICE")),
     Principle(
         "P.NO_WC_ONTO_FOOD",
         "A toilet must never open into a kitchen, and must not open onto or be "

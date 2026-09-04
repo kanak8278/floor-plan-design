@@ -418,10 +418,14 @@ def test_a_master_with_no_ensuite_is_an_error_when_the_brief_asked():
              (4000, 2000, "door", 900),      # Living  -> Master
              (2000, 5000, "door", 900)]      # Passage -> Bathroom
 
+    # Silent brief: no finding at all. There is no Indian source for how often
+    # a master bedroom has an en-suite -- `suite/` is silent in 86% of its
+    # bedroom-bearing examples -- and the 72% figure this once cited came from
+    # ResPlan, which `brief.py` documents as non-Indian.
     quiet = sense(rects, doors)
-    assert quiet["DESIGN.NO_ENSUITE_MASTER"].severity == "warn", (
-        "with no stated requirement this is advice, not a defect: 72% of real "
-        "plans have an en-suite, which is common and not universal")
+    assert "DESIGN.NO_ENSUITE_MASTER" not in quiet, (
+        "an unstated preference must not produce a finding; that warned on 71 "
+        "of 100 plans on the strength of a non-Indian corpus")
 
     asked = sense(rects, doors,
                   {"requirements": {"attached_bath": 1, "rooms": {"bedroom": 1}}})

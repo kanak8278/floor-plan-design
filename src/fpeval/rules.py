@@ -1276,12 +1276,23 @@ def _scenario_for(ctx: _Ctx):
 # was visible at a glance on the drawing and invisible to the validator, which
 # is the worst combination: the plan looked checked.
 #
-# Each threshold below is measured on the 400-plan ResPlan set or argued from
-# the dimension, and the docstring says which. ResPlan carries only six
-# categories (bathroom, bedroom, balcony, living, kitchen, storage), so it can
-# calibrate the en-suite and hierarchy rules and cannot calibrate anything
-# about dining, utility or circulation. Where it cannot, the rule rests on a
-# dimensional argument rather than an invented percentile.
+# None of these is calibrated on ResPlan, deliberately. `brief.py` documents
+# that corpus as having geography that "points away from India", so it cannot
+# establish an Indian-market norm -- and it nearly did: an earlier cut of the
+# en-suite rule cited "72% of real plans" from ResPlan and put a warning on 71
+# of 100 of our own plans for a preference this market does not hold strongly.
+# One of the very signals `brief.py` cites as un-Indian is "two bathrooms
+# modal for a two-bedroom unit", which is that statistic.
+#
+# ResPlan keeps one legitimate job here, in `test_false_positive_rate_on_real
+# _plans`: a rule that fires on real built houses ANYWHERE is suspect,
+# whatever the market. That is a soundness check, not a calibration.
+#
+# So each threshold below rests on the Indian sources we have -- the area
+# bands in `spec.ROOM_CATEGORIES`, the adjacency table in
+# `spec.DEFAULT_ADJACENCY`, the typology expectations in `typology.py`, and
+# the stated requirements in `suite/` -- or on a dimensional argument, and the
+# comment says which. Where no Indian source settles it, there is no rule.
 
 # A passage is functional at roughly a metre wide; two people pass at 1.2 m.
 # Beyond this it is not circulation, it is unassigned floor that the solver had
@@ -1315,22 +1326,29 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
     beds = ids_of("bedroom")
     livings = ids_of("living")
 
-    # ---- the master bedroom has no bathroom of its own ------------------
-    # Measured: 290 of 400 real plans (72%) give their largest bedroom a
-    # bathroom opening directly off it. Common but not universal, so this is
-    # a warning by default -- and an error when the brief asked for it, which
-    # `bhk_programme` does for every master bedroom it writes.
+    # ---- an en-suite the brief asked for is missing ---------------------
+    # Fires ONLY when the brief asked. It used to warn otherwise, on the
+    # strength of "290 of 400 real plans (72%) give their largest bedroom an
+    # en-suite" -- measured on ResPlan, which `brief.py` documents as having
+    # geography that "points away from India", citing *two bathrooms modal for
+    # a two-bedroom unit* as one of the signals. That is the very statistic I
+    # had used. Calibrating an Indian-market norm on a non-Indian corpus put a
+    # warning on 71 of 100 plans for a preference this market does not
+    # strongly hold.
+    #
+    # The Indian ground truth in `suite/` cannot replace the number: 127 of its
+    # 148 bedroom-bearing examples (86%) say nothing about `attached_bath` at
+    # all, and two state 0 explicitly. Silence is not evidence of a norm in
+    # either direction, so no default finding is issued. Asking for something
+    # and not getting it is still an error.
     if beds and baths:
         master = max(beds, key=lambda i: area.get(i, 0.0))
-        if not (baths & a.get(master, set())):
-            asked = bool(req.get("attached_bath")) or "master_bedroom" in (
-                req.get("rooms") or {})
+        asked = bool(req.get("attached_bath"))
+        if asked and not (baths & a.get(master, set())):
             out.append(Finding(
-                "DESIGN.NO_ENSUITE_MASTER", "error" if asked else "warn",
-                1.0 if asked else 0.6,
-                f"{name[master]} has no bathroom opening off it"
-                + (" and the brief asked for an en-suite" if asked else
-                   "; 72% of real plans give the main bedroom its own"),
+                "DESIGN.NO_ENSUITE_MASTER", "error", 1.0,
+                f"{name[master]} has no bathroom opening off it and the brief "
+                f"asked for {req['attached_bath']} attached bath(s)",
                 [master] + sorted(baths)[:2]))
 
     # ---- a bathroom you reach through the utility -----------------------
@@ -1349,9 +1367,16 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
                 [b] + sorted(nbrs)[:2]))
 
     # ---- the living room is not the biggest room in the house -----------
-    # Measured: the living room is the largest habitable room in 392 of 400
-    # real plans (98%). At that prevalence an inversion is a defect, not a
-    # style, so this is an error.
+    # Grounded in our own Indian area bands rather than in ResPlan. In
+    # `spec.ROOM_CATEGORIES` the living room tops out at 280 sqft, above every
+    # other habitable room -- master bedroom 250, bedroom 180, dining 170,
+    # kitchen 150, study 130 -- so a plan where something else is larger has
+    # inverted the hierarchy the brief itself encodes.
+    #
+    # The first version cited "the largest habitable room in 392 of 400 real
+    # plans (98%)", which is a ResPlan measurement. The conclusion survives
+    # the change of source; the citation had to, because ResPlan is documented
+    # as non-Indian and this is an Indian-market rule.
     hab = [i for i in area if _is_habitable(cat.get(i, ""))]
     if livings and len(hab) > 1:
         biggest = max(hab, key=lambda i: area[i])
@@ -1361,7 +1386,7 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
                 "DESIGN.LIVING_NOT_LARGEST", "error", 0.8,
                 f"{name[liv]} is {area.get(liv, 0):.1f} m² but "
                 f"{name[biggest]} is {area[biggest]:.1f} m²; the living room "
-                "is the largest habitable room in 98% of real plans",
+                "should be the largest habitable room",
                 [liv, biggest], area.get(liv, 0.0), area[biggest]))
 
     # ---- circulation that is really unassigned floor --------------------
@@ -1431,19 +1456,13 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
                 "hall should read as one continuous space",
                 pub[:4], float(clusters), 1.0))
 
-    # ---- a bedroom with no bathroom near it -----------------------------
-    # Two doors: bedroom -> circulation -> bathroom. Three means crossing the
-    # house in the night.
-    if baths and beds:
-        for b in beds:
-            if baths & a.get(b, set()):
-                continue
-            near = any(baths & a.get(n, set()) for n in a.get(b, ()))
-            if not near:
-                out.append(Finding(
-                    "DESIGN.BEDROOM_FAR_FROM_BATH", "warn", 0.6,
-                    f"{name[b]} is more than two doors from any bathroom",
-                    [b]))
+    # DESIGN.BEDROOM_FAR_FROM_BATH was here and is deliberately gone. It
+    # warned when a bedroom was more than two doors from a bathroom, fired on
+    # 72 of 100 plans, and rested on nothing: no Indian source says how far a
+    # bedroom may be from a bath, and a compact plot house with two baths off
+    # one passage will often exceed two doors by construction. The case that
+    # is a real defect -- the only bath reachable through a bedroom -- is
+    # already `DESIGN.SOLE_BATH_VIA_BEDROOM`.
     return out
 
 
