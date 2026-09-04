@@ -837,8 +837,11 @@ OP_TABLE: dict[str, dict[str, Any]] = {
     },
     "add_door": {
         "level": LEVEL_GEOMETRY, "required": ("wall_id", "position"),
-        "optional": ("door_type", "width_mm"), "editor": "addDoor",
-        "doc": "addDoor(wallId, position, doorType).",
+        # `type` as well as `door_type`: `add_window` names it `type`, and one
+        # vocabulary for two sibling ops is not worth the inconsistency.
+        "optional": ("door_type", "type", "width_mm"), "editor": "addDoor",
+        "doc": "addDoor(wallId, position, doorType) -- single|double|sliding|"
+               "french|pocket|bifold|opening|garage.",
     },
     "add_window": {
         "level": LEVEL_GEOMETRY, "required": ("wall_id", "position"),
@@ -860,8 +863,16 @@ OP_TABLE: dict[str, dict[str, Any]] = {
     },
     "update_room": {
         "level": LEVEL_GEOMETRY, "required": ("room_id",),
-        "optional": ("name", "room_type"), "editor": "updateRoom",
-        "doc": "updateRoom(id, updates) -- label/type only, never geometry.",
+        # `category` is OUR taxonomy (bedroom, study, pooja, ...); `room_type`
+        # is OpenPlan3D's four-way RoomCategory (indoor/outdoor/garage/utility)
+        # and cannot express "make this bedroom a study". Only `room_type` was
+        # declared, so relabelling a room's FUNCTION -- the thing a client
+        # actually asks for -- was not expressible, even though the applier
+        # already handled it.
+        "optional": ("name", "category", "room_type"), "editor": "updateRoom",
+        "doc": "updateRoom(id, updates) -- `category` retypes the room in our "
+               "taxonomy, `room_type` sets the editor's indoor/outdoor class. "
+               "Label and type only, never geometry.",
     },
     "remove_element": {
         "level": LEVEL_GEOMETRY, "required": ("element_id",), "optional": (),
@@ -1049,10 +1060,12 @@ class PatchOp:
             if not _position_ok(p.get("position")):
                 errs.append(f"{self.op}: position must be a fraction 0..1 or one "
                             f"of {POSITION_WORDS}")
-            if p.get("door_type") is not None and p["door_type"] not in DOOR_TYPES:
+            dt = p.get("door_type") or p.get("type")
+            if dt is not None and dt not in DOOR_TYPES:
                 errs.append(f"{self.op}: door_type must be one of {DOOR_TYPES}")
         if self.op == "update_door":
-            if p.get("door_type") is not None and p["door_type"] not in DOOR_TYPES:
+            dt = p.get("door_type") or p.get("type")
+            if dt is not None and dt not in DOOR_TYPES:
                 errs.append(f"{self.op}: door_type must be one of {DOOR_TYPES}")
             if p.get("position") is not None and not _position_ok(p["position"]):
                 errs.append(f"{self.op}: position must be a fraction 0..1 or a "
@@ -1171,7 +1184,7 @@ class PatchOp:
             return (fn, [{"$ref": p["start_ref"]}, {"$ref": p["end_ref"]}])
         if self.op == "add_door":
             return (fn, [p["wall_id"], round(_position_t(p["position"]), 4),
-                         p.get("door_type", "single")])
+                         p.get("door_type") or p.get("type") or "single"])
         if self.op == "update_door":
             upd = {}
             if p.get("width_mm") is not None:

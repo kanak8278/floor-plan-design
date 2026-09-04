@@ -77,6 +77,8 @@ class Result:
     n_symbols: int = 0
     furnish_drops: int = 0
     warnings: list[str] = field(default_factory=list)
+    error_ids: list[str] = field(default_factory=list)
+    warn_ids: list[str] = field(default_factory=list)
     error: str | None = None
     plan: Any = None
 
@@ -362,6 +364,13 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
     findings = validate_plan(plan, brief=brief, profile=BENGALURU)
     errs = [f for f in findings if f.severity == "error"]
     res.n_errors, res.n_warnings = len(errs), len(findings) - len(errs)
+    # Keep the ids: without them the only way to ask "which rule fails most
+    # across the suite" was to re-validate outside this function, and doing
+    # that with an empty brief blamed the bye-law family for 10 errors on
+    # apartment units that `check_bylaws` correctly skips when it is told the
+    # site is a unit.
+    res.error_ids = [f.rule_id for f in errs]
+    res.warn_ids = [f.rule_id for f in findings if f.severity == "warn"]
 
     # ---- compliance ------------------------------------------------------
     res.checks.append(Check("no_rule_errors", not errs,

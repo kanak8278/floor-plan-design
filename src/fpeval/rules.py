@@ -862,9 +862,19 @@ _PRIVATE = {"bedroom", "master_bedroom"}
 # Two baths behind one bedroom is a jack-and-jill and legitimate; three is a
 # corridor wearing a bedroom's label. A dressing room counts here too -- it is
 # the same relationship as an attached bath.
+# One of each. A jack-and-jill bath is SHARED between two bedrooms -- one door
+# each -- not two baths hanging off one bedroom, and DESIGN.MULTIPLE_ATTACHED
+# _BATHS already calls the latter an error, so a cap of 2 here contradicted it.
 _BEDROOM_APPENDAGES: dict[str, int] = {
-    "bathroom": 2, "balcony": 2, "dressing": 1, "wardrobe": 1, "terrace": 1,
+    "bathroom": 1, "balcony": 1, "dressing": 1, "wardrobe": 1, "terrace": 1,
 }
+
+# Catalogue ids that ARE a parking space. `place_site_elements` puts a car on
+# the driveway rather than creating a parking room.
+_PARKING_ITEMS = frozenset((
+    "car_sedan", "car_suv", "car_pickup", "motorcycle", "bike",
+    "garage_door_double", "garage_door_single",
+))
 
 _CIRC = {"living", "dining", "foyer", "passage", "hall"}
 _MAX_DEPTH_FROM_ENTRANCE = 3
@@ -1339,12 +1349,32 @@ def check_brief(ctx: _Ctx) -> list[Finding]:
         by_cat.setdefault(c, []).append(rid)
 
     def _ids(cat: str) -> list[str]:
-        ids = list(by_cat.get(cat, []))
-        # A brief saying "master bedroom" is satisfied by whichever bedroom the
-        # plan made the master; if none is categorised so, fall back to bedrooms.
-        if not ids and cat == "master_bedroom":
-            ids = list(by_cat.get("bedroom", []))
-        return ids
+        # A request is satisfied by the category itself or any of its
+        # subtypes: three bedrooms may arrive as two `bedroom` plus one
+        # `master_bedroom`, and asking for a bathroom is answered by a `wc`.
+        from . import roomtypes as rt
+        ids: list[str] = []
+        for c in rt.subtypes_of(cat):
+            ids += by_cat.get(c, [])
+        # And the reverse for a brief that names the subtype: "master bedroom"
+        # is satisfied by whichever bedroom the plan made the master, even if
+        # it did not get the label.
+        if not ids:
+            for c in rt.counts_as(cat)[1:]:
+                ids += by_cat.get(c, [])
+        # Two things a brief asks for that the plan does not carry as ROOMS.
+        # A stair is a `Stair` in the IR and parking is a car on the driveway
+        # placed by `entrance.place_site_elements`, so counting rooms alone
+        # reported both as missing on every plan that had them -- 29 of the 31
+        # remaining BRIEF.ROOM_MISSING errors in the suite were a stair or a
+        # parking space that was right there in the plan.
+        if not ids and cat == "stair":
+            ids = [f"stair:{i}" for i, _ in
+                   enumerate(getattr(ctx.plan, "stairs", ()) or ())]
+        if not ids and cat == "parking":
+            ids = [f.id for f in (getattr(ctx.plan, "furniture", ()) or ())
+                   if f.catalog_id in _PARKING_ITEMS]
+        return list(dict.fromkeys(ids))
 
     # ---- rooms the brief asked for -------------------------------------
     for cat, want in (req.get("rooms") or {}).items():

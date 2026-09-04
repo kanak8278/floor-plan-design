@@ -154,6 +154,35 @@ OUTDOOR = tuple(k for k, v in T.items() if v.klass == "outdoor")
 RESPLAN_KEYS = ("living", "kitchen", "bedroom", "bathroom", "balcony", "store")
 
 
+# A subtype satisfies a request for its parent. `master_bedroom` was added as a
+# category after the brief checks were written, and nothing told them that a
+# master bedroom is a bedroom: a 3BHK solved as 2 bedrooms + 1 master reported
+# BRIEF.ROOM_MISSING, so the rule fired on 132 of 132 solved plans in the suite
+# -- one rule accounting for almost every plan that failed to come back clean.
+SUBTYPE_OF: dict[str, str] = {
+    "master_bedroom": "bedroom",
+    "wc": "bathroom",
+}
+
+
+def counts_as(category: str) -> tuple[str, ...]:
+    """`category` and every request it can satisfy, most specific first."""
+    out = [category]
+    seen = {category}
+    cur = category
+    while cur in SUBTYPE_OF and SUBTYPE_OF[cur] not in seen:
+        cur = SUBTYPE_OF[cur]
+        seen.add(cur)
+        out.append(cur)
+    return tuple(out)
+
+
+def subtypes_of(category: str) -> tuple[str, ...]:
+    """Every category that satisfies a request for `category`, itself included."""
+    return (category,) + tuple(k for k, v in SUBTYPE_OF.items()
+                               if v == category)
+
+
 def get(key: str) -> RoomType | None:
     """The type for a category key, resolving aliases.
 

@@ -525,7 +525,11 @@ def apply_geometry_ops(plan: Plan, ops: list[Any]) -> ApplyResult:
             if not (0.0 <= pos <= 1.0):
                 res.rejected.append((desc, "position must be 0..1")); continue
             is_win = name == "add_window"
-            kind = str(p.get("type") or ("standard" if is_win else "single"))
+            # `add_door` declares `door_type` (the editor's own name for it) and
+            # `add_window` declares `type`. Accept either on both rather than
+            # silently defaulting a door the agent explicitly typed.
+            kind = str(p.get("type") or p.get("door_type")
+                       or ("standard" if is_win else "single"))
             width = int(p.get("width_mm") or
                         (_WIN_W if is_win else _DOOR_W).get(kind, 900))
             if width + 2 * JAMB_MM > w.length:

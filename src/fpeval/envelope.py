@@ -262,9 +262,19 @@ class RoomReq:
         return NBC_MIN.get(self.category, (900, 1.0))[0]
 
     def nbc_min_area_m2(self) -> float:
+        """The binding area minimum: NBC, or what the contents need.
+
+        A utility has no NBC minimum, so before the contents floor was
+        consulted here nothing stopped the solver handing it 1.47 m2 -- less
+        than a washing machine and its door swing. The floor is not law and is
+        kept in a separate table (`standards.CONTENTS_FLOOR_M2`) for that
+        reason, but it binds the layout exactly like a legislated minimum does.
+        """
         if self.min_area_m2 is not None:
             return self.min_area_m2
-        return NBC_MIN.get(self.category, (900, 1.0))[1]
+        from .standards import CONTENTS_FLOOR_M2
+        return max(NBC_MIN.get(self.category, (900, 1.0))[1],
+                   CONTENTS_FLOOR_M2.get(self.category, 0.0))
 
     def zone(self) -> str | None:
         return self.vastu_zone or VASTU_DEFAULT_ZONE.get(self.category)

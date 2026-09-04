@@ -125,13 +125,10 @@ SERVICE_TARGET_CAP_M2 = {
 }
 
 
-SERVICE_FLOOR_M2 = {
-    # What the contents need, so proportional budget scaling cannot shrink a
-    # room below the point where its own furniture stops fitting.
-    "utility": 3.5,    # 600x650 machine + access, measured against door swing
-    "bathroom": 2.8,   # NBC combined bath+WC
-    "kitchen": 5.0,    # NBC
-}
+# The contents floor lives in `standards`, with the clearances it comes from.
+# It was duplicated here and applied only on this path, so a programme built
+# straight from `envelope.bhk_programme` never got it.
+from .standards import CONTENTS_FLOOR_M2 as SERVICE_FLOOR_M2  # noqa: E402
 
 
 def cap_service_targets(prog) -> list[str]:
@@ -241,10 +238,17 @@ def truth_to_programme(truth: Any, *, relaxed: bool = False
             warn.append(f"unknown room type '{key}'")
             continue
         # Same split as above: outdoor ROOMS are tiled, site elements are not.
-        if key in ("landscape", "shaft", "parking", "stair"):
+        if key in ("landscape", "shaft", "parking"):
             warn.append(f"deferred '{key}': site or vertical element, "
                         "not part of the single-storey room tiling")
             continue
+        # `stair` used to be deferred with these, and the result was that a
+        # brief saying "G+1 duplex with a staircase" produced a plan with no
+        # stair anywhere -- 25 of the suite's BRIEF.ROOM_MISSING errors, all
+        # true. The reason for deferring it does not apply: what wrecked wall
+        # extraction was treating ResPlan's TREAD polygons as room faces during
+        # conversion. A stairwell in a plan we generate is an ordinary room
+        # with walls round it, and the flight goes inside it.
         for i in range(n):
             rid = key if n == 1 else f"{key}{i+1}"
             cat = key
