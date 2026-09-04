@@ -24,22 +24,25 @@ CLI lives in `scripts/`; anything pytest should collect lives in `tests/`.
 
 ## Running things
 
+Every dependency is declared in `pyproject.toml`, so `uv run` needs no flags.
+One `uv sync --all-extras` and the commands below work as written; the long
+`--with shapely --with numpy --with ortools` prefixes these used to carry were
+there only because `ortools` was never declared.
+
 ```bash
+uv sync --all-extras          # once
+
 # tests (offline only)
-uv run --with pytest --with shapely --with numpy --with ortools \
-       python -m pytest -m "not api and not slow"
+uv run pytest -m "not api and not slow"
 
 # the prompt suite: 50 general + 50 detailed
-uv run --with shapely --with numpy --with ortools \
-       python scripts/run_suite.py --track A --set paired
+uv run python scripts/run_suite.py --track A --set paired
 
 # named plans for the browser, then open http://localhost:5199/fpeval
-uv run --with shapely --with numpy --with ortools \
-       python scripts/build_suite_gallery.py --set paired --svg
+uv run python scripts/build_suite_gallery.py --set paired --svg
 
 # the design service
-uv run --with fastapi --with uvicorn --with shapely --with numpy --with ortools \
-       uvicorn service.app:app --port 8099
+uv run uvicorn service.app:app --port 8099
 
 # the editor (serves /fpeval and proxies /api/* to the service)
 cd vendor/openPlan3D && npx vite dev --port 5199

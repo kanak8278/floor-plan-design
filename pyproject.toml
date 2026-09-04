@@ -2,7 +2,25 @@
 name = "fpeval"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["shapely>=2.0", "numpy>=1.24"]
+# `ortools` was missing while `solver.py` has imported `cp_model` since the
+# first commit, so every command had to carry `--with ortools --with shapely
+# ...` by hand. If it is imported, it belongs here.
+dependencies = [
+  "shapely>=2.0",
+  "numpy>=1.24",
+  "ortools>=9.8",          # solver.py: CP-SAT
+  "anthropic>=0.40",       # llm.py, extract.py
+]
+
+[project.optional-dependencies]
+# The HTTP service. Optional because the library, the suite and the tests all
+# run without it.
+service = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2.0"]
+# Image ingestion of real builder plans (`imgclass.py` sniffs with Pillow).
+corpus = ["pillow>=10.0"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
 
 [build-system]
 requires = ["hatchling"]
