@@ -889,7 +889,14 @@ def bhk_programme(
     study: bool = False,
     store: bool = False,
     storeys: int = 1,
-    attached_master_bath: bool = True,
+    # Off by default. The template used to assert an en-suite on every master
+    # bedroom it wrote, which made it a stated requirement of every brief the
+    # agent built -- and 127 of the 148 bedroom-bearing examples in `suite/`
+    # (86%) say nothing about `attached_bath`, with two stating 0 outright.
+    # A standard programme should ask for what Indian briefs ask for and let
+    # the client add the rest; inventing the requirement then failing to meet
+    # it is the system marking its own homework wrong.
+    attached_master_bath: bool = False,
 ) -> list[RoomSpec]:
     """Expand "NBHK + extras" into an explicit programme.
 

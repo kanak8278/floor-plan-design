@@ -250,7 +250,7 @@ def repair(spec: Any, *, max_iters: int = 5, time_limit_s: float = 10.0,
         spec_ops = [o for o in ops if getattr(o, "level", "") == "spec"]
         geo_ops = [o for o in ops if getattr(o, "level", "") == "geometry"]
         if furn_ops:
-            from .apply import apply_furniture_ops
+            from .apply_ops import apply_furniture_ops
             far = apply_furniture_ops(plan, furn_ops)
             plan = far.plan
             it.applied += far.applied

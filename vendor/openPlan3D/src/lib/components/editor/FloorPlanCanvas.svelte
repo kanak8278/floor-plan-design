@@ -4,6 +4,8 @@
   import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, GuideLine, Measurement, Annotation, TextAnnotation, CustomEntourageDef } from '$lib/models/types';
   import type { Floor, Room } from '$lib/models/types';
   import { detectRooms, getRoomPolygon, roomCentroid } from '$lib/utils/roomDetection';
+  import { shortcutsAllowed } from '$lib/utils/typing';
+  import { reconcileRooms } from '$lib/utils/roomIdentity';
   import { getMaterial } from '$lib/utils/materials';
   import { getCatalogItem } from '$lib/utils/furnitureCatalog';
   import { drawFurnitureIcon } from '$lib/utils/furnitureIcons';
@@ -844,35 +846,31 @@
     // Keyed on the floor too: two storeys can share identical wall geometry
     // (a duplicated or stacked floor), and without the id the cache would
     // skip re-detection and leave the previous floor's rooms on screen.
-    const hash = currentFloor.id + JSON.stringify(currentFloor.walls.map(w => [w.start, w.end]));
+    //
+    // The saved rooms are part of the key as well, and that is not an
+    // optimisation detail. Renaming a room does not touch a wall, so a
+    // walls-only key made the cache skip reconciliation and leave the old
+    // labels up: the assistant would rename two rooms, say so, and the plan
+    // would keep reading "Room 1" and "Room 2". Identity lives in the saved
+    // rooms, so a change to them has to invalidate the cache.
+    const hash = currentFloor.id
+      + JSON.stringify(currentFloor.walls.map(w => [w.start, w.end]))
+      + JSON.stringify((currentFloor.rooms ?? []).map(
+          r => [r.id, r.name, r.floorTexture, r.color, r.roomType, r.anchor]));
     if (hash === lastWallHash) return;
     lastWallHash = hash;
     const newRooms = detectRooms(currentFloor.walls);
-    const savedRooms = currentFloor.rooms || [];
-    for (const nr of newRooms) {
-      const nrWalls = new Set(nr.walls);
-      const existing = detectedRooms.find(old => {
-        const oldWalls = new Set(old.walls);
-        return oldWalls.size === nrWalls.size && [...nrWalls].every(w => oldWalls.has(w));
-      });
-      if (existing) {
-        nr.id = existing.id;
-        nr.name = existing.name;
-        nr.floorTexture = existing.floorTexture;
-      } else {
-        const saved = savedRooms.find(sr => {
-          const srWalls = new Set(sr.walls);
-          return srWalls.size === nrWalls.size && [...nrWalls].every(w => srWalls.has(w));
-        });
-        if (saved) {
-          nr.id = saved.id;
-          nr.name = saved.name;
-          if (saved.floorTexture) nr.floorTexture = saved.floorTexture;
-        }
-      }
-    }
-    detectedRooms = newRooms;
-    detectedRoomsStore.set(newRooms);
+    // Identity comes from anchors, not from wall-id sets: splitting or adding a
+    // wall changes the set, and the old exact-match rule threw the room's name
+    // away when it did. `$lib/utils/roomIdentity` explains why that matters.
+    // Saved rooms go last so they outrank last pass's on-screen copies.
+    const { rooms } = reconcileRooms(
+      newRooms,
+      [...detectedRooms, ...(currentFloor.rooms || [])],
+      currentFloor.walls,
+    );
+    detectedRooms = rooms;
+    detectedRoomsStore.set(rooms);
   }
 
   function drawGuides() {
@@ -3109,6 +3107,10 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
+    // Stand down while a field has focus. This has to come before the Space
+    // branch below, which calls preventDefault() unconditionally -- that was
+    // why no text field in the app could accept a space.
+    if (!shortcutsAllowed(e)) return;
     shiftDown = e.shiftKey;
     if (e.code === 'Space') { spaceDown = true; e.preventDefault(); return; }
 
@@ -3360,6 +3362,10 @@
   }
 
   function onKeyUp(e: KeyboardEvent) {
+    // Not gated on `shortcutsAllowed`: a modifier released while focus has
+    // moved into a field must still clear, or the canvas stays stuck in
+    // pan or ortho mode.
+
     shiftDown = e.shiftKey;
     if (e.code === 'Space') spaceDown = false;
   }

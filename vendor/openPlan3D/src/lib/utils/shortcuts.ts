@@ -2,6 +2,7 @@ import { selectedTool, undo, redo, viewMode, selectedElementId, selectedElementI
 import { get } from 'svelte/store';
 import { localStore } from '$lib/services/datastore';
 import { currentProject } from '$lib/stores/project';
+import { isTypingTarget } from '$lib/utils/typing';
 
 export interface ShortcutContext {
   rotateFurniture?: () => void;
@@ -34,9 +35,10 @@ export function handleGlobalShortcut(e: KeyboardEvent, ctx: ShortcutContext = {}
     return true;
   }
 
-  // Don't handle single-key shortcuts if user is typing in an input
-  const tag = (e.target as HTMLElement)?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return false;
+  // Don't handle single-key shortcuts while the user is typing. One shared
+  // definition, in $lib/utils/typing -- this used to be a local copy that
+  // missed contenteditable.
+  if (isTypingTarget(e.target)) return false;
 
   if (e.key === 'Escape') {
     selectedTool.set('select');

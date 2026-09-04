@@ -1,14 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { currentProject, viewMode, selectedElementId, selectedRoomId, createDefaultProject, loadProject, selectedTool, placingFurnitureId, elevationWallId, elevationPickMode } from '$lib/stores/project';
   import { localStore } from '$lib/services/datastore';
   import { createProjectFromRoomPlan, isRoomPlanJson } from '$lib/utils/roomplanImport';
   import TopBar from '$lib/components/toolbar/TopBar.svelte';
   import BuildPanel from '$lib/components/sidebar/BuildPanel.svelte';
-  import PropertiesPanel from '$lib/components/sidebar/PropertiesPanel.svelte';
-  import LayersPanel from '$lib/components/sidebar/LayersPanel.svelte';
+  import RightDock from '$lib/components/sidebar/RightDock.svelte';
+  import { attachDocument } from '$lib/commands/attach';
+  import { shortcutsAllowed } from '$lib/utils/typing';
 
-  let showLayers = $state(false);
+  // One right-hand dock with Chat / Properties / Layers as tabs, replacing the
+  // separate PropertiesPanel and LayersPanel columns. Chat needs the full pane
+  // width to read, and two right-hand columns leave the canvas too narrow.
+  let dockOpen = $state(true);
+  let dockTab = $state<'chat' | 'properties' | 'layers'>('chat');
   import FloorPlanCanvas from '$lib/components/editor/FloorPlanCanvas.svelte';
   import AlignmentToolbar from '$lib/components/editor/AlignmentToolbar.svelte';
   import UndoHistoryPanel from '$lib/components/editor/UndoHistoryPanel.svelte';
@@ -146,6 +152,12 @@
         history.replaceState(null, '', `/editor?id=${p.id}`);
       }
       ready = true;
+      // Hand the document to the design service. If it is not running the bus
+      // stays a local recorder and the editor behaves exactly as before —
+      // losing the ability to draw because a Python process is down would be
+      // a worse product than not having the chat at all.
+      const loaded = get(currentProject);
+      if (loaded) void attachDocument(loaded);
     })();
 
     // Auto-save on every project change (debounced)
@@ -159,7 +171,17 @@
   });
 </script>
 
-<svelte:window on:keydown={(e) => { if (e.key === 'p' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); printOpen = true; } if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !e.ctrlKey && !e.metaKey && (e.target as HTMLElement)?.tagName !== 'INPUT' && (e.target as HTMLElement)?.tagName !== 'TEXTAREA')) { e.preventDefault(); commandPaletteOpen = !commandPaletteOpen; } if (e.key === '?' && !e.ctrlKey && !e.metaKey) { showHelp = !showHelp; e.preventDefault(); } if (e.key === 'Escape' && showHelp) { showHelp = false; } if (e.key === 'l' && !e.ctrlKey && !e.metaKey && !e.altKey && (e.target as HTMLElement)?.tagName !== 'INPUT') { showLayers = !showLayers; } }} />
+<svelte:window on:keydown={(e) => {
+  // Modifier combinations are safe inside a field; bare letters are not.
+  if (e.key === 'p' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); printOpen = true; }
+  if (e.key === 'i' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); dockOpen = !dockOpen; }
+  if (e.key === 'k' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commandPaletteOpen = !commandPaletteOpen; }
+  if (e.key === 'Escape' && showHelp) { showHelp = false; }
+  if (!shortcutsAllowed(e)) return;
+  if (e.key === '/') { e.preventDefault(); commandPaletteOpen = !commandPaletteOpen; }
+  if (e.key === '?') { showHelp = !showHelp; e.preventDefault(); }
+  if (e.key === 'l' && !e.ctrlKey && !e.metaKey && !e.altKey) { dockTab = 'layers'; dockOpen = true; }
+}} />
 
 {#if ready}
   <div class="h-screen flex flex-col overflow-hidden">
@@ -194,10 +216,7 @@
           {/if}
         {/if}
       </div>
-      {#if showLayers && mode === '2d'}
-        <LayersPanel />
-      {/if}
-      <PropertiesPanel is3D={mode === '3d'} />
+      <RightDock is3D={mode === '3d'} bind:open={dockOpen} bind:tab={dockTab} />
     </div>
   </div>
 
@@ -213,17 +232,17 @@
     </button>
   {/if}
 
-  <!-- Layers toggle button -->
+  <!-- Layers: selects the dock tab rather than opening a second column -->
   {#if mode === '2d'}
     <button
       class="max-md:hidden fixed bottom-4 left-14 w-8 h-8 rounded-full shadow-lg hover:bg-slate-600 transition-colors z-50 text-sm"
-      class:bg-blue-600={showLayers}
-      class:text-white={showLayers}
-      class:bg-slate-700={!showLayers}
-      class:text-gray-300={!showLayers}
-      onclick={() => showLayers = !showLayers}
-      title="Layers Panel (L)"
-      aria-label="Toggle Layers Panel"
+      class:bg-blue-600={dockOpen && dockTab === 'layers'}
+      class:text-white={dockOpen && dockTab === 'layers'}
+      class:bg-slate-700={!(dockOpen && dockTab === 'layers')}
+      class:text-gray-300={!(dockOpen && dockTab === 'layers')}
+      onclick={() => { dockTab = 'layers'; dockOpen = true; }}
+      title="Layers (L)"
+      aria-label="Show layers"
     >🗂</button>
   {/if}
 
@@ -299,7 +318,8 @@
                   'Tab        Toggle 2D/3D',
                   'F          Zoom to fit',
                   'G          Toggle grid',
-                  'L          Toggle layers',
+                  'L          Layers tab',
+                  'Ctrl+I     Toggle right panel',
                   '?          Show shortcuts',
                   '',
                   '── CANVAS ──',
@@ -384,7 +404,8 @@
                 <div class="flex justify-between"><span class="text-gray-600">Toggle 2D / 3D</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">Tab</kbd></div>
                 <div class="flex justify-between"><span class="text-gray-600">Zoom to fit</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">F</kbd></div>
                 <div class="flex justify-between"><span class="text-gray-600">Toggle grid</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">G</kbd></div>
-                <div class="flex justify-between"><span class="text-gray-600">Toggle layers</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">L</kbd></div>
+                <div class="flex justify-between"><span class="text-gray-600">Layers tab</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">L</kbd></div>
+                <div class="flex justify-between"><span class="text-gray-600">Toggle right panel</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">Ctrl+I</kbd></div>
                 <div class="flex justify-between"><span class="text-gray-600">Show shortcuts</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">?</kbd></div>
               </div>
 

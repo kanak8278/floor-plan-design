@@ -67,6 +67,13 @@ for e in exs:
         "features": e.features, "error": r.error,
         "failed_checks": [{"name": c.name, "detail": c.detail} for c in r.checks if not c.ok],
         "bridge_warnings": r.warnings,
+        # `score.Result` has carried these all along and the export dropped
+        # them, so a run told you the error COUNT went up and gave you no way
+        # to ask which rule. Re-validating outside the run to find out is how
+        # an earlier measurement blamed the bye-law family for ten errors on
+        # apartment units it correctly skips.
+        "error_ids": list(getattr(r, "error_ids", []) or []),
+        "warn_ids": list(getattr(r, "warn_ids", []) or []),
     })
 
 el = time.time() - t0

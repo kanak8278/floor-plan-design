@@ -33,6 +33,12 @@ from fpeval import roomtypes as rt
 
 PROFILE = CityProfileAdapter(BENGALURU)
 app = FastAPI(title="fpeval design service", version="0.1.0")
+
+# The stateful half: documents, the command log, and the chat transcript. Kept
+# in its own module because the endpoints below genuinely are pure functions of
+# their input, and mixing the two would blur which is which.
+from service.documents import router as documents_router  # noqa: E402
+app.include_router(documents_router)
 # Same-origin in production via the SvelteKit proxy; permissive here so the
 # editor's dev server can be pointed straight at the service while iterating.
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],

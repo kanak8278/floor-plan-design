@@ -1,10 +1,35 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
+  // Typed because the file declares `lang="ts"`: without these, svelte-check
+  // reports implicit-any on every `_meta` read and the real errors get lost in
+  // the noise. Both galleries share one shape; the fields each uses differ.
+  interface PlanMeta {
+    example_id?: string;
+    expect?: string;
+    status?: string;
+    score?: number;
+    passed?: boolean;
+    rooms?: number;
+    walls?: number;
+    openings?: number;
+    errors?: number;
+    warnings?: number;
+    coverage?: number | null;
+    carpet_sqft?: number | null;
+    vastu?: number | null;
+    area_m2?: number;
+    bedrooms?: number;
+    features?: string[];
+    failed_checks?: string[];
+    prompt?: string;
+  }
+  interface GalleryPlan { id: string; name?: string; _meta?: PlanMeta }
+
   let status = 'Loading…';
   let ok = false;
-  let suite = [];
-  let resplan = [];
-  let tab = 'suite';
+  let suite: GalleryPlan[] = [];
+  let resplan: GalleryPlan[] = [];
+  let tab: 'suite' | 'resplan' = 'suite';
   let filter = 'all';
 
   const KEY = 'floorplan_projects';
@@ -18,14 +43,15 @@
   // Thumbnails live under their own keys, so removing a plan without them
   // leaves the image behind and the next plan to reuse that id shows the old
   // picture.
-  /** @param {string} id */
-  const forget = (id) => { try { localStorage.removeItem(THUMB + id); } catch {} };
+  // A TypeScript annotation, not JSDoc: this file is `lang="ts"`, so the
+  // `@param` form is ignored and the parameter reads as implicit `any`.
+  const forget = (id: string) => { try { localStorage.removeItem(THUMB + id); } catch {} };
 
   const count = () => Object.keys(JSON.parse(localStorage.getItem(KEY) || '{}')).length;
 
   onMount(async () => {
     try {
-      const load = async (f) => { try { return await (await fetch(f)).json(); } catch { return []; } };
+      const load = async (f: string): Promise<GalleryPlan[]> => { try { return await (await fetch(f)).json(); } catch { return []; } };
       [suite, resplan] = await Promise.all([load('/fpeval/suite.json'), load('/fpeval/projects.json')]);
       const all = JSON.parse(localStorage.getItem(KEY) || '{}');
       // PURGE every plan we have ever generated before seeding. The old code
@@ -59,8 +85,8 @@
     return list.filter(p => (p._meta?.features || []).includes(filter));
   };
 
-  const featureList = () => {
-    const c = {};
+  const featureList = (): [string, number][] => {
+    const c: Record<string, number> = {};
     for (const p of suite) for (const f of (p._meta?.features || [])) c[f] = (c[f] || 0) + 1;
     return Object.entries(c).sort((a, b) => b[1] - a[1]);
   };

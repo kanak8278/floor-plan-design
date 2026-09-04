@@ -1,0 +1,11 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch();
+const pg = await (await b.newContext({ viewport:{width:1680,height:1000}, deviceScaleFactor:2 })).newPage();
+await pg.goto('http://localhost:5210/editor?id=uidemo3', { waitUntil: 'networkidle' });
+await pg.waitForTimeout(2500);
+await pg.keyboard.press('f');
+await pg.waitForTimeout(800);
+const labels = await pg.evaluate(() => document.body.textContent.match(/Room \d+ \(|Master Bedroom|Living Room/g));
+console.log('labels found in DOM:', labels);
+await pg.screenshot({ path: 'out/ui_labels.png', clip: { x: 300, y: 55, width: 1290, height: 945 } });
+await b.close();

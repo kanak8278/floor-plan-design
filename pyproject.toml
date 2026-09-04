@@ -10,6 +10,10 @@ dependencies = [
   "numpy>=1.24",
   "ortools>=9.8",          # solver.py: CP-SAT
   "anthropic>=0.40",       # llm.py, extract.py
+  # Rasterises the plan SVG so the agent can be *shown* the drawing rather
+  # than a description of it. cairosvg needs a system cairo that is not here;
+  # playwright is a browser for one PNG.
+  "resvg-py>=0.1",         # agent.py via spatial.plan_png
 ]
 
 [project.optional-dependencies]

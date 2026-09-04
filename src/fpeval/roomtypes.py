@@ -65,7 +65,11 @@ _add(RoomType("dining", "Dining", "habitable", True, True, 7.5, 2400, 2750,
 _add(RoomType("bedroom", "Bedroom", "habitable", True, True, 7.5, 2400, 2750,
               (9.0, 20.0), 2.4, None, (), needs_window=True, needs_own_door=True,
               floor_texture="light-oak", furnish_key="bedroom",
-              aliases=("bedroom", "bed room", "bed rm", "guest bed", "kids room", "children"),
+              # A servant's room is habitable and gets a bedroom's minima and
+              # glazing: `spec.ROOM_CATEGORIES` already marks it habitable at
+              # 55-100 sqft, and it had no type at all here.
+              aliases=("bedroom", "bed room", "bed rm", "guest bed", "kids room",
+                       "children", "servant", "servant room", "maid room"),
               short_aliases=("br",)))
 _add(RoomType("master_bedroom", "Master Bedroom", "habitable", True, True, 9.5, 2700, 2750,
               (12.0, 24.0), 2.4, "SW", ("NE",), needs_window=True, needs_own_door=True,
@@ -74,7 +78,7 @@ _add(RoomType("master_bedroom", "Master Bedroom", "habitable", True, True, 9.5, 
 _add(RoomType("study", "Study", "habitable", True, True, 7.5, 2400, 2750,
               (6.0, 16.0), 2.6, "N", (), needs_window=True,
               floor_texture="light-oak", furnish_key="study",
-              aliases=("study", "home office", "work room")))
+              aliases=("study", "home office", "work room", "office", "den")))
 _add(RoomType("kitchen", "Kitchen", "habitable", True, True, 5.0, 1800, 2750,
               (6.0, 16.0), 3.0, "SE", ("NE", "SW"), needs_window=True, wet=True,
               floor_texture="ceramic-gray", furnish_key="kitchen",
@@ -162,6 +166,17 @@ RESPLAN_KEYS = ("living", "kitchen", "bedroom", "bathroom", "balcony", "store")
 SUBTYPE_OF: dict[str, str] = {
     "master_bedroom": "bedroom",
     "wc": "bathroom",
+    # Both of these were missing, and the omission was not visible from here:
+    # `bridge.canon` maps them correctly, so the solver path was fine, while
+    # every table keyed by base category -- NBC minima, the validator's
+    # habitable set -- missed them and silently applied its most permissive
+    # fallback. A guest bedroom was budgeted against 1 m2.
+    "guest_bedroom": "bedroom",
+    # A `toilet` here is the WC-only room (spec.ROOM_CATEGORIES gives it
+    # 16-38 sqft against a bathroom's 30-65), so it inherits the `wc` row and
+    # through it `bathroom`, not `bathroom` directly. Getting that order wrong
+    # would hold a 1.1 m2 WC to a 2.8 m2 combined-bathroom minimum.
+    "toilet": "wc",
 }
 
 
@@ -178,9 +193,24 @@ def counts_as(category: str) -> tuple[str, ...]:
 
 
 def subtypes_of(category: str) -> tuple[str, ...]:
-    """Every category that satisfies a request for `category`, itself included."""
-    return (category,) + tuple(k for k, v in SUBTYPE_OF.items()
-                               if v == category)
+    """Every category that satisfies a request for `category`, itself included.
+
+    Transitive, to mirror `counts_as`. One level deep was an asymmetry with a
+    consequence: `toilet` is a `wc` is a `bathroom`, so `counts_as('toilet')`
+    reached `bathroom` while `subtypes_of('bathroom')` stopped at `wc` and did
+    not reach back. A plan whose only WC was labelled `toilet` therefore
+    answered "is this a bathroom" one way and "does the brief have its
+    bathroom" the other.
+    """
+    out = [category]
+    frontier = [category]
+    while frontier:
+        cur = frontier.pop()
+        for k, v in SUBTYPE_OF.items():
+            if v == cur and k not in out:
+                out.append(k)
+                frontier.append(k)
+    return tuple(out)
 
 
 def get(key: str) -> RoomType | None:
