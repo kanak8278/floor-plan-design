@@ -832,3 +832,42 @@ def test_the_service_accepts_the_compass_spelling_everything_else_uses():
                       road_facing="north_east").road_facing == "NE"
     with pytest.raises(Exception):
         GenerateIn(width_ft=30, depth_ft=40, programme=[], road_facing="banana")
+
+
+# ------------------------------------------------------------ the ruler itself
+# A suite score that moves when the machine is busy cannot be compared across
+# commits, and the failure is invisible: three identical runs of the paired
+# suite gave 43/41/41 fully passing and 0.843/0.838/0.837 mean, so a two-plan
+# "improvement" was available for free. Worse, a pure function extraction --
+# which cannot affect layout at all -- appeared to gain a plan. `deterministic`
+# budgets CP-SAT by work units on one worker instead of by seconds on eight.
+
+@pytest.mark.slow
+def test_a_deterministic_solve_reproduces_exactly():
+    from fpeval.envelope import bhk_programme, CityProfileAdapter, RoomReq
+    from fpeval.solver import LayoutSpec, solve_layout
+    from fpeval.bylaws import BENGALURU
+
+    def once():
+        prog = [RoomReq(**{**r.__dict__}) for r in bhk_programme(4)]
+        r = solve_layout(
+            40, 60,
+            LayoutSpec(programme=prog,
+                       entrance_room=next(p.id for p in prog if p.is_entrance),
+                       # Deliberately too small a budget: this is the regime
+                       # where the wall clock decides how many topologies get
+                       # tried, and where the eight workers race.
+                       time_limit_s=1.5, deterministic=True),
+            road_facing="E", profile=CityProfileAdapter(BENGALURU), plan_id="d")
+        return (r.status, r.candidates_tried, r.objective,
+                tuple(sorted(r.area_m2.items())))
+
+    runs = [once() for _ in range(3)]
+    # `candidates_tried` is the sensitive term and is deliberately in the tuple:
+    # with `deterministic=False` this instance yields 90 / 43 / 88 while the
+    # plan itself happens to converge, so asserting on areas alone would pass
+    # against a search that is not reproducible. The count is what proves the
+    # search is; the plan is what the count protects on harder instances.
+    assert len(set(runs)) == 1, (
+        "a deterministic solve returned different results on identical input; "
+        f"candidates tried: {[r[1] for r in runs]}")

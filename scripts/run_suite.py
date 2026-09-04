@@ -18,6 +18,10 @@ ap.add_argument("--time-limit", type=float, default=10.0)
 ap.add_argument("--only", default="")
 ap.add_argument("--set", default="", help="all | paired (50 general + 50 detailed)")
 ap.add_argument("--out", default="out/suite")
+# Deterministic by default: a suite run is a ruler. `--wall-clock` restores the
+# production budget for when the question is "how does it behave when shipped".
+ap.add_argument("--wall-clock", action="store_true",
+                help="budget by seconds like production, not reproducibly")
 args = ap.parse_args()
 
 exs = load_suite()
@@ -53,7 +57,8 @@ for e in exs:
             print(f"{e.id:<12}EXTRACT ERROR {type(ex).__name__}: {str(ex)[:50]}")
             rows.append({"id": e.id, "track": "B", "error": f"extract: {ex}"})
             continue
-    r = run(e, track=args.track, client=client, time_limit_s=args.time_limit, spec=spec)
+    r = run(e, track=args.track, client=client, time_limit_s=args.time_limit,
+            spec=spec, deterministic=not args.wall_clock)
     fails = "; ".join(f"{c.name}" for c in r.checks if not c.ok)
     print(f"{e.id:<12}{e.expect:<11}{r.status:<12}{r.score:>6.2f}{r.n_rooms:>5}"
           f"{r.n_errors:>4}{r.n_warnings:>4}"

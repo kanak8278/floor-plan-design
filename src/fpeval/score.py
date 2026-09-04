@@ -148,7 +148,15 @@ class _TruthAdjacency:
 
 
 def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
-        spec: Any = None, policy=None) -> Result:
+        spec: Any = None, policy=None, deterministic: bool = True) -> Result:
+    """Score one example. `deterministic` defaults ON, unlike the solver.
+
+    A suite run is a measurement, and a measurement that moves when the
+    machine is busy cannot be compared across commits: wall-clock budgets made
+    three identical runs of one 4BHK visit 43, 52 and 65 topologies. Interactive
+    solves keep the wall clock, because there finishing on time beats finishing
+    identically.
+    """
     res = Result(example_id=example.id, track=track)
     t = example.truth
 
@@ -240,7 +248,8 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                        required_adjacency=req_adj,
                        forbidden_adjacency=forb_adj,
                        soft_adjacency=soft_adj,
-                       time_limit_s=time_limit_s),
+                       time_limit_s=time_limit_s,
+                       deterministic=deterministic),
             road_facing=facing, profile=prof,
             plan_id=f"{example.id}-{track}")
         # A brief that guessed too generously should lose its guesses, not its
@@ -269,7 +278,8 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                                                     if p_[0] in _keep and p_[1] in _keep],
                                soft_adjacency=[p_ for p_ in soft_adj
                                                if p_[0] in _keep and p_[1] in _keep],
-                               time_limit_s=time_limit_s),
+                               time_limit_s=time_limit_s,
+                               deterministic=deterministic),
                     road_facing=facing, profile=prof,
                     plan_id=f"{example.id}-{track}-shed")
                 prog = kept

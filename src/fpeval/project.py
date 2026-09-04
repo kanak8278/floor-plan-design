@@ -12,15 +12,11 @@ declared quantisation*: centimetre floats are snapped to 1 mm on entry, the
 snapped value becomes canonical, and the trip is idempotent from then on.
 `design_round_trip_report()` asserts that idempotence.
 
-The earlier version of this module was one-way by construction -- it read only
-`activeFloorId` and silently dropped columns, guides, measurements, dimension
-and text annotations, groups, entourage, the background image, per-wall
-colours and textures, `curvePoint`, and every other storey. That was correct
-for what it was used for (converting our own generated plans, one direction,
-17,000/17,000 on `metrics.ir_identity`) and wrong as a bridge for live editing:
-the first agent edit would have deleted the user's second floor and their
-dimension strings. `ir_identity` never noticed because it compares only wall
-geometry, opening parameters, room labels, and the plot -- see its docstring.
+Note that `metrics.ir_identity` cannot police this: it compares only wall
+geometry, opening parameters, room labels and the plot, so a version of this
+adapter that drops annotations, columns, guides, entourage or every storey but
+the active one passes it 17,000/17,000. Live editing needs the round trip to
+hold for every field, which is what `design_round_trip_report` checks.
 
 ## Derived defaults, and the one place Project cannot represent the IR
 

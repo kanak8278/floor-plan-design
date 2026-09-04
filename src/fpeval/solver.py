@@ -128,6 +128,14 @@ class LayoutSpec:
     tree_samples: int = 400                   # topologies scored cheaply first
     seed: int = 0
     workers: int = 8
+    # Wall-clock budgets make the RESULT depend on machine speed and load: with
+    # 8 workers racing a `max_time_in_seconds` cutoff, the same code on the
+    # same input returns different plans. That is fine for an interactive
+    # solve and fatal for a ruler -- a pure refactor moved the paired suite
+    # from 42/100 to 43/100, which is noise reading as progress. Set this for
+    # measurement and every run is reproducible; leave it off in production,
+    # where finishing on time matters more than finishing identically.
+    deterministic: bool = False
     filler_min_m2: float = 3.0                # slack above this becomes a passage
     # Ceiling on the filler passage. Without one, ALL leftover area went into
     # circulation: a 40x60 3BHK produced a 30 m2 passage beside a 10 m2 living
@@ -1235,6 +1243,56 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
 
 # ---------------------------------------------------------------- driver
 
+def _budget(solver, spec, seconds: float) -> None:
+    """Give a CP-SAT solve its time budget, wall-clock or deterministic.
+
+    `max_deterministic_time` counts work units rather than seconds, so it stops
+    at the same point on a fast machine and a loaded one. It only buys
+    reproducibility with a single worker: eight workers race, and whichever
+    finds a solution first wins.
+
+    The conversion is not a physical constant -- deterministic units are not
+    seconds. 1.0 unit per second is calibrated to land in the same order of
+    magnitude as the wall-clock budget it replaces, which is all that is
+    needed for the suite to finish in a comparable time.
+    """
+    solver.parameters.random_seed = spec.seed
+    if spec.deterministic:
+        solver.parameters.max_deterministic_time = seconds
+        solver.parameters.num_workers = 1
+    else:
+        solver.parameters.max_time_in_seconds = seconds
+        solver.parameters.num_workers = spec.workers
+
+
+def _measure_rooms(reqs, rects, targets, alw_mm):
+    """Per-room clear area, deviation from target, and NBC shortfalls.
+
+    `Room.area` is the centreline rectangle so rooms tile the footprint
+    exactly; what a client is sold is the clear area inside the walls, which is
+    the rectangle less one wall thickness on each axis. Both are reported and
+    the provenance note says which is which.
+    """
+    areas, tmap, devs, devp, wh = {}, {}, {}, {}, {}
+    nbc_bad: list[str] = []
+    for i, r in enumerate(reqs):
+        x0, y0, x1, y1 = rects[i]
+        cw, ch = x1 - x0 - alw_mm, y1 - y0 - alw_mm
+        a = mm2_to_m2(cw * ch)
+        areas[r.id] = round(a, 3)
+        tmap[r.id] = round(targets[i], 3)
+        devs[r.id] = round(a - targets[i], 3)
+        devp[r.id] = round(100.0 * (a - targets[i]) / max(targets[i], 1e-9), 2)
+        wh[r.id] = (cw, ch)
+        if min(cw, ch) < r.nbc_min_width():
+            nbc_bad.append(f"{r.id}: clear width {min(cw, ch)} mm < "
+                           f"{r.nbc_min_width()} mm")
+        if a < r.nbc_min_area_m2() - 1e-9:
+            nbc_bad.append(f"{r.id}: area {a:.2f} m2 < "
+                           f"{r.nbc_min_area_m2():.2f} m2")
+    return areas, tmap, devs, devp, wh, nbc_bad
+
+
 def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
                  road_facing: str = "N", north_deg: float | None = None,
                  profile: BylawProfile | None = None,
@@ -1380,6 +1438,11 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
     # *feasible* solves count against the quota; infeasible ones are cheap.
     per = max(0.25, spec.time_limit_s / max(1, spec.candidates))
     deadline = t_start + spec.time_limit_s
+    # Deterministic mode budgets by topology count instead of by clock, so the
+    # number of attempts -- and therefore the answer -- is the same everywhere.
+    # 4x the candidate pool matches what a wall-clock run reaches in practice
+    # while still bounding the tranche expansion below.
+    _det_cap = 4 * max(1, spec.candidates)
     best: dict | None = None
     passed: list[tuple[float, float, dict]] = []
     solve_s, tried, n_feasible = 0.0, 0, 0
@@ -1394,9 +1457,11 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
         itself.
         """
         nonlocal best, solve_s, tried, n_feasible, all_infeasible, last_status
-        left = deadline - time.time()
+        left = (per if spec.deterministic else deadline - time.time())
         if tried and left <= 0.05:
             return "OUT_OF_TIME"
+        if spec.deterministic and tried >= _det_cap:
+            return "OUT_OF_TIME"        # a topology count, not a clock
         tried += 1
         nom, cutv = _nominal(nodes, root, rect_f, weights)
         labels, _ax = _label_rects(nodes, root)
@@ -1409,8 +1474,7 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
         mm = _build_model(nodes, root, reqs, targets, rect_mm, alw_mm, spec,
                           st.north_deg, doors, cutv, pins, gated=False)
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = min(per, max(left, 0.25))
-        solver.parameters.num_workers = spec.workers
+        _budget(solver, spec, min(per, max(left, 0.25)))
         t0 = time.time()
         status = solver.Solve(mm.m)
         solve_s += time.time() - t0
@@ -1497,7 +1561,8 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
     # preferences (hierarchy, Vastu, adjacency) push the few topologies that
     # actually fit down the list. So while time remains, keep taking tranches.
     while (best is None and all_infeasible and len(ranked_all) > len(cands)
-           and time.time() < deadline - 0.1):
+           and (tried < _det_cap if spec.deterministic
+                else time.time() < deadline - 0.1)):
         nxt = ranked_all[len(cands):len(cands) + max(1, spec.max_topologies)]
         cands = cands + nxt
         for _sc, nodes, root, order in nxt:
@@ -1535,23 +1600,8 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
     topo["cut_axis"] = best["cut_axis"]
     topo["grid_mm"] = GRID_MM
 
-    areas, tmap, devs, devp, wh = {}, {}, {}, {}, {}
-    nbc_bad: list[str] = []
-    for i, r in enumerate(reqs):
-        x0, y0, x1, y1 = best["rects"][i]
-        cw, ch = x1 - x0 - alw_mm, y1 - y0 - alw_mm
-        a = mm2_to_m2(cw * ch)
-        areas[r.id] = round(a, 3)
-        tmap[r.id] = round(targets[i], 3)
-        devs[r.id] = round(a - targets[i], 3)
-        devp[r.id] = round(100.0 * (a - targets[i]) / max(targets[i], 1e-9), 2)
-        wh[r.id] = (cw, ch)
-        if min(cw, ch) < r.nbc_min_width():
-            nbc_bad.append(f"{r.id}: clear width {min(cw, ch)} mm < "
-                           f"{r.nbc_min_width()} mm")
-        if a < r.nbc_min_area_m2() - 1e-9:
-            nbc_bad.append(f"{r.id}: area {a:.2f} m2 < "
-                           f"{r.nbc_min_area_m2():.2f} m2")
+    areas, tmap, devs, devp, wh, nbc_bad = _measure_rooms(
+        reqs, best["rects"], targets, alw_mm)
 
     prov = {"source": "cpsat-solver", "grid_mm": GRID_MM,
             "cp_sat_status": best["status"], "objective": best["obj"],
@@ -1941,8 +1991,7 @@ def _diagnose(cands, reqs, targets, rect_mm, alw_mm, spec, st, required,
         mm = _build_model(nodes, root, reqs, targets, rect_mm, alw_mm, spec,
                           st.north_deg, doors, cutv, pins, gated=True)
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = 2.0
-        solver.parameters.num_workers = spec.workers
+        _budget(solver, spec, 2.0)
         if solver.Solve(mm.m) != cp_model.INFEASIBLE:
             continue
         try:
@@ -1959,8 +2008,7 @@ def _diagnose(cands, reqs, targets, rect_mm, alw_mm, spec, st, required,
             keep = [v for gg in CONSTRAINT_GROUPS if gg != g
                     for v in mm.groups[gg]]
             probe = cp_model.CpSolver()
-            probe.parameters.max_time_in_seconds = 1.0
-            probe.parameters.num_workers = spec.workers
+            _budget(probe, spec, 1.0)
             m2 = mm.m.Clone()
             m2.ClearAssumptions()
             m2.AddAssumptions(keep)
