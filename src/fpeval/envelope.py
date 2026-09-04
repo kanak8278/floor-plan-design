@@ -95,6 +95,41 @@ class BylawProfile(Protocol):
 
 
 @dataclass
+class UnitInterior:
+    """An apartment unit has no plot, so it has no setbacks.
+
+    `DesignSpec.site_kind` says this in as many words -- "there is no plot, it
+    is one unit in a tower" -- and `check_bylaws` honours it by skipping the
+    plot rules for a unit. The SOLVE path did not: `compute_envelope` applies
+    whatever profile it is handed, and the only profile anyone handed it was
+    BBMP. So a unit was shrunk by setbacks that do not exist.
+
+    Measured: a 1150 sqft carpet unit came out at 865 sqft of rooms -- 75% of
+    what was quoted -- after front 1205, rear 803, left 1005 and right 1013 mm
+    were taken off a footprint that was already the inside of the flat.
+
+    FAR and coverage are unbounded here for the same reason: they are
+    properties of a plot, and the tower's compliance is not this unit's
+    problem. The unit is bounded by its own quoted area, which
+    `programme.resolve` has already applied.
+    """
+    name: str = "apartment-unit-interior"
+
+    def rules_for(self, *, plot_area_sqft: float,
+                  width_mm: int, depth_mm: int) -> PlotRules:
+        return PlotRules(
+            front_mm=0, rear_mm=0, side_left_mm=0, side_right_mm=0,
+            far=99.0, coverage=1.0, max_floors=1,
+            # Not `verified`: that flag means a checked bye-law citation, and
+            # "a unit has no setback of its own" is a consequence of it not
+            # being a site rather than a rule anyone published.
+            profile=self.name, band="unit interior", verified=False,
+            rule_text={"front": "an apartment unit has no setback of its own",
+                       "far": "FAR is the tower's, not the unit's",
+                       "coverage": "coverage is the tower's, not the unit's"})
+
+
+@dataclass
 class BBMPDefault:
     """Minimal BBMP residential stand-in. Two bands are verified figures.
 

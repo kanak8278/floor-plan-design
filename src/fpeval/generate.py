@@ -30,7 +30,7 @@ from typing import Any, Optional
 from .bridge import cap_service_targets, spec_to_programme
 from .bylaws import BENGALURU
 from .commands import Command
-from .envelope import CityProfileAdapter, compute_envelope
+from .envelope import CityProfileAdapter, UnitInterior, compute_envelope
 from .programme import Assumption, resolve, spec_to_brief, summarise
 from .rules import validate as validate_plan
 from .solver import LayoutSpec, solve_layout
@@ -134,6 +134,22 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
     # somewhere, and a bigger living room is the right place for it.
     warn += cap_service_targets(prog)
 
+    # An apartment unit is solved against its own interior, not against a
+    # plot: see `envelope.UnitInterior`. Measured before this, a 1150 sqft
+    # carpet unit lost a quarter of its area to setbacks it does not have.
+    unit = sp.site_kind == "apartment_unit"
+    profile = UnitInterior() if unit else PROFILE
+    # Only Bengaluru has real bye-law tables. `spec.CITY_PROFILES` lists
+    # thirteen cities and says of them that they "are estimates of the same
+    # shape and should be replaced by bylaws.py's real tables"; `bylaws
+    # .PROFILES` has exactly one key. `set_plot` accepts a city, so saying
+    # nothing here would make that parameter a lie.
+    if not unit and sp.city_profile not in ("bengaluru", "generic_in"):
+        warn.append(f"asked for {sp.city_profile} bye-laws and only Bengaluru "
+                    "has a verified table, so Bengaluru's setbacks, FAR and "
+                    "coverage were used -- treat the compliance figures as "
+                    "indicative for this city")
+
     facing = (sp.road_facing_side or "north")[0].upper()
     w_ft, d_ft = float(sp.plot_width_ft or 0), float(sp.plot_depth_ft or 0)
     ids = {r.id for r in prog}
@@ -141,7 +157,7 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
 
     t0 = time.time()
     try:
-        stmt = compute_envelope(w_ft, d_ft, road_facing=facing, profile=PROFILE,
+        stmt = compute_envelope(w_ft, d_ft, road_facing=facing, profile=profile,
                                 programme=prog)
         # The envelope decides how much floor there actually is after setbacks
         # and coverage, and hands back a per-room budget. Solving against the
@@ -159,7 +175,7 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
                        entrance_room=next((r.id for r in prog if r.is_entrance),
                                           prog[0].id),
                        time_limit_s=time_limit_s),
-            road_facing=facing, north_deg=sp.north_deg, profile=PROFILE,
+            road_facing=facing, north_deg=sp.north_deg, profile=profile,
             plan_id=f"{design.id}-solved")
     except Exception as exc:
         return BuildResult(status="error", assumptions=assumptions, warnings=warn,
@@ -195,7 +211,7 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
             forb2 = [(a, b) for a, b in forb if a in keep_ids and b in keep_ids]
             try:
                 stmt = compute_envelope(w_ft, d_ft, road_facing=facing,
-                                        profile=PROFILE, programme=kept)
+                                        profile=profile, programme=kept)
                 budgets = {b.id: b for b in (getattr(stmt, "budgets", None) or [])}
                 for r in kept:
                     b = budgets.get(r.id)
@@ -209,7 +225,7 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
                                    (r.id for r in kept if r.is_entrance),
                                    kept[0].id),
                                time_limit_s=time_limit_s),
-                    road_facing=facing, north_deg=sp.north_deg, profile=PROFILE,
+                    road_facing=facing, north_deg=sp.north_deg, profile=profile,
                     plan_id=f"{design.id}-solved")
                 prog = kept
             except Exception as exc:

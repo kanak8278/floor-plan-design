@@ -20,33 +20,18 @@ from typing import Any
 from . import roomtypes as rt
 from .bridge import truth_to_programme, spec_to_programme, SQFT_M2
 from .bylaws import BENGALURU
-from .envelope import compute_envelope, CityProfileAdapter
+from .envelope import compute_envelope, CityProfileAdapter, UnitInterior
 from .solver import solve_layout, LayoutSpec
 from .rules import validate as validate_plan
 
 PROFILE = CityProfileAdapter(BENGALURU)
 
 
-class _UnitProfile:
-    """A profile for an apartment unit: no setbacks, no coverage cap, no FAR.
-
-    A unit is not a site. There is nothing to set back from, no ground to cover,
-    and no floor-area ratio to respect -- those all belong to the tower, and its
-    developer already satisfied them. Handing the plot profile to a unit would
-    manufacture violations out of rules that do not apply.
-    """
-    name = "apartment_unit"
-
-    def rules_for(self, *, plot_area_sqft: float, width_mm: int,
-                  depth_mm: int):
-        from .envelope import PlotRules
-        return PlotRules(front_mm=0, rear_mm=0, side_left_mm=0, side_right_mm=0,
-                         far=99.0, coverage=1.0, max_floors=1,
-                         profile="apartment_unit", band="unit", verified=False,
-                         rule_text={"note": "unit bounded by its quoted area, not by a site"})
-
-
-_UNIT_PROFILE = _UnitProfile()
+# One definition, in `envelope` where the `BylawProfile` protocol lives.
+# `score` had its own `_UnitProfile` and `generate` grew a second one the day
+# the agent path learned about apartment units -- two classes stating the same
+# domain fact, which is how they come to disagree.
+_UNIT_PROFILE = UnitInterior()
 
 
 @dataclass

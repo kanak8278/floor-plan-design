@@ -53,9 +53,22 @@ DEFAULT_CITY = "bengaluru"
 # An apartment unit has no plot, so a footprint has to be derived from the
 # quoted carpet area. Measured Bengaluru builder units run close to 5:4.
 UNIT_ASPECT = 1.25
-# Carpet is the sellable inside; the footprint the solver lays out includes
-# walls and circulation. Measured across the ResPlan-derived unit set.
-CARPET_TO_FOOTPRINT = 1.18
+# Carpet is the sellable inside; the footprint the solver lays out is larger.
+#
+# Measured against our OWN output rather than borrowed, because the quantity
+# being predicted is what this solver produces. Our rooms are FACES of the
+# wall graph, so a room polygon runs to the wall CENTRELINE and already
+# contains half of every wall around it -- the sum of room areas is therefore
+# close to the footprint, not to RERA carpet, and inflating by a
+# carpet-to-builtup ratio double-counts the walls.
+#
+# The old 1.18 came from the ResPlan-derived unit set, which `brief.py`
+# documents as a corpus whose "signals point away from India" -- and it
+# overshot: a 1150 sqft unit solved to 1298 sqft of rooms, 113% of what was
+# quoted. Calibrated on this solver: footprint 1355 sqft produced 1298 sqft of
+# faces, a ratio of 0.958, so the factor that lands on the quoted figure is
+# 1/0.958 = 1.044.
+CARPET_TO_FOOTPRINT = 1.04
 
 
 @dataclass(frozen=True)
@@ -212,6 +225,9 @@ def spec_to_brief(spec: DesignSpec) -> dict:
             "place_in": {},
             "vastu_zones": zones,
             "attached_bath": sum(1 for r in spec.rooms if r.attached_bath) or None,
+            # Drives DESIGN.WET_ROOMS_SPLIT's severity. `set_wet_grouping` has
+            # been in the vocabulary the whole time with nothing reading it.
+            "wet_grouping": spec.wet_grouping,
         },
         "site_kind": spec.site_kind,
         "plot_area_sqft": area,
