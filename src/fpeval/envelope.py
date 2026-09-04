@@ -256,10 +256,27 @@ class RoomReq:
     vastu_zone: str | None = None         # None -> VASTU_DEFAULT_ZONE
     is_entrance: bool = False
 
+    def _nbc_row(self) -> tuple[int, float]:
+        """The NBC row for this category, inherited by subtypes.
+
+        `NBC_MIN` is keyed by base category, so a `master_bedroom` used to miss
+        every key and fall through to the `(900, 1.0)` default -- the row meant
+        for unnamed filler space. Every master bedroom in every plan was
+        therefore budgeted against a 1 m2 minimum and a 900 mm minimum width
+        instead of NBC's 7.5 m2 and 2400 mm, and the most important room in an
+        Indian plan was the one room with no floor under it.
+        """
+        from . import roomtypes as rt
+        for key in rt.counts_as(self.category):
+            row = NBC_MIN.get(key)
+            if row is not None:
+                return row
+        return (900, 1.0)
+
     def nbc_min_width(self) -> int:
         if self.min_width_mm is not None:
             return self.min_width_mm
-        return NBC_MIN.get(self.category, (900, 1.0))[0]
+        return self._nbc_row()[0]
 
     def nbc_min_area_m2(self) -> float:
         """The binding area minimum: NBC, or what the contents need.
@@ -273,7 +290,7 @@ class RoomReq:
         if self.min_area_m2 is not None:
             return self.min_area_m2
         from .standards import CONTENTS_FLOOR_M2
-        return max(NBC_MIN.get(self.category, (900, 1.0))[1],
+        return max(self._nbc_row()[1],
                    CONTENTS_FLOOR_M2.get(self.category, 0.0))
 
     def zone(self) -> str | None:
