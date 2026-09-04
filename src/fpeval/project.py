@@ -53,6 +53,7 @@ SIDECAR_VERSION = 2
 # Kept as explicit fallbacks for ResPlan's six labels; the canonical source is
 # fpeval.roomtypes, consulted first so a new room type needs one edit, not three.
 from . import roomtypes as _rt
+from .spec import DesignSpec
 
 CATEGORY_TO_ROOMTYPE = {
     "balcony": "outdoor", "storage": "utility",
@@ -378,6 +379,11 @@ def to_project(x: Plan | Design, name: str | None = None) -> dict[str, Any]:
             "version": SIDECAR_VERSION,
             "design_id": design.id,
             "provenance": design.provenance,
+            # The brief. Project JSON has no concept of a programme, so it
+            # rides in the sidecar or it does not survive a save -- and the
+            # store round-trips every design through Project JSON on every
+            # request, so "or it does not survive" is not hypothetical.
+            **({"spec": design.spec.to_dict()} if design.spec is not None else {}),
             "floors": {_floor_id_of(st): _floor_sidecar(st) for st in storeys},
             # -- legacy flat keys, for readers pinned to sidecar version 1 --
             **_legacy_flat_sidecar(active),
@@ -666,6 +672,8 @@ def design_from_project(proj: dict[str, Any]) -> Design:
         created_at=_norm(str(proj.get("createdAt") or ""), EPOCH),
         updated_at=_norm(str(proj.get("updatedAt") or ""), EPOCH),
         provenance=dict(side.get("provenance", {})),
+        spec=(DesignSpec.from_dict(side["spec"])
+              if isinstance(side.get("spec"), dict) else None),
     )
 
 

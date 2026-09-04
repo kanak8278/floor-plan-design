@@ -26,6 +26,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Literal, Optional
 import math
 
+from .spec import DesignSpec
+
 Kind = Literal["door", "window", "front_door"]
 
 # OpenPlan3D's own vocabularies, mirrored so a Project round-trip is lossless.
@@ -328,6 +330,24 @@ class Design:
     created_at: str = ""
     updated_at: str = ""
     provenance: dict = field(default_factory=dict)
+    # The brief the geometry was solved from, and the thing the agent edits.
+    #
+    # It lives on `Design` rather than on `Document` so that replaying the
+    # command log reproduces the programme as exactly as it reproduces the
+    # walls. A spec held beside the log instead of inside the replayed state
+    # would make `undo` after "make the master bigger" silently unrecoverable.
+    spec: Optional[DesignSpec] = None
+
+    def ensure_spec(self) -> DesignSpec:
+        """The spec, created empty on first use.
+
+        Programme commands are the first thing an agent reaches for on a blank
+        document, so requiring a spec to exist beforehand would just move the
+        refusal one step earlier.
+        """
+        if self.spec is None:
+            self.spec = DesignSpec()
+        return self.spec
 
     @property
     def active(self) -> Optional[Plan]:

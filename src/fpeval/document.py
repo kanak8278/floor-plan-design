@@ -77,10 +77,24 @@ class LogEntry:
     command: Command
     event: Event
     hash_after: str
+    # Out-of-band input the command needed, kept so replay does not have to
+    # recompute it. Only `replace_storey` uses one today, and it is a solved
+    # `Plan`: CP-SAT under a wall-clock limit is not reproducible across
+    # machines or load, so re-solving during replay would produce a *different*
+    # floor. Before this field, `at_seq` replayed `replace_storey` with no
+    # payload, the applier refused, and the failure was swallowed -- one undo
+    # after a solve silently discarded the solved storey.
+    payload: Any = None
 
     def to_dict(self) -> dict:
+        # The payload is deliberately not serialised. It is geometry, and the
+        # design blob beside the log already holds the geometry; writing it
+        # twice would double the size of every stored document. The cost is
+        # that undo across a process restart cannot replay a solve, which
+        # `verify_log` reports rather than hides.
         return {"seq": self.seq, "command": self.command.to_dict(),
-                "event": self.event.to_dict(), "hash_after": self.hash_after}
+                "event": self.event.to_dict(), "hash_after": self.hash_after,
+                "has_payload": self.payload is not None}
 
 
 @dataclass
@@ -140,7 +154,8 @@ class Document:
         res.event.at = _now()
         self.design = res.design
         self.log.append(LogEntry(seq=seq, command=cmd, event=res.event,
-                                 hash_after=state_hash(res.design)))
+                                 hash_after=state_hash(res.design),
+                                 payload=payload))
         if seq % SNAPSHOT_EVERY == 0:
             self.snapshots.append((seq, copy.deepcopy(res.design)))
         return res
@@ -185,7 +200,8 @@ class Document:
         for entry in self.log:
             if entry.seq <= best_seq or entry.seq > seq:
                 continue
-            res = apply_command(design, entry.command, seq=entry.seq)
+            res = apply_command(design, entry.command, payload=entry.payload,
+                                seq=entry.seq)
             if res.ok:
                 design = res.design
         return design
@@ -217,7 +233,8 @@ class Document:
         problems: list[str] = []
         design = copy.deepcopy(self.base) if self.base else Design(id="")
         for entry in self.log:
-            res = apply_command(design, entry.command, seq=entry.seq)
+            res = apply_command(design, entry.command, payload=entry.payload,
+                                seq=entry.seq)
             if not res.ok:
                 problems.append(f"seq {entry.seq} ({entry.command.op}) no "
                                 f"longer applies: {res.errors[0]}")
