@@ -2,7 +2,14 @@
 name = "fpeval"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["shapely>=2.0", "numpy>=1.24"]
+dependencies = ["shapely>=2.0", "numpy>=1.24", "ortools>=9.8",
+                "anthropic>=0.40",
+                # Rasterises the plan SVG so the agent can be shown the
+                # drawing rather than a description of it. Chosen over
+                # cairosvg because cairo needs a system library that is
+                # not present here, and over playwright because a browser
+                # is a lot of machinery for one PNG.
+                "resvg-py>=0.1"]
 
 [build-system]
 requires = ["hatchling"]

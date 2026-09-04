@@ -29,6 +29,8 @@ against `source="agent"` rather than trusting the prompt.
 """
 from __future__ import annotations
 
+import base64
+
 import json
 import time
 from dataclasses import dataclass, field
@@ -41,6 +43,7 @@ from .document import Document, feed
 from .ir import Design, Plan
 from . import roomtypes as _rt
 from .principles import prompt_block
+from .spatial import plan_png, spatial_block
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 32000
@@ -82,6 +85,25 @@ geometry. A command carrying a coordinate is rejected before it runs.
 
 Available commands:
 {catalogue}
+
+## Reading the plan
+
+You are shown the plan as a drawing, and given the same floor in text. Look
+at the drawing first -- it is what the person you are talking to is looking
+at, and it is the only place the arrangement is visible as a whole. The room
+and wall lists give exact sizes and the ids that commands name. The room
+positions list gives each room's compass zone, which of its walls are
+exterior, what it has a door to, and what it merely shares a wall with; trust
+that list over your reading of the picture for anything you have to be precise
+about.
+
+That last distinction is the one to act on. "Shares a wall but no door" is one
+`add_door` away from fixed. "NO exterior wall" means the room can never have a
+window, so a ventilation finding against it needs the layout changed, not an
+opening added.
+
+Do not guess a compass direction. `move_wall_parallel` and `set_room_zone`
+both take one, and the room positions list tells you the answer.
 
 ## What makes a plan good
 
@@ -298,12 +320,26 @@ def turn_context(doc: Document, last_seen_seq: int,
                  findings: Sequence[Any] = ()) -> str:
     """The per-turn operator message: state, then what changed since.
 
+    `plan_digest` carries no coordinates -- walls are
+    "vertical 14.40 m" with no position and openings are a fraction along a
+    wall id -- so before this the model was reasoning about arrangement from a
+    bill of quantities, and every spatial judgement it made was a guess.
+
     Sent as a `{"role": "system"}` entry inside `messages` rather than by
     editing the top-level system prompt, which would invalidate the cached
     prefix on every turn.
     """
     parts = ["CURRENT PLAN (authoritative -- this is the document, not a claim "
-             "about it)", plan_digest(doc.design), "", brief_digest(doc.design)]
+             "about it)", plan_digest(doc.design)]
+    # Where things actually are. `plan_digest` carries no coordinates at all --
+    # walls are "vertical 14.40 m" with no position, openings are a fraction
+    # along a wall id -- so every spatial judgement the model made was a guess,
+    # including the compass direction that `move_wall_parallel` requires. This
+    # is the half it was missing.
+    st = doc.design.active
+    if st is not None and st.rooms:
+        parts += ["", spatial_block(st)]
+    parts += ["", brief_digest(doc.design)]
     if _stale(doc):
         parts += ["", "The brief has changed since the geometry was solved. "
                       "The plan above is the OLD layout. Call `solve_layout` "
@@ -319,7 +355,37 @@ def turn_context(doc: Document, last_seen_seq: int,
         parts += [f"- [{getattr(f, 'severity', '?')}] "
                   f"{getattr(f, 'rule_id', '')}: {getattr(f, 'message', f)}"
                   for f in findings[:25]]
+
     return "\n".join(parts)
+
+
+def plan_image_message(plan: Optional[Plan]) -> Optional[dict]:
+    """The drawing, as its own user-role message.
+
+    It cannot go in the operator message with the rest of the state: the API
+    rejects an image there -- "role 'system' supports text, tool_addition, and
+    tool_removal blocks only". That turns out to be the right split anyway.
+    The text state is authoritative and lives in the operator channel where a
+    user message cannot forge it; the picture is a *rendering* of that state,
+    so a lower-authority channel is where it belongs, and the prompt already
+    tells the model to trust the text over its reading of the image wherever
+    precision matters.
+    """
+    png = plan_png(plan) if plan is not None else None
+    if png is None:
+        return None
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text",
+             "text": "The current plan as drawn -- this is what the person "
+                     "you are talking to is looking at. The north arrow is on "
+                     "the sheet."},
+            {"type": "image",
+             "source": {"type": "base64", "media_type": "image/png",
+                        "data": base64.standard_b64encode(png).decode("ascii")}},
+        ],
+    }
 
 
 # --------------------------------------------------------------------------
@@ -624,6 +690,13 @@ def run_turn(
     transcript.append({"role": "user", "content": message})
     # Operator channel: state cannot be forged from a user message, and the
     # cached prefix survives.
+    # The drawing first, then the state. The operator message has to be last:
+    # "role 'system' must precede an 'assistant' message or end the array".
+    # Which also puts the authoritative text after the picture, so where the
+    # two disagree the model reads the correction second.
+    img = plan_image_message(doc.design.active)
+    if img is not None:
+        transcript.append(img)
     transcript.append({
         "role": "system",
         "content": turn_context(doc, last_seen_seq, ctx.findings_fn()),
@@ -777,6 +850,13 @@ def stream_turn(
     }]
 
     transcript.append({"role": "user", "content": message})
+    # The drawing first, then the state. The operator message has to be last:
+    # "role 'system' must precede an 'assistant' message or end the array".
+    # Which also puts the authoritative text after the picture, so where the
+    # two disagree the model reads the correction second.
+    img = plan_image_message(doc.design.active)
+    if img is not None:
+        transcript.append(img)
     transcript.append({
         "role": "system",
         "content": turn_context(doc, last_seen_seq, ctx.findings_fn()),

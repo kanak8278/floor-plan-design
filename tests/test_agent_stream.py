@@ -304,9 +304,25 @@ def test_plan_state_goes_in_as_an_operator_message():
           [(text_blocks("6x4"), final([NS(type="text", text="6x4")]))])
     roles = [m["role"] for m in transcript]
     assert roles[0] == "user"
-    assert roles[1] == "system"
-    assert "CURRENT PLAN" in transcript[1]["content"]
-    assert "6.00x4.00 m" in transcript[1]["content"]
+    # The drawing rides between the ask and the state, as its own user message:
+    # the API rejects an image in the operator channel ("role 'system' supports
+    # text, tool_addition, and tool_removal blocks only") and requires the
+    # system message to end the array. That ordering is also the right one --
+    # the authoritative text is read after the picture.
+    op = next(i for i, m in enumerate(transcript) if m["role"] == "system")
+    assert "CURRENT PLAN" in transcript[op]["content"]
+    assert "6.00x4.00 m" in transcript[op]["content"]
+    # The API rule is "role 'system' must precede an 'assistant' message or end
+    # the array". By the time drain() returns, the assistant reply has been
+    # appended, so the invariant to assert is the first half of that.
+    assert (op == len(transcript) - 1
+            or transcript[op + 1]["role"] == "assistant"), (
+        "the operator message must end the array or be followed by the "
+        "assistant turn")
+    imgs = [m for m in transcript[:op]
+            if m["role"] == "user" and isinstance(m["content"], list)
+            and any(b.get("type") == "image" for b in m["content"])]
+    assert len(imgs) == 1, "exactly one plan drawing per turn"
 
 
 def test_thinking_is_requested_as_a_summary():
@@ -350,8 +366,11 @@ def test_tool_results_go_back_in_one_user_message():
                     tool_use("get_findings", {}, "tu_b")])),
         (text_blocks("ok"), final([NS(type="text", text="ok")])),
     ])
+    # The plan drawing is also a list-content user message, so select on the
+    # block type rather than on the shape of the message.
     results = [m for m in transcript
-               if m["role"] == "user" and isinstance(m["content"], list)]
+               if m["role"] == "user" and isinstance(m["content"], list)
+               and any(b.get("type") == "tool_result" for b in m["content"])]
     assert len(results) == 1
     assert [b["tool_use_id"] for b in results[0]["content"]] == ["tu_a", "tu_b"]
 
