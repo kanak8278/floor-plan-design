@@ -105,7 +105,7 @@ PRINCIPLES: tuple[Principle, ...] = (
         "Stack and group wet rooms. Kitchen, bathrooms and utility should share "
         "walls or a plumbing line, and on a multi-storey plan sit above one "
         "another.",
-        ("DESIGN.KITCHEN_FAR_FROM_PARKING",)),
+        ("DESIGN.WET_ROOMS_SPLIT", "DESIGN.KITCHEN_FAR_FROM_PARKING")),
     Principle(
         "P.ONE_KITCHEN",
         "A single dwelling has one kitchen. Multiple kitchens are correct only "

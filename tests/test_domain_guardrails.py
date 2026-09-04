@@ -674,3 +674,120 @@ def test_a_centre_zone_room_solves_end_to_end():
                                   time_limit_s=8.0),
                        road_facing="E", profile=P, plan_id="centre")
     assert res.plan is not None, res.status
+
+
+# ---------------------------------------------------------------------------
+# an apartment unit is not a plot
+# ---------------------------------------------------------------------------
+
+def test_an_apartment_unit_is_not_shrunk_by_setbacks_it_does_not_have():
+    """`DesignSpec.site_kind` says a unit "is one unit in a tower" with no
+    plot, and `check_bylaws` honours that by skipping the plot rules. The
+    SOLVE path did not: `compute_envelope` applies whatever profile it is
+    handed and the only one anyone handed it was BBMP.
+
+    Measured before the fix: a 1150 sqft carpet unit produced 865 sqft of
+    rooms -- 75% of what was quoted -- after front 1205, rear 803, left 1005
+    and right 1013 mm came off a footprint that was already the inside of the
+    flat.
+    """
+    from fpeval.generate import build
+    for quoted in (850, 1150, 1600):
+        doc = Document.empty(f"u{quoted}", name="unit")
+        assert doc.apply(agent("set_plot", site_kind="apartment_unit",
+                               carpet_sqft=quoted)).ok
+        assert doc.apply(agent("use_standard_programme", bedrooms=3)).ok
+        r = build(doc, time_limit_s=12.0)
+        assert r.ok, (quoted, r.status, r.errors)
+        st = doc.design.active
+        got = sum(x.area_m2 for x in st.rooms) * 10.7639
+        assert 0.93 <= got / quoted <= 1.07, (
+            f"a {quoted} sqft unit solved to {got:.0f} sqft "
+            f"({100 * got / quoted:.0f}% of quoted)")
+        assert max(st.site.setbacks_mm.values() or [0]) < 100, (
+            f"a unit was given setbacks: {st.site.setbacks_mm}")
+
+
+def test_a_city_without_a_verified_byelaw_table_is_reported_not_faked():
+    """`set_plot` accepts a city and only Bengaluru has a real table --
+    `bylaws.PROFILES` has exactly one key, and `spec.CITY_PROFILES` says of
+    its thirteen entries that they "are estimates ... and should be replaced
+    by bylaws.py's real tables". Applying Bengaluru silently would make the
+    parameter a lie."""
+    from fpeval.generate import build
+    doc = Document.empty("chn", name="t")
+    assert doc.apply(agent("set_plot", width_ft=30, depth_ft=40,
+                           road_facing="north", city="chennai")).ok
+    assert doc.apply(agent("use_standard_programme", bedrooms=2)).ok
+    r = build(doc, time_limit_s=10.0)
+    assert any("chennai" in w and "Bengaluru" in w for w in r.warnings), r.warnings
+
+
+def test_the_solve_path_reads_the_brief_fields_that_drive_it():
+    """An audit, as a test. Four fields were found this session that something
+    writes and nothing on the solve path reads -- `max_sqft`, `attached_bath`,
+    the adjacency list and `optional` -- each discovered one bug at a time.
+
+    This pins the ones now wired so they cannot quietly come loose again. It
+    deliberately does NOT assert the whole dataclass: `budget_band`, `family`
+    and `unit_label` are provenance and have no business in the solver.
+    """
+    import re, pathlib
+    solve_path = "".join(
+        (pathlib.Path("src/fpeval") / f).read_text()
+        for f in ("bridge.py", "envelope.py", "solver.py", "generate.py",
+                  "programme.py"))
+    for field in ("optional", "site_kind", "city_profile", "unit_area",
+                  "adjacency", "preferred_zone", "max_aspect", "min_sqft"):
+        assert re.search(rf"\.{field}\b", solve_path), (
+            f"{field!r} is a brief field the solve path no longer reads")
+
+
+def test_wet_rooms_in_three_groups_are_flagged():
+    """`P.WET_GROUPING` was a principle in the agent's prompt whose
+    `enforced_by` named DESIGN.KITCHEN_FAR_FROM_PARKING -- a rule about
+    parking. So "stack and group wet rooms" was stated, `wet_grouping` was a
+    brief field, `set_wet_grouping` was a command, and nothing enforced it.
+
+    Found by the visual review, which reported `wet-rooms-split` on 2 of 6
+    plans with no rule id to match.
+
+    Calibrated at three groups, not two. Vision flagged both of those plans at
+    TWO groups -- kitchen at one end, bathrooms at the other -- and that is
+    ordinary in an Indian plot house: one stack for the kitchen side, one for
+    the bathrooms. Adopting the stricter view because a model held it would
+    repeat the ResPlan en-suite mistake: importing a norm no Indian source
+    supports. Three groups means the plan is paying for a third stack.
+    """
+    got = sense(
+        [("Kitchen", "kitchen", (0, 0, 3000, 3000)),
+         ("Living", "living", (3000, 0, 9000, 3000)),
+         ("Bathroom 1", "bathroom", (9000, 0, 12000, 3000)),
+         ("Bedroom 1", "bedroom", (0, 3000, 4500, 7000)),
+         ("Utility", "utility", (4500, 3000, 7500, 7000)),
+         ("Bedroom 2", "bedroom", (7500, 3000, 12000, 7000))],
+        [(1500, 0, "front_door", 1050),
+         (3000, 1500, "door", 900),        # Kitchen  -> Living
+         (9000, 1500, "door", 900),        # Living   -> Bathroom 1
+         (2000, 3000, "door", 900),        # Living   -> Bedroom 1
+         (6000, 3000, "door", 900),        # Living   -> Utility
+         (10000, 3000, "door", 900)])      # Living   -> Bedroom 2
+    assert "DESIGN.WET_ROOMS_SPLIT" in got, sorted(got)
+    f = got["DESIGN.WET_ROOMS_SPLIT"]
+    assert f.measured >= 3, f.detail
+    assert f.severity == "warn", "advisory unless the brief says required"
+
+
+def test_wet_grouping_required_makes_it_an_error():
+    """The brief field finally means something."""
+    rects = [("Kitchen", "kitchen", (0, 0, 3000, 3000)),
+             ("Living", "living", (3000, 0, 9000, 3000)),
+             ("Bathroom 1", "bathroom", (9000, 0, 12000, 3000)),
+             ("Bedroom 1", "bedroom", (0, 3000, 4500, 7000)),
+             ("Utility", "utility", (4500, 3000, 7500, 7000)),
+             ("Bedroom 2", "bedroom", (7500, 3000, 12000, 7000))]
+    doors = [(1500, 0, "front_door", 1050), (3000, 1500, "door", 900),
+             (9000, 1500, "door", 900), (2000, 3000, "door", 900),
+             (6000, 3000, "door", 900), (10000, 3000, "door", 900)]
+    got = sense(rects, doors, {"requirements": {"wet_grouping": "required"}})
+    assert got["DESIGN.WET_ROOMS_SPLIT"].severity == "error"

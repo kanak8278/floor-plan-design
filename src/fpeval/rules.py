@@ -1300,6 +1300,40 @@ def _scenario_for(ctx: _Ctx):
 # "passage: filler hall/corridor absorbing leftover area".
 PASSAGE_IS_A_ROOM_MM = 2100
 
+# Rooms that need a plumbing line.
+_WET_ROOMS = {"kitchen", "bathroom", "wc", "toilet", "powder", "utility",
+              "handwash"}
+# One stack for the kitchen side, one for the bathrooms, is ordinary. A third
+# is a cost the plan is paying for its own arrangement.
+WET_GROUPS_MAX = 2
+
+
+def _edge_share(ctx: _Ctx, a: str, b: str) -> bool:
+    """Do two rooms share enough boundary for one stack to serve both?
+
+    A plain buffered `intersects` is not enough: it returns True for rooms
+    meeting at a single corner, where the buffered overlap is only a
+    tol-by-tol square. Two rooms diagonally opposite a junction do not share a
+    wall and cannot share a drain. So the shared run has to be long enough for
+    a pipe to actually run along -- the same corner-kiss trap
+    `spatial._edge_overlap` documents.
+    """
+    pa, pb = ctx.polys.get(a), ctx.polys.get(b)
+    if pa is None or pb is None:
+        return False
+    inter = pa.buffer(TOUCH_TOL_MM).intersection(pb)
+    if inter.is_empty:
+        return False
+    x0, y0, x1, y1 = inter.bounds
+    return max(x1 - x0, y1 - y0) >= STACK_RUN_MIN_MM
+
+
+# Half a wall plus slop: rooms are centreline faces, so two rooms sharing a
+# 115 mm partition have polygons about that far apart.
+TOUCH_TOL_MM = 150
+# A shared run shorter than this is a corner, not a wall a pipe can follow.
+STACK_RUN_MIN_MM = 600
+
 # Service rooms a bathroom must not hide behind.
 _SERVICE_ONLY = {"utility", "store", "storage", "kitchen", "shaft"}
 # What counts as one public zone.
@@ -1455,6 +1489,50 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
                 f"({', '.join(name[i] for i in pub)}); living, dining and the "
                 "hall should read as one continuous space",
                 pub[:4], float(clusters), 1.0))
+
+    # ---- wet rooms in more groups than one plumbing line can serve -----
+    # `principles.P.WET_GROUPING` has always said "stack and group wet rooms.
+    # Kitchen, bathrooms and utility should share walls or a plumbing line",
+    # and its `enforced_by` named DESIGN.KITCHEN_FAR_FROM_PARKING -- a rule
+    # about parking. So the principle went into the agent's prompt, the
+    # `wet_grouping` field went into the brief, `set_wet_grouping` went into
+    # the command vocabulary, and nothing enforced any of it.
+    #
+    # Found by the visual review: it reported `wet-rooms-split` on 2 of 6
+    # plans and the engine had no rule id to match it against. That is the one
+    # job a paid, unrepeatable checker can honestly hold -- finding the rules
+    # nobody wrote.
+    #
+    # Two groups is normal and not a defect: one line serving the kitchen and
+    # utility, another serving the bathrooms. Three means the plan is paying
+    # for a third stack.
+    wet = [i for i in area if cat.get(i, "") in _WET_ROOMS]
+    if len(wet) > 2:
+        groups, seen = 0, set()
+        for i in wet:
+            if i in seen:
+                continue
+            groups += 1
+            stack, grp = [i], set()
+            while stack:
+                cur = stack.pop()
+                if cur in grp:
+                    continue
+                grp.add(cur)
+                for o in wet:
+                    if o not in grp and _edge_share(ctx, cur, o):
+                        stack.append(o)
+            seen |= grp
+        if groups > WET_GROUPS_MAX:
+            want = str(req.get("wet_grouping") or "preferred")
+            out.append(Finding(
+                "DESIGN.WET_ROOMS_SPLIT",
+                "error" if want == "required" else "warn",
+                0.8 if want == "required" else 0.5,
+                f"the {len(wet)} wet rooms sit in {groups} separate groups "
+                f"({', '.join(name[i] for i in wet)}); each group needs its "
+                "own plumbing stack",
+                wet[:4], float(groups), float(WET_GROUPS_MAX)))
 
     # DESIGN.BEDROOM_FAR_FROM_BATH was here and is deliberately gone. It
     # warned when a bedroom was more than two doors from a bathroom, fired on
