@@ -93,17 +93,77 @@ def test_the_unimplemented_list_is_exactly_the_programme_layer():
 
 
 def test_an_unimplemented_command_fails_loudly():
-    """The agent has to be able to tell the user. It does: observed live,
-    "set_room_zone is recognised by the applier but not implemented, so
-    nothing changed and the document is still at seq 0"."""
+    """A vocabulary entry with no handler must refuse, not silently no-op.
+
+    This used to be asserted against `set_room_zone`, which really was
+    unimplemented -- the whole programme layer was. It is implemented now, so
+    the test asserts the property rather than the example: `KNOWN_UNIMPLEMENTED`
+    is the list of deliberate exceptions, it is empty, and anything on it would
+    still fail loudly. Keeping the test pointed at a real op would have meant
+    deleting it the day the op landed, and with it the guarantee.
+    """
+    from fpeval.apply import KNOWN_UNIMPLEMENTED, unimplemented
+    assert unimplemented() == [], (
+        f"these commands are offered to the agent and cannot run: "
+        f"{unimplemented()}")
+    assert KNOWN_UNIMPLEMENTED == frozenset()
+
+    doc = box_doc()
+    before = doc.hash
+    res = doc.apply(Command(op="no_such_command", source="agent", params={}))
+    assert not res.ok
+    assert "unknown command" in " ".join(res.errors)
+    assert doc.hash == before
+
+
+def test_a_programme_command_names_rooms_in_the_brief_not_the_plan():
+    """The two room collections are different, and conflating them is what
+    made every spec op unusable.
+
+    `box_doc()` has geometry and no brief. A programme command naming one of
+    its *drawn* rooms must refuse -- that room is not in the brief -- and the
+    refusal has to say where to look, because "no room r0" reads like the room
+    does not exist at all.
+    """
     doc = box_doc()
     rid = doc.design.active.rooms[0].id
-    before = doc.hash
     res = doc.apply(Command(op="set_room_zone", source="agent",
                             params={"room_id": rid, "preferred_zone": "NE"}))
     assert not res.ok
-    assert "not implemented" in " ".join(res.errors)
-    assert doc.hash == before
+    assert "in the brief" in " ".join(res.errors)
+
+    # And once the brief exists, the same command lands.
+    doc.apply(Command(op="use_standard_programme", source="agent",
+                      params={"bedrooms": 2}, description="2BHK"))
+    res = doc.apply(Command(op="set_room_zone", source="agent",
+                            params={"room_id": "bed1",
+                                    "preferred_zone": "south_west"},
+                            description="master to the SW"))
+    assert res.ok, res.errors
+    assert doc.design.spec.room("bed1").preferred_zone == "SW"
+
+
+def test_add_room_creates_rather_than_referencing():
+    """`add_room` on a room that does not exist is the point of it.
+
+    The referential check treated every `room_id` as a reference to something
+    already there, so `add_room room_id='living'` came back "no room 'living'
+    on this storey" -- and every attempt to build a brief from scratch failed
+    on its first command.
+    """
+    doc = box_doc()
+    res = doc.apply(Command(op="add_room", source="agent",
+                            params={"room_id": "living", "category": "living"},
+                            description="add a hall"))
+    assert res.ok, res.errors
+    assert [r.id for r in doc.design.spec.rooms] == ["living"]
+
+    # Twice is a mistake, and says so.
+    res = doc.apply(Command(op="add_room", source="agent",
+                            params={"room_id": "living", "category": "living"},
+                            description="again"))
+    assert not res.ok
+    assert "already in the brief" in " ".join(res.errors)
 
 
 def test_replay_reproduces_the_document():

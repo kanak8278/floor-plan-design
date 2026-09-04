@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .commands import (
-    Command, Event, TABLE, render_summary, refs_of, POSITION_WORDS,
+    Command, Event, TABLE, render_summary, refs_of, POSITION_WORDS, SPEC_OPS,
 )
 from .ir import (
     Design, Plan, Wall, Opening, Room, Site, Stair, Furniture, Column, P,
@@ -32,6 +32,9 @@ from .ir import (
     EntourageItem, BackgroundImage,
 )
 from .faces import rederive_rooms
+from .spec import (
+    Adjacency, EntranceSpec, RoomSpec, ROOM_CATEGORIES, bhk_programme,
+)
 
 # Commands after which the room faces have to be recomputed.
 WALL_TOUCHING = frozenset({
@@ -91,7 +94,10 @@ def apply_command(design: Design, cmd: Command, *,
     before = design
     after = copy.deepcopy(design)
     storey = after.storey(cmd.storey_id) if cmd.storey_id else after.active
-    if storey is None and cmd.op not in ("add_storey", "rename_design"):
+    # A programme command edits the brief, which belongs to the design and not
+    # to any one floor, so it must not be gated on a storey existing.
+    if storey is None and cmd.op not in ("add_storey", "rename_design") \
+            and cmd.op not in SPEC_OPS:
         return ApplyResult(design, None,
                            [f"{cmd.op}: no storey {cmd.storey_id or '(active)'}"])
 
@@ -831,6 +837,338 @@ def _h_replace_storey(d: Design, st: Optional[Plan], p: dict, payload) -> None:
     d.storeys[d.storeys.index(old)] = fresh
 
 
+# --------------------------------------------------------------------------
+# the programme -- the brief the solver reads, as opposed to drawn geometry
+# --------------------------------------------------------------------------
+#
+# These were in the vocabulary, offered to the agent, and validated cleanly
+# before failing at apply time with "recognised but not implemented" -- a
+# third of what the model was told it could do. They write to `design.spec`
+# and touch no geometry: nothing here moves a wall. The layout changes when
+# the caller re-solves, which is deliberate. A brief edit that silently
+# reflowed the whole floor would make "make the master a bit bigger"
+# unreviewable.
+
+def _room(sp, rid: str) -> RoomSpec:
+    """The brief entry, or an ApplyError naming what is actually there.
+
+    `_check_spec_refs` has already run, so reaching the raise means the two
+    disagree -- worth failing loudly rather than writing to a fresh room the
+    user never asked for.
+    """
+    for r in sp.rooms:
+        if r.id == rid:
+            return r
+    raise ApplyError(f"no room {rid!r} in the brief")
+
+
+def _h_add_room(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    sp = d.ensure_spec()
+    cat = str(p["category"])
+    info = ROOM_CATEGORIES.get(cat)
+    r = RoomSpec(id=str(p["room_id"]), category=cat,
+                 name=str(p.get("name") or "") or str(p["room_id"]).replace("_", " ").title())
+    # Sizes default from the category table rather than being left None: the
+    # solver treats them as soft bounds, and a room with no bounds at all
+    # competes for area against rooms that have them and loses.
+    r.min_sqft = float(p["min_sqft"]) if p.get("min_sqft") is not None else (
+        info.min_sqft if info else None)
+    r.max_sqft = float(p["max_sqft"]) if p.get("max_sqft") is not None else (
+        info.max_sqft if info else None)
+    r.max_aspect = float(p["max_aspect"]) if p.get("max_aspect") is not None else (
+        info.max_aspect if info else None)
+    if p.get("priority") is not None:
+        r.priority = _priority(p["priority"])
+    if p.get("optional") is not None:
+        r.optional = bool(p["optional"])
+    if p.get("attached_bath") is not None:
+        r.attached_bath = bool(p["attached_bath"])
+    if p.get("preferred_zone") is not None:
+        r.preferred_zone = str(p["preferred_zone"])
+    if p.get("storey") is not None:
+        r.storey = int(p["storey"])
+    sp.rooms.append(r)
+
+
+def _priority(v: Any) -> int:
+    """1..5, accepting the words a model reaches for first.
+
+    The schema cannot say "integer" for this parameter without saying it for
+    every same-named parameter on every other command, so "high" arrives
+    routinely. Mapping it costs three lines; refusing it costs the model a
+    turn.
+    """
+    words = {"must": 1, "must_have": 1, "critical": 1, "high": 1,
+             "medium": 3, "normal": 3, "low": 4, "nice_to_have": 5,
+             "optional": 5}
+    if isinstance(v, str):
+        key = v.strip().lower().replace("-", "_").replace(" ", "_")
+        if key in words:
+            return words[key]
+        try:
+            v = float(key)
+        except ValueError:
+            raise ApplyError(f"priority must be 1..5 or one of "
+                             f"{sorted(set(words))}, got {v!r}")
+    n = int(round(float(v)))
+    if not 1 <= n <= 5:
+        raise ApplyError(f"priority must be 1..5, got {n}")
+    return n
+
+
+def _h_remove_room(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    sp = d.ensure_spec()
+    rid = str(p["room_id"])
+    sp.rooms = [r for r in sp.rooms if r.id != rid]
+    # An adjacency to a room that no longer exists is unsatisfiable and would
+    # sit in the brief looking like a live constraint.
+    sp.adjacency = [a for a in sp.adjacency if rid not in (a.a, a.b)]
+
+
+# Feet-squared per square metre, for the NBC minima which are stated in m2.
+_SQFT_PER_M2 = 10.7639
+
+
+def _h_set_room_area(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    r = _room(d.ensure_spec(), str(p["room_id"]))
+    lo, hi = float(p["min_sqft"]), float(p["max_sqft"])
+    if lo > hi:
+        raise ApplyError(f"min_sqft {lo:g} is above max_sqft {hi:g}")
+    # A range whose UPPER bound is below the legal minimum cannot produce a
+    # legal room at any size the solver picks, so it is refused here rather
+    # than solved and then reported as our own NBC violation. A low `min_sqft`
+    # is fine: the solver is free to land above it.
+    #
+    # Only the ceiling is checked, deliberately. Bengaluru practice builds
+    # rooms narrower than NBC asks and `AgentPolicy.relaxed_minima` exists for
+    # exactly that, so a rule that refused every tight room would refuse most
+    # of the market. A bedroom capped at 45 sqft against a 102 sqft minimum is
+    # not a tight room, it is an arithmetic mistake.
+    # Resolved through the subtype chain, not `NBC_MIN.get(category)`. A
+    # direct lookup is the exact mistake this check exists to catch: `bed1`
+    # is a `master_bedroom`, which has no row of its own, so a direct get
+    # returned nothing and the check passed on the room it matters most for.
+    from .envelope import NBC_MIN
+    from . import roomtypes as _rtypes
+    floor_m2 = 0.0
+    for _key in _rtypes.counts_as(r.category):
+        if _key in NBC_MIN:
+            floor_m2 = NBC_MIN[_key][1]
+            break
+    if floor_m2:
+        floor_sqft = floor_m2 * _SQFT_PER_M2
+        if hi < floor_sqft:
+            raise ApplyError(
+                f"max_sqft {hi:g} is below the NBC minimum for a "
+                f"{r.category.replace('_', ' ')} ({floor_sqft:.0f} sqft / "
+                f"{floor_m2:g} m2), so no legal room fits in that range")
+    r.min_sqft, r.max_sqft = lo, hi
+
+
+# The solver's own hard ceiling on long/short. Above it every candidate is
+# infeasible, so accepting the brief edit only defers the refusal to a place
+# where the reason is lost.
+_ASPECT_CEILING = 4.0
+
+
+def _h_set_room_aspect(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    r = _room(d.ensure_spec(), str(p["room_id"]))
+    want = float(p["max_aspect"])
+    if want > _ASPECT_CEILING:
+        raise ApplyError(
+            f"max_aspect {want:g} is above the solver's hard limit of "
+            f"{_ASPECT_CEILING:g}; a room that long and thin is a corridor, "
+            "and no layout would satisfy it")
+    if want < 1.0:
+        raise ApplyError(f"max_aspect {want:g} is below 1.0; the ratio is "
+                         "long side over short side, so it cannot be under 1")
+    r.max_aspect = want
+    if p.get("min_aspect") is not None:
+        r.min_aspect = float(p["min_aspect"])
+    if r.max_aspect < r.min_aspect:
+        raise ApplyError(f"max_aspect {r.max_aspect:g} is below min_aspect "
+                         f"{r.min_aspect:g}")
+
+
+def _h_set_room_zone(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    _room(d.ensure_spec(), str(p["room_id"])).preferred_zone = \
+        _zone(p["preferred_zone"])
+
+
+def _zone(v: Any) -> str:
+    """Compass zone as the spec writes it: N, NE, E, ... .
+
+    `commands.COMPASS` spells these out in words for the geometry ops, and the
+    spec uses the abbreviations, so both spellings arrive.
+    """
+    key = str(v).strip().lower().replace("-", "_").replace(" ", "_")
+    words = {"north": "N", "north_east": "NE", "east": "E",
+             "south_east": "SE", "south": "S", "south_west": "SW",
+             "west": "W", "north_west": "NW", "centre": "C", "center": "C"}
+    if key in words:
+        return words[key]
+    up = str(v).strip().upper()
+    if up in ("N", "NE", "E", "SE", "S", "SW", "W", "NW", "C"):
+        return up
+    raise ApplyError(f"preferred_zone {v!r} is not a compass zone")
+
+
+def _h_set_room_priority(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    _room(d.ensure_spec(), str(p["room_id"])).priority = _priority(p["priority"])
+
+
+# Pairs the domain table marks `prohibited`, as {category, category} -> reason.
+# Derived from `spec.DEFAULT_ADJACENCY` rather than restated, so there is one
+# place to disagree with and the applier cannot contradict the table it ships.
+def _prohibited_pairs() -> dict[frozenset, str]:
+    from .spec import DEFAULT_ADJACENCY
+    return {frozenset((a.a, a.b)): (a.reason or f"{a.a} must not be "
+                                    f"{a.relation} to {a.b}")
+            for a in DEFAULT_ADJACENCY if a.kind == "prohibited"}
+
+
+def _category_of(sp, token: str) -> str:
+    """A brief token as a category: room ids resolve, categories pass through."""
+    r = sp.room(token)
+    return r.category if r is not None else token
+
+
+def _h_set_adjacency(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    sp = d.ensure_spec()
+    kind = str(p["kind"])
+    if kind not in ("required", "prohibited"):
+        raise ApplyError(f"kind must be required|prohibited, got {kind!r}")
+    rel = str(p.get("relation") or "adjacent")
+    if rel not in ("adjacent", "direct_access", "visual", "same_floor"):
+        raise ApplyError(f"relation {rel!r} is not one of adjacent, "
+                         "direct_access, visual, same_floor")
+    a_id, b_id = str(p["a"]), str(p["b"])
+    if kind == "required":
+        # Requiring a pair the domain forbids is not a preference, it is a
+        # contradiction, and it has to be refused rather than solved. The
+        # solver would have taken it: `required` and `forbidden` go into
+        # separate lists and nothing cross-checks them, so a brief asking for
+        # a WC opening onto a kitchen produced a plan with a WC opening onto a
+        # kitchen and the validator then reported it as a defect in our own
+        # output. Refusing here means the reason reaches the person who asked.
+        cats = frozenset((_category_of(sp, a_id), _category_of(sp, b_id)))
+        why = _prohibited_pairs().get(cats)
+        if why is not None:
+            raise ApplyError(
+                f"cannot require {a_id} to be {rel} to {b_id}: {why}. "
+                "If the client insists, remove the prohibition first and say "
+                "in the brief who asked for it.")
+    new = Adjacency(a=a_id, b=b_id, kind=kind, relation=rel,
+                    reason=str(p.get("reason") or ""))
+    sp.adjacency = [a for a in sp.adjacency if a.key() != new.key()]
+    sp.adjacency.append(new)
+
+
+def _h_remove_adjacency(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    sp = d.ensure_spec()
+    a_id, b_id, rel = str(p["a"]), str(p["b"]), p.get("relation")
+    before = len(sp.adjacency)
+    sp.adjacency = [x for x in sp.adjacency
+                    if not ({x.a, x.b} == {a_id, b_id}
+                            and (rel is None or x.relation == str(rel)))]
+    if len(sp.adjacency) == before:
+        raise ApplyError(f"no {a_id}/{b_id} adjacency in the brief to remove")
+
+
+def _h_set_entrance(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    sp = d.ensure_spec()
+    if sp.entrance is None:
+        sp.entrance = EntranceSpec()
+    if p.get("side") is not None:
+        side = str(p["side"]).strip().lower()
+        if side not in ("north", "east", "south", "west"):
+            raise ApplyError(f"side must be north|east|south|west, got {side!r}")
+        sp.entrance.side = side
+    if p.get("zone") is not None:
+        sp.entrance.zone = _zone(p["zone"])
+    if p.get("via_foyer") is not None:
+        sp.entrance.via_foyer = bool(p["via_foyer"])
+    if p.get("avoid_direct_kitchen_view") is not None:
+        sp.entrance.avoid_direct_kitchen_view = bool(p["avoid_direct_kitchen_view"])
+
+
+def _h_set_wet_grouping(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    v = str(p["value"]).strip().lower()
+    if v not in ("required", "preferred", "off"):
+        raise ApplyError(f"wet_grouping must be required|preferred|off, got {v!r}")
+    d.ensure_spec().wet_grouping = v
+
+
+def _h_set_storeys(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    n = int(p["value"])
+    if not 1 <= n <= 4:
+        raise ApplyError(f"storeys must be 1..4, got {n}")
+    d.ensure_spec().storeys = n
+
+
+def _h_set_plot(d: Design, st: Optional[Plan], p: dict, _payload) -> None:
+    sp = d.ensure_spec()
+    if p.get("site_kind") is not None:
+        kind = str(p["site_kind"]).strip().lower()
+        if kind not in ("plot", "apartment_unit"):
+            raise ApplyError(f"site_kind must be plot|apartment_unit, got {kind!r}")
+        sp.site_kind = kind
+    for key, attr in (("width_ft", "plot_width_ft"), ("depth_ft", "plot_depth_ft")):
+        if p.get(key) is None:
+            continue
+        v = float(p[key])
+        # A plot outside this range is a unit conversion mistake, not a plot.
+        # Bengaluru sites run from ~15 ft frontage to ~120 ft; anything smaller
+        # is almost always metres typed as feet.
+        if not 10.0 <= v <= 400.0:
+            raise ApplyError(f"{key}={v:g} ft is outside 10..400 ft; if that "
+                             "was metres, convert it")
+        setattr(sp, attr, v)
+    if p.get("road_facing") is not None:
+        side = str(p["road_facing"]).strip().lower()
+        if side not in ("north", "east", "south", "west"):
+            raise ApplyError(f"road_facing must be north|east|south|west, "
+                             f"got {side!r}")
+        sp.road_facing_side = side
+        # The road side is where the front door goes unless told otherwise.
+        if sp.entrance is not None and sp.entrance.side is None:
+            sp.entrance.side = side
+    if p.get("corner_plot") is not None:
+        sp.corner_plot = bool(p["corner_plot"])
+    if p.get("city") is not None:
+        sp.city_profile = str(p["city"]).strip().lower().replace(" ", "_")
+    if p.get("carpet_sqft") is not None:
+        sp.unit_area.carpet_sqft = float(p["carpet_sqft"])
+    if sp.site_kind == "apartment_unit":
+        # Keep the two site kinds from ever being half-set at once: a unit
+        # carrying plot dimensions hands the solver a fictional site and
+        # silently invalidates every setback, coverage and FAR check.
+        sp.plot_width_ft = sp.plot_depth_ft = None
+
+
+def _h_use_standard_programme(d: Design, st: Optional[Plan], p: dict,
+                              _payload) -> None:
+    sp = d.ensure_spec()
+    n = int(p["bedrooms"])
+    if not 1 <= n <= 6:
+        raise ApplyError(f"bedrooms must be 1..6, got {n}")
+    flags = {k: bool(p.get(k)) for k in
+             ("pooja", "utility", "sit_out", "parking", "dining", "study", "store")}
+    storeys = int(p["storeys"]) if p.get("storeys") is not None else sp.storeys
+    sp.rooms = bhk_programme(
+        n, baths=(int(p["baths"]) if p.get("baths") is not None else None),
+        storeys=storeys, **flags)
+    sp.storeys = storeys
+    # The default adjacencies come with the template. They are the ones that
+    # are true of every Indian house rather than of this client -- a kitchen
+    # reachable from the hall, no WC opening onto a kitchen -- and leaving
+    # them out means the solver is free to violate them and the validator
+    # then reports it as a defect.
+    from .spec import DEFAULT_ADJACENCY
+    have = {r.id for r in sp.rooms} | {r.category for r in sp.rooms}
+    sp.adjacency = [a for a in DEFAULT_ADJACENCY if a.a in have and a.b in have]
+
+
 _HANDLERS: dict[str, Any] = {
     "add_wall": _h_add_wall,
     "add_wall_between": _h_add_wall_between,
@@ -878,28 +1216,28 @@ _HANDLERS: dict[str, Any] = {
     "rename_design": _h_rename_design,
     "set_site": _h_set_site,
     "replace_storey": _h_replace_storey,
+    # -- the programme --
+    "add_room": _h_add_room,
+    "remove_room": _h_remove_room,
+    "set_room_area": _h_set_room_area,
+    "set_room_aspect": _h_set_room_aspect,
+    "set_room_zone": _h_set_room_zone,
+    "set_room_priority": _h_set_room_priority,
+    "set_adjacency": _h_set_adjacency,
+    "remove_adjacency": _h_remove_adjacency,
+    "set_entrance": _h_set_entrance,
+    "set_wet_grouping": _h_set_wet_grouping,
+    "set_storeys": _h_set_storeys,
+    "set_plot": _h_set_plot,
+    "use_standard_programme": _h_use_standard_programme,
 }
 
 
-# The programme layer -- the constraints the solver reads, as opposed to the
-# drawn geometry -- is not wired into the document service. These commands are
-# in the vocabulary, are offered to the agent, validate cleanly, and then fail
-# at apply time with "recognised but not implemented".
-#
-# They are listed rather than quietly excluded because excluding them is what
-# hid the gap: `unimplemented()` used to subtract `SPEC_OPS`, so the "every
-# command has a handler" test passed while a third of the agent's vocabulary
-# did nothing. `scripts/probe_agent.py` found it from the outside, and the agent
-# diagnosed it unaided -- "the whole programme layer is stubbed out in this
-# build".
-#
-# Wiring them needs a `DesignSpec` on the document plus a re-solve path
-# (`loop.repair` exists; nothing connects it to a `Document`).
-KNOWN_UNIMPLEMENTED = frozenset({
-    "add_room", "remove_room", "set_room_area", "set_room_aspect",
-    "set_room_zone", "set_room_priority", "set_adjacency",
-    "remove_adjacency", "set_entrance", "set_wet_grouping", "set_storeys",
-})
+# Every command in the vocabulary now has a handler. The constant is kept, and
+# empty, because it is what `test_every_command_has_a_handler` asserts against:
+# an entry here is a deliberate exception, and the empty set says there are
+# none. It used to hold the whole programme layer.
+KNOWN_UNIMPLEMENTED: frozenset[str] = frozenset()
 
 
 def unimplemented() -> list[str]:

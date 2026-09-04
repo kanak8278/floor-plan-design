@@ -339,6 +339,32 @@ _SPEC_OPS = {
                      "Change where the front door is, then re-solve."),
     "set_wet_grouping": (("value",), (), "Change wet-room grouping preference."),
     "set_storeys": (("value",), (), "Change the storey count, then re-solve."),
+    # The site. Without this there was no command anywhere in the vocabulary
+    # that could state a plot size, so "the plot is 30 x 40 with the road on
+    # the north" had nowhere to land and the solver could never be reached.
+    # `set_site` looks like the place for it and is not: that one writes
+    # north and setbacks onto the drawn geometry, which is a different fact.
+    "set_plot": ((), ("width_ft", "depth_ft", "road_facing", "site_kind",
+                      "corner_plot", "city", "carpet_sqft"),
+                 "State the site: plot width and depth in feet and which side "
+                 "the road is on. For an apartment unit pass "
+                 "site_kind='apartment_unit' and carpet_sqft instead of "
+                 "dimensions -- a unit has no plot and inventing one would "
+                 "invalidate every setback and coverage check."),
+    # The standard template. `spec.bhk_programme` has always known what a
+    # 2BHK contains; nothing exposed it, so an agent starting from a blank
+    # document had to invent a room list one add_room at a time.
+    "use_standard_programme": (("bedrooms",),
+                               ("baths", "pooja", "utility", "sit_out",
+                                "parking", "dining", "study", "store",
+                                "storeys"),
+                               "Fill the brief with the standard Indian "
+                               "programme for N bedrooms: hall, kitchen, N "
+                               "bedrooms with the first as master and an "
+                               "en-suite, baths at roughly one per two "
+                               "bedrooms, and a common toilet from 2BHK up. "
+                               "The way to start a design. Adjust individual "
+                               "rooms afterwards."),
 }
 
 for _op, (_req, _opt, _doc) in _SPEC_OPS.items():
@@ -380,6 +406,24 @@ def _spec_summary(op: str, p: dict, before, after) -> str:
         return f"Wet rooms grouped: {p.get('value')}"
     if op == "set_storeys":
         return f"{p.get('value')} storeys"
+    if op == "set_plot":
+        if p.get("site_kind") == "apartment_unit":
+            sq = p.get("carpet_sqft")
+            return f"Apartment unit{f', {sq:g} sqft carpet' if sq else ''}"
+        w, d = p.get("width_ft"), p.get("depth_ft")
+        road = p.get("road_facing")
+        bits = []
+        if w and d:
+            bits.append(f"{w:g} x {d:g} ft plot ({w * d:g} sqft)")
+        if road:
+            bits.append(f"{str(road).lower()}-facing")
+        return "Site: " + (", ".join(bits) or "updated")
+    if op == "use_standard_programme":
+        n = p.get("bedrooms")
+        extras = [k for k in ("pooja", "utility", "sit_out", "parking",
+                              "dining", "study", "store") if p.get(k)]
+        tail = f" with {', '.join(extras)}" if extras else ""
+        return f"Standard {n}BHK programme{tail}"
     return op
 
 
@@ -1063,6 +1107,14 @@ def _check_refs(cmd: Command, design: Design) -> list[str]:
     survived apply, and the rest are rejected with a reason the user can read.
     """
     errs: list[str] = []
+    # A programme command names rooms in the BRIEF, which is not the same
+    # collection as the rooms the wall graph encloses -- and on a blank
+    # document the second one is empty. Resolving `room_id` against the storey
+    # is what made every spec op unusable: `add_room room_id='living'` came
+    # back "no room 'living' on this storey", which is backwards, since not
+    # existing yet is the entire point of adding it.
+    if cmd.op in SPEC_OPS:
+        return _check_spec_refs(cmd, design)
     st = _storey(design, cmd.storey_id)
     if st is None:
         return [f"{cmd.op}: no storey {cmd.storey_id or '(active)'}"]
@@ -1082,6 +1134,41 @@ def _check_refs(cmd: Command, design: Design) -> list[str]:
     eid = cmd.params.get("element_id")
     if eid is not None and not _element_exists(st, str(eid)):
         errs.append(f"{cmd.op}: no element {eid!r} on this storey")
+    return errs
+
+
+def _check_spec_refs(cmd: Command, design: Design) -> list[str]:
+    """Referential checks for programme commands, against the brief.
+
+    `add_room` is the creator and must NOT already exist; everything else that
+    names a room must. Adjacency endpoints are checked too, because an
+    adjacency between a room and a typo is silently unsatisfiable -- the
+    solver has nothing to attach it to and the constraint simply never binds.
+    """
+    errs: list[str] = []
+    spec = getattr(design, "spec", None)
+    ids = {r.id for r in (spec.rooms if spec else [])}
+    p = cmd.params
+
+    rid = p.get("room_id")
+    if rid is not None:
+        if cmd.op == "add_room":
+            if rid in ids:
+                errs.append(f"add_room: {rid!r} is already in the brief")
+        elif rid not in ids:
+            errs.append(f"{cmd.op}: no room {rid!r} in the brief"
+                        + (f"; it has {', '.join(sorted(ids))}" if ids
+                           else " (the brief is empty -- "
+                                "use_standard_programme or add_room first)"))
+    if cmd.op in ("set_adjacency", "remove_adjacency"):
+        for key in ("a", "b"):
+            v = p.get(key)
+            # Adjacency is also written against categories in the default
+            # table ("kitchen" to "living"), so a category name is valid even
+            # when no room carries that id.
+            if v is not None and v not in ids and str(v) not in _rt.KEYS:
+                errs.append(f"{cmd.op}: {key}={v!r} is neither a room in the "
+                            f"brief nor a room category")
     return errs
 
 

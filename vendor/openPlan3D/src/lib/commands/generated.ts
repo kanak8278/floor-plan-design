@@ -51,6 +51,7 @@ export type CommandOp =
   | 'set_adjacency'
   | 'set_background'
   | 'set_entrance'
+  | 'set_plot'
   | 'set_room_area'
   | 'set_room_aspect'
   | 'set_room_priority'
@@ -68,9 +69,10 @@ export type CommandOp =
   | 'update_room'
   | 'update_stair'
   | 'update_text'
-  | 'update_wall';
+  | 'update_wall'
+  | 'use_standard_programme';
 
-export const COMMAND_OPS: CommandOp[] = ['add_column', 'add_dimension', 'add_door', 'add_entourage', 'add_furniture', 'add_guide', 'add_measurement', 'add_room', 'add_stair', 'add_storey', 'add_text', 'add_wall', 'add_wall_between', 'add_window', 'duplicate_furniture', 'duplicate_opening', 'duplicate_wall', 'group_elements', 'move_column', 'move_entourage', 'move_furniture', 'move_guide', 'move_room_label', 'move_stair', 'move_text', 'move_wall_by', 'move_wall_endpoint', 'move_wall_parallel', 'place_furniture_in_room', 'remove_adjacency', 'remove_element', 'remove_room', 'remove_storey', 'rename_design', 'replace_storey', 'set_active_storey', 'set_adjacency', 'set_background', 'set_entrance', 'set_room_area', 'set_room_aspect', 'set_room_priority', 'set_room_zone', 'set_site', 'set_storeys', 'set_wet_grouping', 'split_wall', 'ungroup_elements', 'update_column', 'update_dimension', 'update_entourage', 'update_furniture', 'update_opening', 'update_room', 'update_stair', 'update_text', 'update_wall'];
+export const COMMAND_OPS: CommandOp[] = ['add_column', 'add_dimension', 'add_door', 'add_entourage', 'add_furniture', 'add_guide', 'add_measurement', 'add_room', 'add_stair', 'add_storey', 'add_text', 'add_wall', 'add_wall_between', 'add_window', 'duplicate_furniture', 'duplicate_opening', 'duplicate_wall', 'group_elements', 'move_column', 'move_entourage', 'move_furniture', 'move_guide', 'move_room_label', 'move_stair', 'move_text', 'move_wall_by', 'move_wall_endpoint', 'move_wall_parallel', 'place_furniture_in_room', 'remove_adjacency', 'remove_element', 'remove_room', 'remove_storey', 'rename_design', 'replace_storey', 'set_active_storey', 'set_adjacency', 'set_background', 'set_entrance', 'set_plot', 'set_room_area', 'set_room_aspect', 'set_room_priority', 'set_room_zone', 'set_site', 'set_storeys', 'set_wet_grouping', 'split_wall', 'ungroup_elements', 'update_column', 'update_dimension', 'update_entourage', 'update_furniture', 'update_opening', 'update_room', 'update_stair', 'update_text', 'update_wall', 'use_standard_programme'];
 
 export type CommandFamily = 'symbolic' | 'direct';
 export type CommandSource = 'user' | 'agent' | 'solver' | 'import';
@@ -358,6 +360,13 @@ export const COMMANDS: Record<CommandOp, CommandSpec> = {
     editor: null,
     doc: 'Change where the front door is, then re-solve.',
   },
+  'set_plot': {
+    family: 'symbolic',
+    required: [],
+    optional: ["width_ft", "depth_ft", "road_facing", "site_kind", "corner_plot", "city", "carpet_sqft"],
+    editor: null,
+    doc: 'State the site: plot width and depth in feet and which side the road is on. For an apartment unit pass site_kind=\'apartment_unit\' and carpet_sqft instead of dimensions -- a unit has no plot and inventing one would invalidate every setback and coverage check.',
+  },
   'set_room_area': {
     family: 'symbolic',
     required: ["room_id", "min_sqft", "max_sqft"],
@@ -483,6 +492,13 @@ export const COMMANDS: Record<CommandOp, CommandSpec> = {
     optional: ["thickness_mm", "height_mm", "color", "texture", "interior_color", "interior_texture", "exterior_color", "exterior_texture"],
     editor: 'updateWall',
     doc: 'Change a wall\'s thickness, height, or finishes.',
+  },
+  'use_standard_programme': {
+    family: 'symbolic',
+    required: ["bedrooms"],
+    optional: ["baths", "pooja", "utility", "sit_out", "parking", "dining", "study", "store", "storeys"],
+    editor: null,
+    doc: 'Fill the brief with the standard Indian programme for N bedrooms: hall, kitchen, N bedrooms with the first as master and an en-suite, baths at roughly one per two bedrooms, and a common toilet from 2BHK up. The way to start a design. Adjust individual rooms afterwards.',
   },
 };
 
