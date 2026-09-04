@@ -44,7 +44,7 @@ print("-" * 104)
 for e in exs:
     if args.track not in e.tracks:
         continue
-    spec = None
+    spec, questions = None, []
     if args.track == "B":
         from fpeval.llm import extract_spec
         try:
@@ -74,6 +74,19 @@ for e in exs:
         # apartment units it correctly skips.
         "error_ids": list(getattr(r, "error_ids", []) or []),
         "warn_ids": list(getattr(r, "warn_ids", []) or []),
+        # What track B actually extracted. Without it a track B run says
+        # INFEASIBLE and gives you no way to ask what was asked for, so
+        # diagnosing one costs another paid extraction -- which is how the
+        # first run's `KeyError: 'centre'` had to be chased down.
+        "extracted": ({
+            "plot": [spec.plot_width_ft, spec.plot_depth_ft],
+            "facing": spec.road_facing_side,
+            "storeys": spec.storeys,
+            "rooms": [{"id": x.id, "category": x.category,
+                       "min_sqft": x.min_sqft, "optional": x.optional,
+                       "priority": x.priority} for x in spec.rooms],
+            "questions": list(questions or []),
+        } if spec is not None else None),
     })
 
 el = time.time() - t0

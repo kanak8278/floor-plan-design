@@ -166,6 +166,56 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
                            solve_ms=round(1000 * (time.time() - t0)),
                            errors=[f"{type(exc).__name__}: {exc}"])
 
+    # ---- shed the nice-to-haves rather than refuse ----------------------
+    # `RoomSpec.optional` is read nowhere on the solve path -- not in
+    # `bridge`, not in `envelope`, not in `solver` -- so every room in the
+    # brief was mandatory and an over-specified brief could only come back
+    # INFEASIBLE. Measured on the first track B run: from "a 30x40 east facing
+    # site in Bengaluru, need a 3BHK ground floor house", extraction produced
+    # eleven solver rooms including a sitout, a foyer, a dining, a utility and
+    # a pooja that nobody asked for. Total target area was LOWER than the
+    # ground truth's, so it was not area -- eleven rooms each carry an NBC
+    # minimum plus their walls, and that does not fit 1200 sqft after
+    # setbacks. Track A never sees this because ground truth asks for what it
+    # asks for.
+    #
+    # Dropping the optional rooms, lowest priority first, and saying which is
+    # a better answer than a refusal: the client gets a house and a sentence
+    # about what did not fit.
+    if getattr(res, "plan", None) is None and any(
+            getattr(r, "optional", False) for r in sp.rooms):
+        keep_ids = {r.id for r in sp.rooms if not getattr(r, "optional", False)}
+        shed = [r.id for r in sp.rooms if r.id not in keep_ids]
+        kept = [r for r in prog if r.id in keep_ids]
+        if kept:
+            warn.append("dropped the optional room(s) "
+                        + ", ".join(sorted(shed))
+                        + " -- the programme did not fit the site with them")
+            req2 = [(a, b) for a, b in req if a in keep_ids and b in keep_ids]
+            forb2 = [(a, b) for a, b in forb if a in keep_ids and b in keep_ids]
+            try:
+                stmt = compute_envelope(w_ft, d_ft, road_facing=facing,
+                                        profile=PROFILE, programme=kept)
+                budgets = {b.id: b for b in (getattr(stmt, "budgets", None) or [])}
+                for r in kept:
+                    b = budgets.get(r.id)
+                    if b is not None and getattr(b, "budget_m2", 0):
+                        r.target_m2 = round(float(b.budget_m2), 2)
+                res = solve_layout(
+                    w_ft, d_ft,
+                    LayoutSpec(programme=kept, required_adjacency=req2,
+                               forbidden_adjacency=forb2,
+                               entrance_room=next(
+                                   (r.id for r in kept if r.is_entrance),
+                                   kept[0].id),
+                               time_limit_s=time_limit_s),
+                    road_facing=facing, north_deg=sp.north_deg, profile=PROFILE,
+                    plan_id=f"{design.id}-solved")
+                prog = kept
+            except Exception as exc:
+                warn.append(f"retry without optional rooms failed: "
+                            f"{type(exc).__name__}: {exc}")
+
     out = BuildResult(status=str(getattr(res, "status", "?")),
                       assumptions=assumptions, warnings=warn,
                       solve_ms=round(1000 * (time.time() - t0)),
