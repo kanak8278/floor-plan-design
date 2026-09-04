@@ -1,3 +1,4 @@
+import _bootstrap  # noqa: F401  (path + cwd)
 """Probe: can a vision model extract a verifiable schedule from an Indian plan image?
 
 The verification hinge: Indian plans annotate rooms in BOTH mm and feet-inches.

@@ -857,6 +857,25 @@ def buildable_polygon(plot: Polygon, band: PlotBand,
 # these rules score the shape of the door graph, not the sizes of the rooms.
 
 _PRIVATE = {"bedroom", "master_bedroom"}
+
+# Rooms a bedroom is allowed to be the only way into, with how many of each.
+# Two baths behind one bedroom is a jack-and-jill and legitimate; three is a
+# corridor wearing a bedroom's label. A dressing room counts here too -- it is
+# the same relationship as an attached bath.
+# One of each. A jack-and-jill bath is SHARED between two bedrooms -- one door
+# each -- not two baths hanging off one bedroom, and DESIGN.MULTIPLE_ATTACHED
+# _BATHS already calls the latter an error, so a cap of 2 here contradicted it.
+_BEDROOM_APPENDAGES: dict[str, int] = {
+    "bathroom": 1, "balcony": 1, "dressing": 1, "wardrobe": 1, "terrace": 1,
+}
+
+# Catalogue ids that ARE a parking space. `place_site_elements` puts a car on
+# the driveway rather than creating a parking room.
+_PARKING_ITEMS = frozenset((
+    "car_sedan", "car_suv", "car_pickup", "motorcycle", "bike",
+    "garage_door_double", "garage_door_single",
+))
+
 _CIRC = {"living", "dining", "foyer", "passage", "hall"}
 _MAX_DEPTH_FROM_ENTRANCE = 3
 
@@ -895,14 +914,40 @@ def check_circulation(ctx: _Ctx) -> list[Finding]:
     names = {r.id: r.name for r in ctx.rooms}
 
     # 1. A bedroom must not be a corridor. If removing it disconnects rooms that
-    #    are not its own attached bath, traffic passes through someone's bedroom.
+    #    are not its own private appendages, traffic passes through someone's
+    #    bedroom.
+    #
+    #    What counts as an appendage is measured, not assumed. Over the 265
+    #    ResPlan plans whose door graph is at least connected, the rooms found
+    #    hanging behind a private room are:
+    #
+    #        bathroom 416   balcony 232   kitchen 6   living 1   bedroom 1
+    #
+    #    So an attached bath and a bedroom balcony are what real houses do --
+    #    exactly the arrangement the brief asks for ("one balcony off the master
+    #    bedroom"). Exempting only the bath fired this error on 59% of real
+    #    plans; the balcony was the entire false-positive population. A kitchen,
+    #    a living room or a second bedroom behind a bedroom stays an error,
+    #    which is what the tail of that distribution says it should be.
+    # A room that is unreachable to begin with is stranded whichever room you
+    # remove, so it used to be blamed on every bedroom in the plan at once --
+    # dropping the kitchen's only door produced three BEDROOM_THROUGH_TRAFFIC
+    # errors, one of them naming a bedroom that does not touch the kitchen.
+    # Removing a door cannot make a bedroom into a corridor. Only rooms that
+    # ARE reachable can be stranded by passing through one, and an unreachable
+    # room is GEO.UNREACHABLE_ROOM's business.
+    base = _reach_without(a, entry, set()) if entry is not None else set()
     for rid, nb in a.items():
         if _cat(ctx, rid) not in _PRIVATE or entry is None or rid == entry:
             continue
         reach = _reach_without(a, entry, {rid})
-        stranded = [q for q in a if q != rid and q not in reach]
-        own_bath = [q for q in stranded if _cat(ctx, q) == "bathroom"]
-        if len(stranded) > len(own_bath) or len(own_bath) > 1:
+        stranded = [q for q in a if q != rid and q in base and q not in reach]
+        appendages = [q for q in stranded
+                      if _cat(ctx, q) in _BEDROOM_APPENDAGES]
+        over_cap = any(
+            sum(1 for q in stranded if _cat(ctx, q) == cat) > cap
+            for cat, cap in _BEDROOM_APPENDAGES.items())
+        if len(stranded) > len(appendages) or over_cap:
             lost = ", ".join(names.get(q, q) for q in stranded[:4])
             out.append(Finding(
                 "DESIGN.BEDROOM_THROUGH_TRAFFIC", "error", 1.0,
@@ -1280,6 +1325,133 @@ def check_standards(ctx: _Ctx) -> list[Finding]:
     return out
 
 
+
+# ----------------------------------------------------------- brief conformance
+# The BRIEF family answers "did we build what was asked for", as distinct from
+# NBC ("is it legal") and DESIGN ("is it a good house"). It exists because these
+# gaps were previously visible only as a suite score: 22 adjacency requests were
+# quietly unmet with nothing in the plan's own findings to say so, which means
+# neither the user nor the repair loop could see them.
+#
+# Severity follows how the brief said it. An explicit request -- "a balcony off
+# the master bedroom" -- is an error when unmet: the client asked, we did not
+# deliver. A preference the brief merely implied is a warning.
+def check_brief(ctx: _Ctx) -> list[Finding]:
+    req = ctx.brief.get("requirements") or {}
+    if not req:
+        return out_empty()
+    out: list[Finding] = []
+    a = _adj(ctx)
+    cat_of = {r.id: (r.category or "") for r in ctx.rooms}
+    names = {r.id: r.name for r in ctx.rooms}
+    by_cat: dict[str, list[str]] = {}
+    for rid, c in cat_of.items():
+        by_cat.setdefault(c, []).append(rid)
+
+    def _ids(cat: str) -> list[str]:
+        # A request is satisfied by the category itself or any of its
+        # subtypes: three bedrooms may arrive as two `bedroom` plus one
+        # `master_bedroom`, and asking for a bathroom is answered by a `wc`.
+        from . import roomtypes as rt
+        ids: list[str] = []
+        for c in rt.subtypes_of(cat):
+            ids += by_cat.get(c, [])
+        # And the reverse for a brief that names the subtype: "master bedroom"
+        # is satisfied by whichever bedroom the plan made the master, even if
+        # it did not get the label.
+        if not ids:
+            for c in rt.counts_as(cat)[1:]:
+                ids += by_cat.get(c, [])
+        # Two things a brief asks for that the plan does not carry as ROOMS.
+        # A stair is a `Stair` in the IR and parking is a car on the driveway
+        # placed by `entrance.place_site_elements`, so counting rooms alone
+        # reported both as missing on every plan that had them -- 29 of the 31
+        # remaining BRIEF.ROOM_MISSING errors in the suite were a stair or a
+        # parking space that was right there in the plan.
+        if not ids and cat == "stair":
+            ids = [f"stair:{i}" for i, _ in
+                   enumerate(getattr(ctx.plan, "stairs", ()) or ())]
+        if not ids and cat == "parking":
+            ids = [f.id for f in (getattr(ctx.plan, "furniture", ()) or ())
+                   if f.catalog_id in _PARKING_ITEMS]
+        return list(dict.fromkeys(ids))
+
+    # ---- rooms the brief asked for -------------------------------------
+    for cat, want in (req.get("rooms") or {}).items():
+        got = len(_ids(cat))
+        if got < int(want):
+            out.append(Finding(
+                "BRIEF.ROOM_MISSING", "error", 1.0,
+                f"the brief asks for {want} {cat.replace('_', ' ')}(s); the plan "
+                f"has {got}", _ids(cat)))
+
+    # ---- adjacency the brief asked for ---------------------------------
+    for pair in (req.get("adjacent") or []):
+        ca, cb = pair[0], pair[1]
+        xs, ys = _ids(ca), _ids(cb)
+        if not xs or not ys:
+            continue                      # the missing-room finding covers it
+        if not any(y in a.get(x, ()) for x in xs for y in ys):
+            out.append(Finding(
+                "BRIEF.ADJACENCY_UNMET", "error", 0.9,
+                f"the brief asks for the {ca.replace('_', ' ')} to open off the "
+                f"{cb.replace('_', ' ')}; there is no door between them",
+                xs[:2] + ys[:2]))
+
+    for pair in (req.get("not_adjacent") or []):
+        ca, cb = pair[0], pair[1]
+        hit = next(((x, y) for x in _ids(ca) for y in _ids(cb)
+                    if y in a.get(x, ())), None)
+        if hit:
+            out.append(Finding(
+                "BRIEF.FORBIDDEN_ADJACENCY", "error", 0.9,
+                f"the brief asks for no door between the {ca.replace('_', ' ')} "
+                f"and the {cb.replace('_', ' ')}, but {names.get(hit[0], hit[0])} "
+                f"opens into {names.get(hit[1], hit[1])}", list(hit)))
+
+    # ---- items, and which room they belong in ---------------------------
+    placed = {f.catalog_id for f in getattr(ctx.plan, "furniture", None) or []}
+    for cid in (req.get("must_place") or []):
+        if cid not in placed:
+            out.append(Finding(
+                "BRIEF.ITEM_MISSING", "warn", 0.6,
+                f"the brief asks for '{cid}' and nothing was placed", []))
+
+    for cid, room_cat in (req.get("place_in") or {}).items():
+        hosts = set(_ids(room_cat))
+        items = [f for f in (getattr(ctx.plan, "furniture", None) or [])
+                 if f.catalog_id == cid]
+        if not items:
+            continue                      # the missing-item finding covers it
+        if not any(f.room_id in hosts for f in items):
+            where = sorted({names.get(f.room_id, str(f.room_id)) for f in items})
+            out.append(Finding(
+                "BRIEF.ITEM_MISPLACED", "warn", 0.6,
+                f"the brief puts '{cid}' in the {room_cat.replace('_', ' ')}; it "
+                f"is in {', '.join(where[:3])} instead", []))
+
+    # ---- vastu zones the brief named ------------------------------------
+    for cat, zone in (req.get("vastu_zones") or {}).items():
+        ids = _ids(cat)
+        if not ids:
+            continue
+        # The VASTU family already scores zones; this only reports that a
+        # SPECIFICALLY REQUESTED one was not honoured, which is a brief failure
+        # rather than a preference.
+        zf = [f for f in ctx.brief.get("_vastu_findings", [])
+              if set(f.element_ids) & set(ids)]
+        if zf:
+            out.append(Finding(
+                "BRIEF.ZONE_UNMET", "warn", 0.7,
+                f"the brief puts the {cat.replace('_', ' ')} in the {zone}; the "
+                f"plan does not place it there", ids[:2]))
+    return out
+
+
+def out_empty() -> list[Finding]:
+    return []
+
+
 def check_bylaws(ctx: _Ctx) -> list[Finding]:
     out: list[Finding] = []
     prof = ctx.profile
@@ -1577,6 +1749,7 @@ def validate(plan: Plan, brief: dict | None = None,
     fs += check_zoning(ctx)
     fs += check_syntax(ctx)
     fs += check_standards(ctx)
+    fs += check_brief(ctx)
     if brief.get("vastu", True):
         _s, vf = vastu_score(plan, profile, ctx)
         fs += vf

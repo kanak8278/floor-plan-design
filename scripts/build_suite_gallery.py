@@ -7,7 +7,7 @@ browser list is self-describing.
 from __future__ import annotations
 import argparse, json, sys, time
 from pathlib import Path
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401  (path + cwd)
 
 from fpeval.suite import load_suite
 from fpeval.score import run
@@ -75,7 +75,7 @@ for ex in _all:
         (skipped if r.status == "skipped" else failed).append((ex.id, r.status))
         continue
     pj = to_project(r.plan)
-    pj["id"] = f"sx-{ex.id}"
+    pj["id"] = f"fpeval-sx-{ex.id}"
     pj["name"] = label(ex, r.n_rooms)
     pj["description"] = ex.prompt[:220]
     pj["_meta"] = {

@@ -33,15 +33,46 @@
   let filter = 'all';
 
   const KEY = 'floorplan_projects';
+  const THUMB = 'floorplan_thumb_';
+  // Everything fpeval has ever written, including the legacy prefixes from
+  // earlier runs, so a stale generation cannot survive a reload.
+  const GENERATED = ['fpeval-', 'sx-', 'fp-', 'b-', 'demo-', 'proj-'];
+  let purged = 0;
+  let held = 0;          // how many plans the browser is holding right now
+
+  // Thumbnails live under their own keys, so removing a plan without them
+  // leaves the image behind and the next plan to reuse that id shows the old
+  // picture.
+  // A TypeScript annotation, not JSDoc: this file is `lang="ts"`, so the
+  // `@param` form is ignored and the parameter reads as implicit `any`.
+  const forget = (id: string) => { try { localStorage.removeItem(THUMB + id); } catch {} };
+
+  const count = () => Object.keys(JSON.parse(localStorage.getItem(KEY) || '{}')).length;
 
   onMount(async () => {
     try {
       const load = async (f: string): Promise<GalleryPlan[]> => { try { return await (await fetch(f)).json(); } catch { return []; } };
       [suite, resplan] = await Promise.all([load('/fpeval/suite.json'), load('/fpeval/projects.json')]);
       const all = JSON.parse(localStorage.getItem(KEY) || '{}');
+      // PURGE every plan we have ever generated before seeding. The old code
+      // merged, so each regeneration left the previous one behind and the list
+      // filled with superseded duplicates under four different id prefixes.
+      // Anything the user drew themselves is untouched.
+      let removed = 0;
+      for (const k of Object.keys(all)) {
+        if (GENERATED.some((pre) => k.startsWith(pre))) { delete all[k]; forget(k); removed++; }
+      }
       for (const p of [...suite, ...resplan]) all[p.id] = JSON.stringify(p);
       localStorage.setItem(KEY, JSON.stringify(all));
-      status = `${suite.length} generated suite plans + ${resplan.length} converted ResPlan plans loaded into this browser.`;
+      purged = removed;
+      held = count();
+      status = suite.length || resplan.length
+        ? `${suite.length} generated + ${resplan.length} converted plans loaded`
+          + (removed ? `, ${removed} superseded plan(s) purged. ` : '. ')
+          + `${held} plan(s) in this browser.`
+        : `Nothing to load: /fpeval/suite.json and /fpeval/projects.json are `
+          + `empty. ${removed} generated plan(s) purged; ${held} plan(s) left `
+          + `in this browser.`;
       ok = true;
     } catch (e) { status = 'Failed: ' + e; }
   });
@@ -70,6 +101,28 @@
   <div class="status" class:ok>{status}</div>
 
   <div class="tabs">
+    <button class="danger" on:click={() => {
+      const all = JSON.parse(localStorage.getItem(KEY) || '{}');
+      let n = 0;
+      for (const k of Object.keys(all)) {
+        if (GENERATED.some((pre) => k.startsWith(pre))) { delete all[k]; forget(k); n++; }
+      }
+      localStorage.setItem(KEY, JSON.stringify(all));
+      suite = []; resplan = [];
+      held = count();
+      status = `cleared ${n} generated plan(s); ${held} left, including anything you drew yourself`;
+    }}>Clear generated</button>
+    <button class="danger" on:click={() => {
+      // Everything, including hand-drawn plans, so it asks first. "Clear
+      // generated" above only removes what fpeval wrote.
+      const n = count();
+      if (!confirm(`Delete ALL ${n} plan(s) in this browser, including any you `
+                 + `drew by hand? This cannot be undone.`)) return;
+      for (const k of Object.keys(JSON.parse(localStorage.getItem(KEY) || '{}'))) forget(k);
+      localStorage.setItem(KEY, '{}');
+      suite = []; resplan = []; held = 0;
+      status = `cleared all ${n} plan(s). Clean slate.`;
+    }}>Clear everything</button>
     <button class:active={tab === 'suite'} on:click={() => tab = 'suite'}>Generated ({suite.length})</button>
     <button class:active={tab === 'resplan'} on:click={() => tab = 'resplan'}>ResPlan ({resplan.length})</button>
   </div>
@@ -131,6 +184,8 @@
   .tabs{display:flex;gap:8px;margin-bottom:14px}
   .tabs button{padding:7px 14px;border:1px solid #262c37;background:#151922;color:#9aa3af;border-radius:8px;cursor:pointer;font:inherit}
   .tabs button.active{background:#1e293b;color:#dbeafe;border-color:#3b82f6}
+  .tabs button.danger{margin-left:auto;border-color:#7f1d1d;color:#fca5a5}
+  .tabs button.danger:hover{background:#3f1414}
   .filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
   .filters button{padding:3px 9px;border:1px solid #262c37;background:#12161e;color:#8b93a1;border-radius:99px;cursor:pointer;font:12px inherit}
   .filters button.on{background:#1e293b;color:#93c5fd;border-color:#3b82f6}

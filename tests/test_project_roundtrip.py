@@ -18,8 +18,10 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "src"))
+# `tests/conftest.py` puts `src` on the path and pins the cwd to the
+# repo root, so nothing here needs to.
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))
 
 from fpeval.ir import (                                        # noqa: E402
     Plan, Design, Wall, Opening, Room, Site, Stair, Furniture, Column, P,

@@ -17,9 +17,10 @@ import tempfile
 
 import pytest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "src"))
-sys.path.insert(0, ROOT)
+# `tests/conftest.py` puts `src` on the path and pins the cwd to the
+# repo root, so nothing here needs to.
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))
 
 from fpeval.commands import Command                            # noqa: E402
 from fpeval.document import Document, state_hash                # noqa: E402

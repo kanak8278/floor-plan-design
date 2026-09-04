@@ -32,7 +32,7 @@ from ortools.sat.python import cp_model
 
 from .envelope import (HABITABLE, WET, AreaStatement, BylawProfile, RoomReq,
                        compute_envelope, mm2_to_m2, zone_vector)
-from .ir import Opening, P, Plan, Room, Site, Wall
+from .ir import Opening, P, Plan, Room, Site, Stair, Wall
 
 GRID_MM = 10                      # solver granularity; IR stays exact mm
 
@@ -46,6 +46,10 @@ VASTU_SCALE = 50                  # applied to (x0+x1), i.e. 2x centroid
 DOOR_W = 900                      # interior door leaf, mm
 FRONT_DOOR_W = 1050
 BATH_DOOR_W = 750
+# Outdoor rooms that are tiled with the plan (a balcony is a room in the
+# tiling; a lawn is a site element). Each one must reach the perimeter.
+OUTDOOR_ROOMS = ("balcony", "sitout", "patio", "terrace")
+
 JAMB = 100                        # clear either side of an opening in its wall
 WIN_SILL, WIN_HEAD = 900, 2100
 DOOR_HEAD = 2100
@@ -108,11 +112,30 @@ class LayoutSpec:
     w_hub: float = 1.0        # reward the public core touching many rooms
     w_private: float = 1.0    # penalise a private room acting as a corridor
     w_soft_adj: float = 1.0   # weighted topology preferences
+    w_circ: float = 1.0       # charge a room with no contact to circulation
     # limits
     max_aspect_hard: float = 4.0
     time_limit_s: float = 8.0
-    candidates: int = 4                       # *feasible* topologies to collect
-    max_topologies: int = 24                  # ranked topologies CP-SAT may try
+    # Measured over the ten-case plot matrix (20x30 1BHK .. 50x80 5BHK), mean
+    # absolute area deviation from target and median wall clock:
+    #
+    #     candidates / pool     mean dev   worst    median time
+    #        4 /  24              11.9%     23.6%      0.26 s
+    #       12 /  48              11.2%     25.5%      1.14 s
+    #       24 /  96              10.9%     21.4%      1.68 s
+    #       48 /  96               8.8%     15.9%      1.73 s
+    #       48 / 200              10.4%     25.6%      2.64 s
+    #
+    # The old 4/24 was not saving time worth having -- it used 0.26 s of an
+    # 8 s budget and then returned the best of the first four feasible
+    # topologies it happened to meet. On a 30x40 3BHK asking for a 26 m2
+    # living room it returned 15.8 m2 (30.5% mean deviation) while handing a
+    # bathroom 7.1 m2; at 48/96 the same brief returns 22.8 m2. Deeper is not
+    # monotonically better -- 200 is worse than 96, because the per-candidate
+    # CP-SAT budget is time_limit/candidates and a deeper pool also contains
+    # worse topologies.
+    candidates: int = 48                      # *feasible* topologies to collect
+    max_topologies: int = 96                  # ranked topologies CP-SAT may try
     tree_samples: int = 400                   # topologies scored cheaply first
     seed: int = 0
     workers: int = 8
@@ -148,6 +171,13 @@ class SolveResult:
     pinned_ok: bool = True
     candidates_tried: int = 0
     topology_exhausted: bool = False
+    # Why a room is short of its target when the shortfall was a CHOICE. The
+    # cross-topology key prefers structure over area on purpose, so on a 30x40
+    # 3BHK a 23 m2 living room is reachable but only on topologies that break
+    # the required kitchen-living adjacency or leave a room off circulation.
+    # Without this the answer looked like a solver failure; it is a trade-off,
+    # and an agent can act on knowing which constraint bought the loss.
+    tradeoffs: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -388,6 +418,8 @@ def _score_nominal(rects, reqs: Sequence[RoomReq], targets: Sequence[float],
     """
     X0, Y0, X1, Y1 = rect
     pen = 0.0
+    w_mean = (sum(max(r.weight, 0.2) for r in reqs)
+              / max(len(reqs), 1)) or 1.0
     for i, r in enumerate(reqs):
         x0, y0, x1, y1 = rects[i]
         cw, ch = x1 - x0 - alw, y1 - y0 - alw
@@ -397,14 +429,28 @@ def _score_nominal(rects, reqs: Sequence[RoomReq], targets: Sequence[float],
         pen += 400.0 * (max(0.0, mw - cw) + max(0.0, mw - ch))
         area = cw * ch / 1e6
         pen += 900.0 * max(0.0, r.nbc_min_area_m2() - area)
-        pen += 40.0 * abs(area - targets[i])
+        # Weighted by the room's own weight, like the model's area term. Flat
+        # here meant the ranking could not tell a topology that gives the
+        # living room its 23 m2 from one that gives a bathroom 7 m2 and leaves
+        # the living room at 16, so neither could survive selection: with the
+        # default 24-topology pool the answer was living 15.8 m2 at 30.5% mean
+        # deviation, and with a 120-topology pool 22.8 m2 at 9.6%. The pool was
+        # not too small, it was filled with the wrong topologies.
+        pen += 40.0 * abs(area - targets[i]) * max(r.weight, 0.2) / w_mean
         ar = max(cw, ch) / max(1.0, min(cw, ch))
         pen += 300.0 * max(0.0, ar - r.max_aspect)
         pen += 3000.0 * max(0.0, ar - spec.max_aspect_hard)
         if not (x0 <= X0 + 1 or x1 >= X1 - 1 or y0 <= Y0 + 1 or y1 >= Y1 - 1):
             # No exterior edge means no window. For a habitable room that is an
             # NBC ventilation failure, not a preference, so it is priced high.
+            # A balcony, sitout or patio with no edge on the perimeter is not
+            # a balcony at all -- it is an internal void with nothing to open
+            # onto, which is what DESIGN.BALCONY_ENCLOSED says. Priced with
+            # the habitable rooms, not below the wet ones, because unlike a
+            # windowless bathroom (which an exhaust fan can rescue) there is
+            # no version of an interior balcony that works.
             pen += (6000.0 if r.category in HABITABLE
+                    else 6000.0 if r.category in OUTDOOR_ROOMS
                     else 1500.0 if r.category in WET else 0.0)
         z = r.zone()
         if z and spec.w_vastu > 0:
@@ -440,14 +486,42 @@ def _score_nominal(rects, reqs: Sequence[RoomReq], targets: Sequence[float],
                 deg[i] += 1
                 deg[j] += 1
 
+    # `passage` belongs here. It was missing, and it is the solver's own
+    # circulation room -- `_programme` emits the "Hall" with category
+    # "passage" -- so the one room whose entire job is to touch everything got
+    # no reward for touching anything. On a 30x40 3BHK that produced a hall
+    # in contact with two rooms, a kitchen reachable only through a bedroom
+    # and a bathroom opening off another bathroom.
+    CIRC_CORE = ("living", "dining", "foyer", "passage", "stair")
     for i, r in enumerate(reqs):
-        if r.category in ("living", "dining", "foyer"):
+        if r.category in CIRC_CORE:
             # Reward the public core for being reachable from many rooms.
             pen -= spec.w_hub * 900.0 * deg[i] * (1.6 if r.category == "living" else 1.0)
         elif r.category in ("bedroom", "master_bedroom", "study"):
             # A private room touching more than two others will end up carrying
             # traffic. Two is enough: one to circulation, one to its own bath.
             pen += spec.w_private * 1400.0 * max(0, deg[i] - 2)
+
+    # A room that touches no circulation room at all can only be doored to
+    # something private or service, which is the through-traffic defect before
+    # the door graph is even chosen. Nothing charged for it, so the ranking
+    # happily returned layouts where it was unavoidable. A bathroom is exempt:
+    # hanging off its bedroom is the normal arrangement, not a fault.
+    circ = [i for i, r in enumerate(reqs) if r.category in CIRC_CORE]
+    if circ:
+        for i, r in enumerate(reqs):
+            if i in circ or r.category in ("bathroom", "wc", "balcony"):
+                continue
+            if not any(_touching(rects[i], rects[c], door_gap) for c in circ):
+                # Deliberately modest here, and decisive later. This score
+                # also decides which topologies survive truncation to
+                # `max_topologies`, so a charge big enough to dominate pushed
+                # feasible-but-imperfect topologies out of the pool entirely
+                # and a 20x30 1BHK went INFEASIBLE. The real work is done by
+                # `_circ_isolated` in the cross-topology key, which only ever
+                # compares topologies that already solved and so cannot cost
+                # us a solution.
+                pen += spec.w_circ * 2200.0
 
     for i, j, w in (soft_adj or ()):
         touching = _touching(rects[i], rects[j], door_gap) is not None
@@ -488,6 +562,7 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
     alw = _g(alw_mm)
 
     labels, cut_axis = _label_rects(nodes, root)
+    w_mean = (sum(max(r.weight, 0.2) for r in reqs) / max(len(reqs), 1)) or 1.0
     bounds: dict[str, Any] = {"X0": m.NewConstant(X0), "X1": m.NewConstant(X1),
                               "Y0": m.NewConstant(Y0), "Y1": m.NewConstant(Y1)}
     cuts: dict[str, Any] = {}
@@ -564,7 +639,19 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
         dev = m.NewIntVar(0, W * H, f"dev{i}")
         m.Add(dev >= area - tgt)
         m.Add(dev >= tgt - area)
-        ca = int(round(spec.w_area * AREA_SCALE))
+        # Weighted by the room's own weight, normalised so the total pressure
+        # on area is unchanged. It used to be one flat coefficient for every
+        # room, which made a square metre missing from the living room cost
+        # exactly what a square metre missing from a bathroom costs. Because
+        # the rooms tile a fixed rectangle the signed deviations must sum to a
+        # constant, so a flat L1 objective is nearly degenerate: the solver was
+        # free to take the whole shortfall out of the living room, and did.
+        # Measured on a 30x40 3BHK, asking for a bigger hall got a smaller one
+        # -- ask 14 -> 16.3, ask 18 -> 20.6, ask 22 -> 17.9, ask 26 -> 15.8.
+        # Every one of those solves reported OPTIMAL, because they were: the
+        # objective could not tell those layouts apart.
+        ca = int(round(spec.w_area * AREA_SCALE * 100.0
+                       * max(r.weight, 0.2) / w_mean))
         if ca:
             obj.append(ca * dev)
 
@@ -612,7 +699,8 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
         # Service-room overshoot: priced at 3x the area-deviation weight, so it
     # bites without ever making a plan impossible.
     _over = sum(o for o in over_terms if o is not None)
-    m.Minimize(sum(obj) + 3 * int(round(spec.w_area * AREA_SCALE)) * _over)
+    m.Minimize(sum(obj)
+               + 3 * int(round(spec.w_area * AREA_SCALE * 100.0)) * _over)
 
     for cid, v in cuts.items():
         nv = nominal_cuts.get(cid)
@@ -660,6 +748,17 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
     """
     CIRC = {"living", "dining", "foyer", "stair", "passage"}
     PRIV = {"bedroom", "master_bedroom", "study"}
+    # A wet room is always a leaf. The service fallback used to accept any
+    # connected host that was not an overloaded bedroom, so a bathroom could
+    # host another bathroom -- one WC opening into another. It also made the
+    # first bath a two-door room, and two door swings in a 3.4 m2 bathroom
+    # leave nowhere for the WC itself: the furnisher rejected it with
+    # "door_swing(106); faces_door(14)" and shipped a bathroom with no fixtures.
+    # `pooja` too: a shrine is not a corridor, and the same two-door problem
+    # left a 1657 x 1617 mm pooja room with no mandir in it. A store or a
+    # utility may still host -- reaching a store through the utility is a real
+    # arrangement, not a fault.
+    LEAF_ONLY = {"bathroom", "wc", "balcony", "shaft", "pooja"}
 
     adj: dict[int, list[tuple[int, int, str]]] = {i: [] for i in range(n)}
     for (i, j), ax in pairs.items():
@@ -709,16 +808,30 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
             seen.add(i)
             edges.append((min(i, j), max(i, j), ax))
 
-    # 3. an en-suite bathroom may hang off exactly one bedroom
+    # 3. an en-suite bathroom may hang off exactly one bedroom -- and a bedroom
+    #    may carry exactly one en-suite. Without the second half of that
+    #    sentence two baths attached to the same bedroom, which is
+    #    DESIGN.MULTIPLE_ATTACHED_BATHS: the second bath has no independent
+    #    access, so nobody outside that bedroom can use it.
+    ensuite_of: dict[int, int] = {}
+    n_baths = sum(1 for r in reqs if r.category == "bathroom")
     for i in range(n):
         if i in seen or reqs[i].category != "bathroom":
             continue
+        # The only bathroom in the plan must never be an en-suite: everyone
+        # else would reach the toilet through someone's bedroom, which is
+        # DESIGN.SOLE_BATH_VIA_BEDROOM. Leave it to the later tiers, which
+        # prefer a non-private host.
+        if n_baths == 1:
+            continue
         beds = [(p, j, ax) for p, j, ax in adj[i]
-                if reqs[j].category in PRIV and j in seen]
+                if reqs[j].category in PRIV and j in seen
+                and j not in ensuite_of]
         if beds:
             beds.sort()
             p, j, ax = beds[0]
             seen.add(i)
+            ensuite_of[j] = i
             edges.append((min(i, j), max(i, j), ax))
 
     # 4. fallback: a SERVICE room with no circulation neighbour may hang off any
@@ -735,6 +848,8 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
         if i in seen or reqs[i].category not in SERVICE:
             continue
         hosts = [(p, j, ax) for p, j, ax in adj[i] if j in seen
+                 and reqs[j].category not in LEAF_ONLY
+                 and not (reqs[i].category == "bathroom" and j in ensuite_of)
                  and not (reqs[j].category in PRIV and degree.get(j, 0) >= 2)]
         if hosts:
             hosts.sort()
@@ -756,7 +871,9 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
         if i in seen:
             continue
         hosts = [(p + (0 if reqs[j].category not in PRIV else 4000), j, ax)
-                 for p, j, ax in adj[i] if j in seen]
+                 for p, j, ax in adj[i]
+                 if j in seen and reqs[j].category not in LEAF_ONLY
+                 and not (reqs[i].category == "bathroom" and j in ensuite_of)]
         if not hosts:
             return None                  # genuinely unreachable: no shared wall
         hosts.sort()
@@ -777,6 +894,54 @@ def _spanning_doors(pairs: dict[tuple[int, int], str], n: int, ent: int,
 
 
 # ---------------------------------------------------------------- IR emission
+
+def _emit_stairs(reqs: Sequence[RoomReq], rects: dict[int, tuple],
+                 storey_mm: int) -> list[Stair]:
+    """A flight inside every room categorised `stair`.
+
+    The riser count comes from the storey height and NBC's 190 mm cap, and the
+    flight shape from whether the room is long enough for a straight run: a
+    3000 mm storey needs 17 treads at 250 mm = 4250 mm of going, which almost
+    no stairwell has in one line, so anything shorter folds into an L. That is
+    what real plans do and what `standards.developed_going_mm` measures.
+    """
+    from . import standards as SD
+
+    out: list[Stair] = []
+    std = SD.STAIRS["residential"]
+    for i, r in enumerate(reqs):
+        if r.category != "stair":
+            continue
+        x0, y0, x1, y1 = rects[i]
+        w, d = x1 - x0, y1 - y0
+        if w > d:                      # run along the longer side
+            w, d = d, w
+            rot = 90.0
+        else:
+            rot = 0.0
+        risers = max(2, math.ceil(storey_mm / std.riser_max_mm))
+        need = SD.required_going_mm(risers, std.tread_min_mm)
+        # Choose the shape from the FLIGHT's dimensions, not the room's. Both
+        # were in scope and picking on the room's said an L-shape had 4660 mm
+        # of going while the flight actually emitted had 3460 -- a 231 mm
+        # tread against the 250 mm minimum, and NBC.STAIR_TREAD on 8 plans.
+        # The validator measures the flight, so the flight is what decides.
+        flight_w = max(std.width_min_mm, min(w, 1200))
+        flight_d = max(1200, d - 200)
+        needs_landing = risers > std.risers_per_flight_max
+        kind = "u-shaped"
+        for cand in ("straight", "l-shaped", "u-shaped"):
+            if cand == "straight" and needs_landing:
+                continue
+            if SD.developed_going_mm(flight_d, flight_w, cand) >= need:
+                kind = cand
+                break
+        out.append(Stair(
+            id=f"st{len(out)}", position=P((x0 + x1) // 2, (y0 + y1) // 2),
+            rotation=rot, width=flight_w, depth=flight_d,
+            riser_count=risers, direction="up", stair_type=kind))
+    return out
+
 
 def _extract_walls(rects: dict[int, tuple[int, int, int, int]],
                    rect_mm: tuple[int, int, int, int],
@@ -839,6 +1004,32 @@ def _host(walls: list[Wall], axis: str, coord: int, lo: int, hi: int
     return best
 
 
+def _wants_window(category: str) -> bool:
+    """Does this room type want glazing even where NBC does not demand it?"""
+    from . import roomtypes as rt
+    t = rt.get(category)
+    return bool(t and t.needs_window)
+
+
+def _vent_need_m2(category: str, floor_m2: float) -> float:
+    """Glazed area NBC asks of one room, from `standards.VENTILATION`.
+
+    Read from the same table the validator reads, so the solver cannot drift
+    away from the rule it is being judged against.
+    """
+    from . import standards as SD
+    if category in ("bathroom", "wc"):
+        key = "bathroom"
+    elif category == "kitchen":
+        key = "kitchen"
+    elif category in SD.HABITABLE_VENT:
+        key = "habitable"
+    else:
+        return 0.0
+    std = SD.VENTILATION[key]
+    return max(std.window_frac_of_floor * floor_m2, std.min_window_m2)
+
+
 def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
                reqs: Sequence[RoomReq], doors: list[tuple[int, int, str]],
                rect_mm: tuple[int, int, int, int], st: AreaStatement,
@@ -885,7 +1076,15 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
         if w is not None:
             place(w, (ex0 + ex1) // 2, FRONT_DOOR_W, "front_door")
 
+    # Glazing is SIZED, not stamped. This used to place one window per room at
+    # 45% of the wall run capped at 1800 mm, which is under NBC's 1 m2 per
+    # 10 m2 of floor for any room over ~21 m2 -- so every plan with a decent
+    # living room shipped with NBC.VENTILATION_HABITABLE as an error, and the
+    # solver had no idea. Compute the width the rule demands, then keep opening
+    # exterior edges until it is met, which is what a real plan does with a big
+    # room: two windows, not one impossible one.
     no_window: list[str] = []
+    win_h_mm = max(WIN_HEAD - WIN_SILL, 1)
     for i, r in enumerate(reqs):
         if r.category == "passage":
             continue
@@ -899,19 +1098,32 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
             cands.append(("x", X0, y0, y1))
         if x1 == X1:
             cands.append(("x", X1, y0, y1))
-        placed = False
-        for axis, coord, lo, hi in sorted(cands, key=lambda c: c[2] - c[3]):
+
+        floor_m2 = (x1 - x0) * (y1 - y0) / 1e6
+        need_m2 = _vent_need_m2(r.category, floor_m2)
+        if need_m2 <= 0 and not _wants_window(r.category):
+            continue        # a pooja niche or a store is better off without one
+        # A 10% margin: the validator measures glazing off the emitted opening
+        # geometry, and a width rounded down to the nearest 50 mm must not land
+        # a hair under the requirement.
+        need_mm = int(need_m2 * 1.10 * 1e6 / win_h_mm) if need_m2 > 0 else 0
+
+        got_mm = 0
+        for axis, coord, lo, hi in sorted(cands, key=lambda c: -(c[3] - c[2])):
             w = _host(walls, axis, coord, lo, hi)
             if w is None:
                 continue
-            wmax = 900 if r.category in ("bathroom", "wc") else 1800
-            width = max(600, min(wmax, int((hi - lo) * 0.45) // 50 * 50))
-            if hi - lo < width + 2 * JAMB:
+            run = hi - lo
+            room_cap = 900 if r.category in ("bathroom", "wc") else 3000
+            want = max(600, need_mm - got_mm)
+            width = min(room_cap, want, (run - 2 * JAMB) // 50 * 50)
+            if width < 600:
                 continue
             if place(w, (lo + hi) // 2, width, "window"):
-                placed = True
+                got_mm += width
+            if got_mm >= max(need_mm, 600):
                 break
-        if not placed:
+        if got_mm == 0:
             no_window.append(r.id)
 
     rooms: list[Room] = []
@@ -954,7 +1166,9 @@ def _emit_plan(plan_id: str, rects: dict[int, tuple[int, int, int, int]],
     half = st.exterior_wall_mm // 2
     pw = max(p.x for p in st.plot_polygon)
     pd = max(p.y for p in st.plot_polygon)
+    stairs = _emit_stairs(reqs, rects, storey_height)
     plan = Plan(id=plan_id, walls=walls, openings=openings, rooms=rooms,
+                stairs=stairs,
                 site=Site(plot_polygon=list(st.plot_polygon),
                           north_deg=st.north_deg,
                           setbacks_mm={"front": Y0 - half,
@@ -1042,6 +1256,7 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
         # not objects here, they are the boundaries the cuts produce.
         nodes, root, order = _tree_from_dict(reuse)
         cands.append((-1e18, nodes, root, order))
+        ranked_all = list(cands)
     else:
         base = _base_order(reqs, ent, required)
         seen_sig: set[str] = set()
@@ -1058,6 +1273,7 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
                                 st.north_deg, spec, req_adj, soft_adj)
             cands.append((sc, nodes, root, order))
         cands.sort(key=lambda c: c[0])
+        ranked_all = list(cands)
         cands = cands[:max(1, spec.max_topologies)]
 
     # 4. CP-SAT down the ranked list. The nominal score is only a surrogate:
@@ -1068,15 +1284,22 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
     per = max(0.25, spec.time_limit_s / max(1, spec.candidates))
     deadline = t_start + spec.time_limit_s
     best: dict | None = None
+    passed: list[tuple[float, float, dict]] = []
     solve_s, tried, n_feasible = 0.0, 0, 0
     all_infeasible, last_status = True, "UNKNOWN"
 
-    for _sc, nodes, root, order in cands:
-        if n_feasible >= spec.candidates:
-            break
+    def _attempt(nodes, root, order) -> str:
+        """Solve one topology and fold it into `best`. Returns the status name.
+
+        A closure because the ranked pool is tried in tranches (see 4b) and the
+        two passes must stay identical -- they were a copy-paste for one commit
+        and that is exactly how the cross-topology key drifts out of step with
+        itself.
+        """
+        nonlocal best, solve_s, tried, n_feasible, all_infeasible, last_status
         left = deadline - time.time()
         if tried and left <= 0.05:
-            break
+            return "OUT_OF_TIME"
         tried += 1
         nom, cutv = _nominal(nodes, root, rect_f, weights)
         labels, _ax = _label_rects(nodes, root)
@@ -1084,7 +1307,7 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
         doors = _spanning_doors(pairs, len(reqs), ent, reqs, nom,
                                 required, forbidden)
         if doors is None:
-            continue                    # no legal door tree on this topology
+            return "NO_DOOR_TREE"       # no legal door tree on this topology
         pins = _pinned_cuts(reuse, previous, pinned_wall_ids, nodes)
         mm = _build_model(nodes, root, reqs, targets, rect_mm, alw_mm, spec,
                           st.north_deg, doors, cutv, pins, gated=False)
@@ -1100,18 +1323,45 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
             n_feasible += 1
             rects = {i: tuple(int(solver.Value(v)) * GRID_MM
                               for v in mm.rects[i]) for i in mm.rects}
-            # Required adjacency and window access are properties of the
-            # *topology*, not of the cut positions, so CP-SAT's objective
-            # cannot see them. Fold them into the cross-topology comparison
-            # instead, or a topology that solves tightly but strands a bedroom
-            # with no exterior wall will win.
+            # Required adjacency, window access and circulation contact are
+            # properties of the *topology*, not of the cut positions, so
+            # CP-SAT's objective cannot see them. Fold them into the
+            # cross-topology comparison instead, or a topology that solves
+            # tightly but strands a bedroom with no exterior wall will win.
+            # The order of these three is a design decision, so it is stated
+            # rather than left to whatever the constants happened to be:
+            #
+            #   1. a habitable room with no exterior wall     2e7
+            #   2. a required adjacency the client asked for  1e7
+            #   3. a room with no door to circulation         5e6
+            #
+            # (1) outranks (2) because it is law, not preference: a bedroom
+            # with no window fails NBC 2016 Part 3 Cl 8.2.5 and cannot be
+            # built, whereas a kitchen that does not touch the living room is a
+            # brief miss the client can be asked about. It used to sit at 1e6,
+            # bottom of the three, and every single ventilation error in the
+            # suite -- 43 of 43 -- was a habitable room with no exterior edge
+            # rather than an undersized window.
             got = _adjacent_ids(rects, reqs)
-            pen = 1e7 * sum(1 for pr in spec.required_adjacency
-                            if frozenset(pr) not in got)
+            pen = 2e7 * sum(1 for i, r in enumerate(reqs)
+                            if _interior_cell(rects[i], rect_mm)
+                            and (r.category in HABITABLE
+                                 or r.category in OUTDOOR_ROOMS))
+            pen += 1e7 * sum(1 for pr in spec.required_adjacency
+                             if frozenset(pr) not in got)
             pen += 1e6 * sum(1 for i, r in enumerate(reqs)
                              if _interior_cell(rects[i], rect_mm)
-                             and (r.category in HABITABLE or r.category in WET))
+                             and r.category in WET)
+            pen += 5e6 * _circ_isolated(rects, reqs)
+            # 4e6: worse than a room off circulation is not the claim -- this
+            # is a specific, very visible fault (the household's only toilet
+            # is inside a bedroom) and the last-resort door tier will produce
+            # it if nothing outranks it. Priced in the KEY rather than
+            # rejected, so it can never cost us a plan.
+            pen += 4e6 * _sole_bath_private(doors, reqs, ent)
             key = (pen, solver.ObjectiveValue())
+            passed.append((pen, solver.ObjectiveValue(),
+                           {i: rects[i] for i in rects}))
             if best is None or key < best["key"]:
                 best = {
                     "key": key, "obj": solver.ObjectiveValue(),
@@ -1122,6 +1372,30 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
                 }
         elif status != cp_model.INFEASIBLE:
             all_infeasible = False
+        return last_status
+
+    for _sc, nodes, root, order in cands:
+        if n_feasible >= spec.candidates:
+            break
+        if _attempt(nodes, root, order) == "OUT_OF_TIME":
+            break
+
+    # 4b. The pool is a SAMPLE. Declaring INFEASIBLE after 24 of 393 scored
+    # topologies is an overclaim, and it was wrong in practice: a 1BHK on
+    # 20x30 has 37.8 m2 of layout area against a 22.8 m2 programme minimum and
+    # came back "proved infeasible". On a tight plot the ranking's own
+    # preferences (hierarchy, Vastu, adjacency) push the few topologies that
+    # actually fit down the list. So while time remains, keep taking tranches.
+    while (best is None and all_infeasible and len(ranked_all) > len(cands)
+           and time.time() < deadline - 0.1):
+        nxt = ranked_all[len(cands):len(cands) + max(1, spec.max_topologies)]
+        cands = cands + nxt
+        for _sc, nodes, root, order in nxt:
+            st_name = _attempt(nodes, root, order)
+            if st_name == "OUT_OF_TIME":
+                break
+            if best is not None:
+                break
 
     # 5. no solution: separate "cannot fit" from "ran out of time"
     if best is None:
@@ -1189,6 +1463,9 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
     if pinned_wall_ids and previous is not None and previous.plan is not None:
         pinned_ok = _check_pins(previous.plan, plan, pinned_wall_ids)
 
+    tradeoffs = _explain_tradeoffs(passed, best, reqs, targets, rect_mm, spec,
+                                   alw_mm)
+
     return SolveResult(
         status="OPTIMAL" if best["status"] == "OPTIMAL" else "FEASIBLE",
         plan=plan, statement=st,
@@ -1201,10 +1478,71 @@ def solve_layout(width_ft: float, depth_ft: float, spec: LayoutSpec, *,
         area_dev_pct=devp, clear_wh_mm=wh, unmet_adjacency=unmet,
         unreachable=unreachable, rooms_without_window=no_win,
         nbc_violations=nbc_bad, topology=topo, pinned_ok=pinned_ok,
-        candidates_tried=tried)
+        candidates_tried=tried, tradeoffs=tradeoffs)
 
 
 # ---------------------------------------------------------------- helpers
+
+def _explain_tradeoffs(passed: list[tuple[float, float, dict]],
+                       best: dict, reqs: Sequence[RoomReq],
+                       targets: Sequence[float],
+                       rect_mm: tuple[int, int, int, int],
+                       spec: LayoutSpec, alw_mm: int,
+                       min_gap_m2: float = 2.0) -> list[str]:
+    """Name the constraint that cost a room its area, when one did.
+
+    The cross-topology key puts structure ahead of area on purpose: a plan
+    whose kitchen does not touch the living room is wrong in a way a slightly
+    small living room is not. But that makes a large shortfall look like a
+    solver failure to whoever reads the output. So: find the feasible topology
+    that would have fitted the room best, and if it was rejected, say which
+    structural fault it carried. An agent can then decide whether to drop the
+    adjacency or accept the smaller room -- which is the actual design
+    decision, and not one the solver should be making silently.
+    """
+    if not passed or best is None:
+        return []
+    chosen = best["rects"]
+
+    def area(rects, i):
+        # CLEAR area, the same convention `area_m2` reports. Comparing gross
+        # rect area against a clear-area target understated every shortfall by
+        # about the wall allowance -- roughly 2 m2 on a 20 m2 room, which is
+        # the whole size of the effect being explained.
+        x0, y0, x1, y1 = rects[i]
+        return mm2_to_m2((x1 - x0 - alw_mm) * (y1 - y0 - alw_mm))
+
+    out: list[str] = []
+    for i, r in enumerate(reqs):
+        want = targets[i]
+        short = want - area(chosen, i)
+        if short < min_gap_m2:
+            continue
+        alt = max(passed, key=lambda t: area(t[2], i))
+        gain = area(alt[2], i) - area(chosen, i)
+        if gain < min_gap_m2 or alt[0] <= best["key"][0]:
+            continue
+        why = []
+        got = _adjacent_ids(alt[2], reqs)
+        miss = [tuple(sorted(p)) for p in spec.required_adjacency
+                if frozenset(p) not in got]
+        if miss:
+            why.append("breaks " + ", ".join("~".join(m) for m in miss))
+        iso = _circ_isolated_ids(alt[2], reqs)
+        if iso:
+            why.append("leaves " + ", ".join(iso[:3]) + " with no door to "
+                       "circulation")
+        inner = [reqs[j].id for j in range(len(reqs))
+                 if _interior_cell(alt[2][j], rect_mm)
+                 and (reqs[j].category in HABITABLE or reqs[j].category in WET)]
+        if inner:
+            why.append("no exterior wall for " + ", ".join(inner[:3]))
+        if why:
+            out.append(f"{r.id} is {short:.1f} m2 under its {want:.1f} m2 "
+                       f"target; a layout giving it {area(alt[2], i):.1f} m2 "
+                       f"exists but " + " and ".join(why))
+    return out
+
 
 def _clear_total(area_m2: float, targets: Sequence[float],
                  alw_mm: int) -> float:
@@ -1269,6 +1607,53 @@ def _perturb(base: Sequence[int], ent: int, rng: random.Random) -> list[int]:
         o.remove(ent)
         o.insert(0, ent)
     return o
+
+
+def _sole_bath_private(doors: list[tuple[int, int, str]],
+                       reqs: Sequence[RoomReq], ent: int) -> int:
+    """1 if the plan's only bathroom can be reached only through a bedroom."""
+    baths = [i for i, r in enumerate(reqs) if r.category == "bathroom"]
+    if len(baths) != 1:
+        return 0
+    priv = {i for i, r in enumerate(reqs)
+            if r.category in ("bedroom", "master_bedroom", "study")}
+    adj: dict[int, set[int]] = {}
+    for a, b, _ax in doors:
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+    seen, stack = {ent}, [ent]
+    while stack:
+        u = stack.pop()
+        for v in adj.get(u, ()):
+            if v in seen or v in priv:
+                continue
+            seen.add(v)
+            stack.append(v)
+    return 0 if baths[0] in seen else 1
+
+
+def _circ_isolated_ids(rects: dict[int, tuple],
+                       reqs: Sequence[RoomReq]) -> list[str]:
+    """Rooms that touch no circulation room at all, by id.
+
+    Baths and balconies are exempt: hanging off a bedroom is what they do.
+    """
+    circ = [i for i, r in enumerate(reqs)
+            if r.category in ("living", "dining", "foyer", "passage", "stair")]
+    if not circ:
+        return []
+    door_gap = DOOR_W + 2 * JAMB
+    out: list[str] = []
+    for i, r in enumerate(reqs):
+        if i in circ or r.category in ("bathroom", "wc", "balcony"):
+            continue
+        if not any(_touching(rects[i], rects[c], door_gap) for c in circ):
+            out.append(r.id)
+    return out
+
+
+def _circ_isolated(rects: dict[int, tuple], reqs: Sequence[RoomReq]) -> int:
+    return len(_circ_isolated_ids(rects, reqs))
 
 
 def _interior_cell(r: tuple, rect_mm: tuple[int, int, int, int]) -> bool:

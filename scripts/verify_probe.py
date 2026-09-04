@@ -1,5 +1,5 @@
 import json, sys
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401  (path + cwd)
 from fpeval.imgcorpus import verify
 d = json.load(open("out/extract_probe.json"))
 v = verify(d)

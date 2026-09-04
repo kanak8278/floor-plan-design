@@ -9,6 +9,7 @@ same artefacts. Falls back to converting on the fly.
 from __future__ import annotations
 import json
 import os
+import _bootstrap  # noqa: F401  (path + cwd)
 import pickle
 import sys
 import warnings

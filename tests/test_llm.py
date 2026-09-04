@@ -547,8 +547,8 @@ def test_patch_schema_shape():
     sch = L.propose_patch_tool_schema()
     op = sch["properties"]["ops"]["items"]
     assert set(op["properties"]["op"]["enum"]) == set(L.OP_TABLE)
-    assert set(op["properties"]["level"]["enum"]) == {L.LEVEL_SPEC,
-                                                     L.LEVEL_GEOMETRY}
+    assert set(op["properties"]["level"]["enum"]) == {
+        L.LEVEL_SPEC, L.LEVEL_GEOMETRY, L.LEVEL_FURNITURE}
     assert sch["additionalProperties"] is False
     # Every op's declared params must exist in the flat params object, or the
     # model has no way to express them.
@@ -556,6 +556,9 @@ def test_patch_schema_shape():
     for name, e in L.OP_TABLE.items():
         missing = (set(e["required"]) | set(e["optional"])) - params
         assert not missing, (name, missing)
+    # Same statement, from the library's own guard, so a future op cannot be
+    # added to OP_TABLE without a field to carry its arguments.
+    assert L.schema_param_gaps() == {}
 
 
 # ==========================================================================
@@ -569,9 +572,16 @@ def _op(op, **params):
 
 def test_every_op_in_the_table_is_reachable_and_documented():
     for name, e in L.OP_TABLE.items():
-        assert e["level"] in (L.LEVEL_SPEC, L.LEVEL_GEOMETRY)
+        assert e["level"] in (L.LEVEL_SPEC, L.LEVEL_GEOMETRY, L.LEVEL_FURNITURE)
         assert e["doc"]
-        assert (e["editor"] is None) == (e["level"] == L.LEVEL_SPEC)
+        # A geometry op names the editor function it mirrors; spec ops change
+        # the brief and have no editor counterpart. Furniture ops are mixed:
+        # `furnish_room` and `set_kitchen_layout` are ours, the rest map to the
+        # editor's furniture calls.
+        if e["level"] == L.LEVEL_SPEC:
+            assert e["editor"] is None, name
+        elif e["level"] == L.LEVEL_GEOMETRY:
+            assert e["editor"], name
 
 
 def test_patchop_serialisation_roundtrip():

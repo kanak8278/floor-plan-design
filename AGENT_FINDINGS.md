@@ -1,7 +1,7 @@
 # Agent findings
 
-One line per finding, newest last. Written by `tests/probe_agent.py` runs plus
-reading the replies. `tests/probe_agent.py --help` explains the outcomes.
+One line per finding, newest last. Written by `scripts/probe_agent.py` runs plus
+reading the replies. `scripts/probe_agent.py --help` explains the outcomes.
 
 Severity: **BUG** wrong behaviour · **LIMIT** the vocabulary cannot express it ·
 **UX** it works but reads badly · **PERF** slow enough to notice ·
@@ -27,7 +27,7 @@ Severity: **BUG** wrong behaviour · **LIMIT** the vocabulary cannot express it 
 - INHERITED `PLAN.md` still documents "Python service — STATELESS ... the server never owns it", which the document service now contradicts. The stateless endpoints (`generate`, `validate`, `render`) are untouched and still stateless; the document is not.
 - INHERITED `svelte-check` reports 6 errors in `BuildPanel.svelte`: `Tool` is typed without `'measure'`/`'annotate'` but the panel compares against both, so those tools are set through a path the type does not know about.
 
-## Found by probing (`tests/probe_agent.py`, 3 examples x 15 probes)
+## Found by probing (`scripts/probe_agent.py`, 3 examples x 15 probes)
 
 - BUG **A wall move tears the wall graph and destroys every room.** `move_wall_parallel`/`move_wall_by` relocate one wall's endpoints and leave the endpoints of the walls sharing those vertices behind, so the corners open, the ring stops being a closed face, and every room on the storey loses its identity, name and category. The command reports success. Pinned in `test_KNOWN_BUG_moving_a_wall_outward_destroys_every_room`. Fix is a graph-aware move that drags connected endpoints — the "IR mutation layer mirroring project.ts" `loop.py` already notes is missing.
 - BUG An inward wall move survives only by accident: the perpendicular walls happen to overrun the moved wall so GEOS re-nodes the crossings. Do not read the inward case as the operation being safe.
@@ -50,3 +50,12 @@ Severity: **BUG** wrong behaviour · **LIMIT** the vocabulary cannot express it 
 - LIMIT No brief-only variant of `add_room`: its contract is "add a programme entry, **then re-solve**", so a user asking to record an intention without regenerating geometry cannot be served. The agent identified this precisely and declined rather than re-solving unasked.
 - GOOD The agent diagnosed the programme-layer gap unaided across three turns — "that's now two brief-level commands failing the same way... the pattern suggests the whole programme layer is stubbed out in this build" — and then refused later destructive ops because it had observed re-solves corrupting the document. It protected the user's work without being told to.
 - GOOD It reported "nothing changed and the document is still at seq 0" rather than claiming success, on every unimplemented command. The failure mode that matters most — asserting an effect the document does not show — did not occur once in 45 probes.
+
+## Found merging main (11 commits) and running both halves together
+
+- BUG (main, not mine) **`move_wall_parallel` is unreachable through the repair loop: no spelling of `direction` passes both halves.** `llm.py` validates against `COMPASS_MOVE = ("north", "north_east", ...)`; `apply_ops._DIR_VEC` accepts only `("N", "NE", ...)`. So `"north"` passes `PatchOp.validate` and is rejected by the applier, and `"N"` is rejected by validation. Proven both ways against a real base-01 plan. This is the very op the geometry applier was written for. One-line fix: align the two vocabularies (my `commands.COMPASS` uses the long form, so long-form is the majority spelling).
+- BUG (fixed, mine) The graph-aware wall move is adopted from `apply_ops.drag_attached` rather than reimplemented, which fixes the room-destroying wall move I reported earlier. Both sides had independently learned that an endpoint attaches when it *lies on* the moved wall, not when it coincides with an endpoint — the solver emits long spanning walls with T-junctions mid-span.
+- LIMIT **Two appliers now exist and overlap on geometry.** `apply.py` takes `commands.Command` + `Design` (document service, chat agent); `apply_ops.py` takes `llm.PatchOp` + `Plan` (repair loop). They should converge; the sharpest edge has (one graph-aware move, imported not copied), the rest has not. The compass-vocabulary bug above is exactly what this duplication produces.
+- UX `/api/generate` takes `road_facing` as `"E"`/`"N"` while briefs, suite ground truth and `spec.py` all use `"east"`/`"north"`. An integrator passing the spelling used everywhere else gets a 500 with a stack trace, not a 422.
+- INHERITED (resolved by main) The 8 test failures reported earlier are fixed in `a2ce8ab`. One remains: `test_rules.py::test_false_positive_rate_on_real_plans` asserts median wall-clock under 10 ms and measured 10.6 ms — identical on `main`'s own checkout, so environmental. A timing bound inside a correctness test.
+- Merge note: `main`'s restructure moved runnable tools out of `tests/` into `scripts/`; `probe_agent.py` and the five `ui_*.mjs` drivers moved to match, and the six test files I added now rely on `tests/conftest.py` for `sys.path` and cwd instead of doing it themselves.

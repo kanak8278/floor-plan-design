@@ -244,8 +244,17 @@ def repair(spec: Any, *, max_iters: int = 5, time_limit_s: float = 10.0,
             res.iterations.append(it)
             break
         ops = list(getattr(ops, "ops", ops) or [])
-        spec_ops = [o for o in ops if getattr(o, "level", "") != "geometry"]
+        # Furniture ops are now executed rather than deferred: they were declared
+        # and dropped, which reported success while changing nothing.
+        furn_ops = [o for o in ops if getattr(o, "level", "") == "furniture"]
+        spec_ops = [o for o in ops if getattr(o, "level", "") == "spec"]
         geo_ops = [o for o in ops if getattr(o, "level", "") == "geometry"]
+        if furn_ops:
+            from .apply_ops import apply_furniture_ops
+            far = apply_furniture_ops(plan, furn_ops)
+            plan = far.plan
+            it.applied += far.applied
+            it.rejected += far.rejected
         it.deferred_geometry = [f"{getattr(o,'op','?')}: {getattr(o,'description','')}"
                                 for o in geo_ops]
         if not spec_ops:

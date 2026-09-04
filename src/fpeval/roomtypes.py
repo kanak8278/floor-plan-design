@@ -92,7 +92,10 @@ _add(RoomType("bathroom", "Bathroom", "wet", True, True, 2.8, 1200, 2100,
                        "pwd rm", "attached toilet", "common toilet", "handwash",
                        "hand wash", "wash basin"),
               short_aliases=("toi", "wc", "t&b", "bath")))
-_add(RoomType("utility", "Utility", "service", False, True, None, 800, 2100,
+# A utility must hold a 600x650 machine plus ~900 mm of access, so it needs a
+# CONTENTS-driven floor area (3.5 m2), not a wider wall: forcing 1500 mm of
+# width instead made det-01 and det-25 infeasible outright.
+_add(RoomType("utility", "Utility", "service", False, True, 3.5, 1000, 2100,
               (1.5, 8.0), 4.0, "NW", (), wet=True,
               op3d_room_type="utility", floor_texture="ceramic-gray", furnish_key="utility",
               aliases=("utility", "uitility", "utilty", "wash area", "service area")))
@@ -151,8 +154,50 @@ OUTDOOR = tuple(k for k, v in T.items() if v.klass == "outdoor")
 RESPLAN_KEYS = ("living", "kitchen", "bedroom", "bathroom", "balcony", "store")
 
 
+# A subtype satisfies a request for its parent. `master_bedroom` was added as a
+# category after the brief checks were written, and nothing told them that a
+# master bedroom is a bedroom: a 3BHK solved as 2 bedrooms + 1 master reported
+# BRIEF.ROOM_MISSING, so the rule fired on 132 of 132 solved plans in the suite
+# -- one rule accounting for almost every plan that failed to come back clean.
+SUBTYPE_OF: dict[str, str] = {
+    "master_bedroom": "bedroom",
+    "wc": "bathroom",
+}
+
+
+def counts_as(category: str) -> tuple[str, ...]:
+    """`category` and every request it can satisfy, most specific first."""
+    out = [category]
+    seen = {category}
+    cur = category
+    while cur in SUBTYPE_OF and SUBTYPE_OF[cur] not in seen:
+        cur = SUBTYPE_OF[cur]
+        seen.add(cur)
+        out.append(cur)
+    return tuple(out)
+
+
+def subtypes_of(category: str) -> tuple[str, ...]:
+    """Every category that satisfies a request for `category`, itself included."""
+    return (category,) + tuple(k for k, v in SUBTYPE_OF.items()
+                               if v == category)
+
+
 def get(key: str) -> RoomType | None:
-    return T.get(key)
+    """The type for a category key, resolving aliases.
+
+    The plain `T.get` this used to be returned None for any alias, and the
+    solver emits `category="passage"` -- an alias of `foyer`, not a key. So
+    every passage the solver produced resolved to None and silently skipped
+    every roomtypes-driven check (min width, needs_window, area band). A miss
+    that returns None looks like "no rule applies" and is indistinguishable
+    from "checked and fine", which is the worst way for a check to fail.
+    """
+    rt = T.get(key)
+    if rt is not None:
+        return rt
+    k = canonical(key)
+    return T.get(k) if k != "unknown" else None
 
 
 def canonical(name: str) -> str:

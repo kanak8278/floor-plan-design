@@ -6,7 +6,7 @@ failures. Track B runs the full pipeline through extract_spec.
 from __future__ import annotations
 import argparse, json, sys, time
 from pathlib import Path
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401  (path + cwd)
 
 from fpeval.suite import load_suite
 from fpeval.score import run

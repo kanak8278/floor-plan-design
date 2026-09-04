@@ -3,7 +3,7 @@ in the real editor. The editor reads projects from localStorage, which is
 per-browser-profile, so a seeding page is the only way to hand them over."""
 import pickle, json, sys, warnings
 warnings.filterwarnings("ignore")
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401  (path + cwd)
 from fpeval.resplan import convert
 from fpeval.project import to_project
 
@@ -19,7 +19,7 @@ for raw in plans:
     if key in seen or not (5 <= len(ir.rooms) <= 12): continue
     seen.add(key)
     p = to_project(ir)
-    p["id"] = f"fp-{ir.id}"
+    p["id"] = f"fpeval-rp-{ir.id}"
     p["name"] = f"ResPlan {ir.id} — {nb}BHK, {len(ir.rooms)} rooms"
     p["_meta"] = {"rooms": len(ir.rooms), "bedrooms": nb, "walls": len(ir.walls),
                   "openings": len(ir.openings),

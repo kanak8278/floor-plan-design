@@ -27,7 +27,7 @@ north arrow is derived from ``site.north_deg`` in the same frame.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box as shp_box
@@ -51,6 +51,65 @@ DIM_TOTAL_OFF = 19.0    # overall dimension line
 DIM_PLOT_OFF = 27.0     # plot / setback dimension line
 SCALE_LADDER = (100.0, 200.0, 500.0, 1000.0)
 SHEET_MAX = 900.0   # step the scale down rather than exceed this sheet edge
+
+
+# --------------------------------------------------------------------- themes
+# A theme is a palette plus a type scale, selected with `theme=` so the
+# restrained version is not lost when a bolder one is wanted. `mono` is the
+# original: correct for a drawing an architect will mark up. `bold` is for a
+# client-facing sheet, where legibility on a phone screen beats drafting
+# convention -- stronger zone-coded fills, near-black poche, larger bold room
+# names.
+#
+# Fills are ZONE-CODED rather than arbitrary, so the colour carries information:
+# public warm, private blush, service cool, wet blue, outdoor green,
+# circulation grey. That way a glance shows the zoning the plan is judged on.
+THEMES: dict[str, dict] = {
+    "mono": {
+        "palette": {
+            "bg": "#ffffff", "ink": "#18181b", "hair": "#a1a1aa", "rule": "#52525b",
+            "poche_fill": "#52525b", "poche_line": "#18181b", "hatch": "#71717a",
+            "dim": "#3f3f46", "plot": "#8a7a55", "setback": "#b45309",
+            "sym": "#3f3f46", "faint": "#d4d4d8", "sub": "#71717a",
+        },
+        "tint": {
+            "living": "#f7f3ea", "dining": "#f7f3ea", "kitchen": "#eef2ef",
+            "bedroom": "#f8f6f2", "master_bedroom": "#f8f6f2",
+            "bathroom": "#ebf1f4", "balcony": "#f1f4ef", "store": "#f2f1ee",
+        },
+        "fonts": {"room": 2.7, "steps": (2.7, 2.3, 2.0, 1.75, 1.5),
+                  "room_bold": True, "dim": 1.7, "overall": 2.2},
+        "poche_weight": 0.35,
+    },
+    "bold": {
+        "palette": {
+            "bg": "#ffffff", "ink": "#0f172a", "hair": "#94a3b8", "rule": "#334155",
+            "poche_fill": "#1e293b", "poche_line": "#0f172a", "hatch": "#475569",
+            "dim": "#1e293b", "plot": "#a16207", "setback": "#c2410c",
+            "sym": "#1e293b", "faint": "#cbd5e1", "sub": "#475569",
+        },
+        "tint": {
+            # public — warm sand
+            "living": "#f6e2b8", "dining": "#f6e7c6", "pooja": "#f5e0a8",
+            # private — blush
+            "bedroom": "#f2ddd6", "master_bedroom": "#eed3c8", "study": "#e9dcc9",
+            # service — sage / cool
+            "kitchen": "#cfe0cd", "utility": "#d9e2d6", "store": "#dcdcd4",
+            # wet — blue
+            "bathroom": "#c3dced",
+            # outdoor — green
+            "balcony": "#cfe6c4", "sitout": "#d6e9cb", "patio": "#dceccf",
+            "landscape": "#d9ecd0", "parking": "#dddddd",
+            # circulation — neutral
+            "foyer": "#e8e8e4", "passage": "#ececea", "stair": "#d6dde6",
+            "shaft": "#cbd5e1",
+        },
+        "fonts": {"room": 3.3, "steps": (3.3, 2.9, 2.5, 2.1, 1.7),
+                  "room_bold": True, "dim": 2.0, "overall": 2.7},
+        "poche_weight": 0.5,
+    },
+}
+DEFAULT_THEME = "bold"
 
 PALETTE = {
     "presentation": {
@@ -420,6 +479,9 @@ class _Ctx:
     maxy: float
     flip: bool
     ink: dict
+    tint: dict = field(default_factory=dict)
+    fonts: dict = field(default_factory=dict)
+    poche_weight: float = 0.35
     pad_l: float = PAD_L
     pad_t: float = PAD_T
     thick: float = 226.0
@@ -468,7 +530,7 @@ def _draw_rooms(doc: _Doc, ctx: _Ctx, rooms: Sequence[tuple[Room, Polygon]]) -> 
         pts = ctx.ring(poly.exterior.coords)
         if len(pts) < 3:
             continue
-        fill = ROOM_TINT.get(room.category, "#f4f4f5") if tint else "#ffffff"
+        fill = (ctx.tint or ROOM_TINT).get(room.category, "#f4f4f5") if tint else "#ffffff"
         doc.add("rooms", _polygon(pts, fill, cls=f"room room-{room.category}"))
         if not tint:                      # annotated: outline every face
             doc.add("rooms", _polyline(pts + pts[:1], ctx.ink["faint"], 0.2))
@@ -702,7 +764,7 @@ def _place_room_labels(doc: _Doc, ctx: _Ctx, placer: Placer,
                        carpet: dict[str, float]) -> _LabelStats:
     st = _LabelStats()
     ink = ctx.ink
-    base_fonts = (2.7, 2.3, 2.0, 1.75, 1.5)
+    base_fonts = tuple(ctx.fonts.get("steps", (2.7, 2.3, 2.0, 1.75, 1.5)))
     # biggest rooms first: they carry the most information and should not lose it
     order = sorted(rooms, key=lambda rp: (-rp[1].area, rp[0].id))
     for room, poly in order:
@@ -1439,8 +1501,17 @@ def render_with_stats(plan: Plan, mode: str = "presentation", findings=None,
                 scale = cand
                 break
 
+    # Theme resolution. `annotated` keeps its own high-contrast palette: it is
+    # read by a vision model and by someone hunting faults, so colour there is
+    # signal, not styling.
+    _tname = str(opts.get("theme") or DEFAULT_THEME)
+    _theme = THEMES.get(_tname, THEMES[DEFAULT_THEME])
+    if mode == "presentation":
+        ink = dict(_theme["palette"])
     ctx = _Ctx(plan=plan, mode=mode, scale=scale, minx=minx, miny=miny, maxy=maxy,
-               flip=flip, ink=ink, thick=thick)
+               flip=flip, ink=ink, tint=_theme["tint"], fonts=_theme["fonts"],
+               poche_weight=float(_theme.get("poche_weight", 0.35)),
+               thick=thick)
     cw = (maxx - minx) / scale
     ch = (maxy - miny) / scale
 

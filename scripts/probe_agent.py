@@ -1,6 +1,6 @@
 """Drive the chat agent over real generated plans and record what breaks.
 
-    python tests/probe_agent.py --examples base-01,vastu-01 --out out/probe
+    python scripts/probe_agent.py --examples base-01,vastu-01 --out out/probe
 
 This is a *test harness*, not a feature. It generates a plan from a `suite/`
 example on track A (ground truth, no LLM, free and deterministic), adopts it as
@@ -43,6 +43,7 @@ from typing import Any, Callable, Optional
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
+os.chdir(ROOT)          # suite/*.json is referenced repo-relative
 
 from fpeval.commands import Command                             # noqa: E402
 from fpeval.document import Document                            # noqa: E402

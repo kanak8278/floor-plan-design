@@ -276,19 +276,39 @@ def _h_move_wall_endpoint(d: Design, st: Plan, p: dict, _payload) -> None:
         w.end = point
 
 
+def _move_wall(st: Plan, wall_id: Any, dx: int, dy: int) -> None:
+    """Translate a wall, taking the walls attached to it along.
+
+    Moving a wall's own endpoints and nothing else opens the corners, the ring
+    stops being a closed face, and every room on the storey loses its identity,
+    name and category -- while the command still reports success. That was the
+    behaviour here until `scripts/probe_agent.py` caught it: the agent kept
+    refusing later requests with "five of the seven rooms are bounded by only
+    one or two walls... they've lost their names and categories", which was
+    true and was our fault.
+
+    `apply_ops.drag_attached` is the graph-aware move, and it is imported
+    rather than reimplemented. Two copies of this rule is how the browser and
+    the service come to disagree about what a wall move means, and the
+    repair-loop path had already learned the same lesson separately: an
+    endpoint attaches when it *lies on* the moved wall, not when it coincides
+    with an endpoint, because the solver emits long spanning walls with
+    T-junctions mid-span.
+    """
+    from .apply_ops import drag_attached
+    w = _wall(st, wall_id)
+    drag_attached(st, w, dx, dy)
+
+
 def _h_move_wall_by(d: Design, st: Plan, p: dict, _payload) -> None:
-    w = _wall(st, p["wall_id"])
-    dx, dy = int(round(float(p["dx"]))), int(round(float(p["dy"])))
-    w.start = P(w.start.x + dx, w.start.y + dy)
-    w.end = P(w.end.x + dx, w.end.y + dy)
+    _move_wall(st, p["wall_id"],
+               int(round(float(p["dx"]))), int(round(float(p["dy"]))))
 
 
 def _h_move_wall_parallel(d: Design, st: Plan, p: dict, _payload) -> None:
-    w = _wall(st, p["wall_id"])
     dx, dy = _bearing_delta(str(p["direction"]), float(p["distance_mm"]),
                             st.site.north_deg)
-    w.start = P(w.start.x + dx, w.start.y + dy)
-    w.end = P(w.end.x + dx, w.end.y + dy)
+    _move_wall(st, p["wall_id"], dx, dy)
 
 
 def _h_split_wall(d: Design, st: Plan, p: dict, _payload) -> None:
@@ -869,7 +889,7 @@ _HANDLERS: dict[str, Any] = {
 # They are listed rather than quietly excluded because excluding them is what
 # hid the gap: `unimplemented()` used to subtract `SPEC_OPS`, so the "every
 # command has a handler" test passed while a third of the agent's vocabulary
-# did nothing. `tests/probe_agent.py` found it from the outside, and the agent
+# did nothing. `scripts/probe_agent.py` found it from the outside, and the agent
 # diagnosed it unaided -- "the whole programme layer is stubbed out in this
 # build".
 #

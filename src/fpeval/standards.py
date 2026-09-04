@@ -105,7 +105,33 @@ VENTILATION: dict[str, VentStd] = {
     "bathroom":  VentStd(0.0, 1.00, 0.30, True,
                          "NBC 2016 Part 8 -- min 0.3 m2, 100% openable, or mechanical exhaust"),
 }
-HABITABLE_VENT = ("living", "dining", "bedroom", "master_bedroom", "study", "pooja")
+# NBC 2016 Part 1 defines a habitable room by USE -- living, sleeping, eating,
+# cooking -- which is why bath, WC, store and passage are excluded. A pooja room
+# is a prayer niche and belongs with them: Indian plans routinely place it
+# internally with no exterior wall at all. Listing it here demanded glazing in a
+# 1.65 m square shrine, and the only wall left for the mandir was under that
+# window, so the room shipped empty.
+HABITABLE_VENT = ("living", "dining", "bedroom", "master_bedroom", "study")
+
+
+# --------------------------------------------------------- contents area floor
+# What a room's own contents need, independent of any code minimum. NBC has
+# nothing to say about a utility, so nothing bounded it: a deeper topology
+# search produced a 1.47 m2 utility, and a 600 x 650 washing machine plus its
+# door swing does not fit in 1.47 m2. Derived from the fixtures and the
+# clearances below, not from law, which is why it is a separate table.
+CONTENTS_FLOOR_M2: dict[str, float] = {
+    "utility": 3.5,     # 600x650 machine + 900 mm standing space + door swing
+    "bathroom": 2.8,     # NBC combined bath+WC, which is also what fits
+    "kitchen": 5.0,      # NBC
+    "pooja": 1.2,        # 1000x500 mandir plus somewhere to stand
+    "store": 1.2,
+    # A 3000 mm storey needs 16 risers at the 190 mm cap, so 15 treads at the
+    # 250 mm minimum = 3750 mm of going. Folded into two runs that is a well of
+    # roughly 2100 x 1900 mm. At the old 2.0 m2 the flight did not fit and the
+    # treads came out at 249 mm -- NBC.STAIR_TREAD on 8 plans.
+    "stair": 4.0,
+}
 
 
 # ----------------------------------------------------------------- clearances

@@ -1,6 +1,10 @@
-"""Classifier gate accuracy on a labelled set with deliberate hard negatives."""
+"""Classifier gate accuracy on a labelled set with deliberate hard negatives.
+Lives in `scripts/`, not `tests/`: it reads `corpus/india/raw/*`, which is
+not part of the repo's committed fixtures, and it reports accuracy rather than
+asserting a bound.
+"""
 import json, sys, glob, os
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401
 from fpeval.imgclass import classify
 
 # ground truth from my own inspection of each file

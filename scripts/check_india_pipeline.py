@@ -2,16 +2,20 @@
 
 Includes negative controls: deliberately corrupted schedules that MUST be rejected.
 A checker that only ever says yes is worthless.
+
+Lives in `scripts/`, not `tests/`: every run makes paid Anthropic API calls.
+Under pytest it fired on collection and billed the user for running the unit
+tests, which no test should ever do.
 """
 import copy, glob, json, os, sys
-sys.path.insert(0, "src")
 from anthropic import Anthropic
+import _bootstrap  # noqa: F401
 from fpeval.imgclass import classify
 from fpeval.imgcorpus import verify, parse_mm
 from fpeval.plausible import check, canonical
 
-sys.path.insert(0, "tests")
-from extract_probe import SCHEMA, PROMPT, MODEL          # reuse the extraction contract
+# The extraction contract lives in the library, not in a script.
+from fpeval.extract import TOOL as SCHEMA, PROMPT, MODEL
 import base64, mimetypes
 
 client = Anthropic()

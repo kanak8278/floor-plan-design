@@ -5,7 +5,7 @@ interface -- a renamed key or a dropped `thinking_end` breaks the UI silently.
 The Anthropic client is faked with scripted stream events, which makes these
 tests free, fast, and deterministic; what they cannot check is that the real
 SDK emits the event types assumed here, so `FAKE_EVENT_TYPES` records exactly
-what is being assumed and `tests/ui_stream.mjs` exercises the live path.
+what is being assumed and `scripts/browser/ui_stream.mjs` exercises the live path.
 
 The load-bearing assertion is `test_apply_commands_emits_no_tool_row`: the
 whole readability of the pane rests on a write tool speaking through its
@@ -18,8 +18,10 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "src"))
+# `tests/conftest.py` puts `src` on the path and pins the cwd to the
+# repo root, so nothing here needs to.
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))
 
 from fpeval.agent import stream_turn, plan_digest, turn_context, TOOL_LABELS
 from fpeval.commands import Command                            # noqa: E402

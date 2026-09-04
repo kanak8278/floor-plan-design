@@ -22,8 +22,10 @@ import sys
 
 import pytest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "src"))
+# `tests/conftest.py` puts `src` on the path and pins the cwd to the
+# repo root, so nothing here needs to.
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))
 
 from fpeval.commands import (                                  # noqa: E402
     Command, TABLE, SYMBOLIC, DIRECT, SYMBOLIC_OPS, DIRECT_OPS, SPEC_OPS,
@@ -633,23 +635,20 @@ def test_the_generated_catalogue_explains_the_difference():
 # wall moves and the wall graph
 # --------------------------------------------------------------------------
 
-def test_KNOWN_BUG_moving_a_wall_outward_destroys_every_room():
-    """A wall move relocates one wall's endpoints and nothing else.
+def test_moving_a_wall_outward_keeps_every_room():
+    """This asserted the opposite until the graph-aware move landed.
 
-    Walls are joined at shared vertices, so moving one away from its
-    neighbours opens the corners, the ring stops being a closed face, and
-    every room on the storey loses its identity, name and category. The
-    command still reports success.
+    A wall move used to relocate one wall's endpoints and leave its
+    neighbours behind: the corners opened, the ring stopped being a closed
+    face, and every room lost its identity, name and category while the
+    command reported success. `scripts/probe_agent.py` found it by reading the
+    agent's refusals -- "five of the seven rooms are bounded by only one or
+    two walls... they've lost their names and categories".
 
-    Found by `tests/probe_agent.py`: the agent kept refusing later requests
-    with "five of the seven rooms are bounded by only one or two walls...
-    they've lost their names and categories", which was true and was our
-    fault, not its confusion.
-
-    This test asserts the CURRENT WRONG BEHAVIOUR so the eventual fix has
-    something to flip. A graph-aware move -- dragging connected endpoints
-    along -- is the fix, and it is the "IR mutation layer mirroring
-    project.ts" that `loop.py` already notes does not exist.
+    The fix is `apply_ops.drag_attached`, imported rather than copied. It
+    attaches an endpoint that *lies on* the moved wall, not one that merely
+    coincides with an endpoint, because the solver emits long spanning walls
+    with T-junctions mid-span.
     """
     doc = box_doc()
     doc.apply(Command(op="add_wall", params={
@@ -661,25 +660,25 @@ def test_KNOWN_BUG_moving_a_wall_outward_destroys_every_room():
         doc.apply(Command(op="update_room",
                           params={"room_id": r.id, "name": name}))
 
-    # "south" is away from the box, because w0 lies along y = 0.
+    # "south" is away from the box, because w0 lies along y = 0. This is the
+    # direction that used to destroy everything.
     res = doc.apply(Command(op="move_wall_parallel", source="agent", params={
         "wall_id": "w0", "direction": "south", "distance_mm": 300}))
 
-    assert res.ok, "the command reports success"
-    assert doc.design.active.rooms == [], \
-        "CURRENT BEHAVIOUR: every face is destroyed"
-    # The damage is at least reported, so the chat can say so.
-    assert sorted(res.rooms_gone) == ["Living Room", "Master Bedroom"]
+    assert res.ok, res.errors
+    assert len(doc.design.active.rooms) == 2
+    assert sorted(r.name for r in doc.design.active.rooms) == \
+        ["Living Room", "Master Bedroom"]
+    assert res.rooms_gone == []
+    # And the walls that touched it came along, or the face could not close.
+    assert doc.design.active.wall("w3").end.as_tuple() == (0, -300)
+    assert doc.design.active.wall("w4").start.as_tuple() == (3000, -300)
 
 
-def test_moving_a_wall_inward_happens_to_survive():
-    """Not a guarantee -- an accident of geometry worth recording.
-
-    The perpendicular walls still span past the moved wall, so GEOS nodes the
-    crossings and the faces close anyway. Any plan where the neighbours do not
-    overrun the moved wall loses its rooms exactly as above, which is why the
-    inward case must not be mistaken for the operation being safe.
-    """
+def test_moving_a_wall_inward_keeps_every_room_too():
+    """The inward case used to pass by accident -- the perpendicular walls
+    happened to overrun the moved wall, so GEOS re-noded the crossings. It now
+    passes for the right reason, which is why both directions are tested."""
     doc = box_doc()
     doc.apply(Command(op="add_wall", params={
         "wall_id": "w4", "start": {"x": 3000, "y": 0},
@@ -696,17 +695,20 @@ def test_moving_a_wall_inward_happens_to_survive():
     assert res.rooms_gone == []
 
 
-def test_a_wall_move_still_reports_what_it_destroyed():
-    """Whatever else is wrong, the user must be told. `rooms_gone` is what
-    the chat turns into "Master Bedroom no longer exists"."""
-    doc = box_doc()
-    rid = doc.design.active.rooms[0].id
-    doc.apply(Command(op="update_room",
-                      params={"room_id": rid, "name": "Hall"}))
-    res = doc.apply(Command(op="move_wall_parallel", source="agent", params={
-        "wall_id": "w0", "direction": "south", "distance_mm": 500}))
+def test_rooms_gone_still_reports_a_genuine_loss():
+    """`rooms_gone` is what the chat turns into "Bedroom 2 no longer exists",
+    so it has to keep working for the case where a room really does go --
+    a deliberate merge, not a torn graph."""
+    doc = divided_doc()
+    rooms = doc.design.active.rooms
+    assert len(rooms) == 2
+    for r, name in zip(rooms, ("Bedroom 1", "Bedroom 2")):
+        doc.apply(Command(op="update_room",
+                          params={"room_id": r.id, "name": name}))
+    res = doc.apply(Command(op="remove_element", params={"element_id": "w4"}))
     assert res.ok
-    assert "Hall" in res.rooms_gone
+    assert len(res.rooms_gone) == 1
+    assert res.rooms_gone[0] in ("Bedroom 1", "Bedroom 2")
 
 
 def test_an_adopted_solver_plan_has_anchors():
@@ -715,7 +717,7 @@ def test_an_adopted_solver_plan_has_anchors():
     exact wall set — which a wall move invalidates by definition.
 
     `Document.from_plan` skipped this, so plans straight out of the solver
-    were in exactly that state. Found by `tests/probe_agent.py`, which
+    were in exactly that state. Found by `scripts/probe_agent.py`, which
     reported "named 7 -> 0" after one wall move.
     """
     from fpeval.ir import Room

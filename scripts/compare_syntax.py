@@ -7,7 +7,7 @@ number and a target instead of an opinion.
 """
 import pickle, sys, statistics as st, warnings
 warnings.filterwarnings("ignore")
-sys.path.insert(0, "src")
+import _bootstrap  # noqa: F401  (path + cwd)
 from fpeval.resplan import convert
 from fpeval.syntax import analyse, check
 from fpeval.suite import load_suite

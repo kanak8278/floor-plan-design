@@ -77,6 +77,8 @@ class Result:
     n_symbols: int = 0
     furnish_drops: int = 0
     warnings: list[str] = field(default_factory=list)
+    error_ids: list[str] = field(default_factory=list)
+    warn_ids: list[str] = field(default_factory=list)
     error: str | None = None
     plan: Any = None
 
@@ -227,6 +229,46 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
                             target_m2=4.0, weight=0.6))
             warn.append(f"foyer added: {res.foyer.reason}")
         req_adj, forb_adj, soft_adj = TP.solver_pairs(prog, sc)
+
+        # The brief's OWN adjacency requests, on top of the scenario defaults.
+        # These were only ever used to CHECK the result, never to drive the
+        # solve, so "a balcony off the master bedroom" never reached the solver
+        # and failed on 22 of the detailed examples. A stated requirement has to
+        # be an input, not just an assertion.
+        _by_cat: dict[str, list[str]] = {}
+        for _r in prog:
+            _by_cat.setdefault(_r.category, []).append(_r.id)
+
+        def _pick(cat: str) -> str | None:
+            ids = _by_cat.get(cat)
+            if ids:
+                return ids[0]
+            # "master_bedroom" may be realised as the first bedroom.
+            if cat == "master_bedroom":
+                b = _by_cat.get("bedroom")
+                return b[0] if b else None
+            if cat == "bedroom":
+                b = _by_cat.get("master_bedroom")
+                return b[0] if b else None
+            return None
+
+        _used: set[str] = set()
+        for _ca, _cb in (t.adjacent or []):
+            _a, _b = _pick(_ca), _pick(_cb)
+            if _a and _b and _a != _b:
+                # Distinct hosts where the brief asks for several of one type:
+                # "one balcony off the living, one off the master" needs two
+                # different balconies, not the same one twice.
+                _cands = [i for i in _by_cat.get(_ca, []) if i not in _used] \
+                    or _by_cat.get(_ca, [_a])
+                _a = _cands[0]
+                _used.add(_a)
+                req_adj.append((_a, _b))
+        for _ca, _cb in (t.not_adjacent or []):
+            for _x in _by_cat.get(_ca, []):
+                for _y in _by_cat.get(_cb, []):
+                    if _x != _y:
+                        forb_adj.append((_x, _y))
         res.typology = sc.key
         res.scenario = sc
         sr = solve_layout(
@@ -304,13 +346,31 @@ def run(example, *, track: str = "A", client=None, time_limit_s: float = 12.0,
 
     res.plan = plan
     res.n_rooms = len(plan.rooms)
-    brief = {"scenario": res.typology,
+    # Hand the validator what the brief actually asked for, so an unmet request
+    # becomes a finding on the plan rather than only a suite score.
+    _reqs = {
+        "rooms": {**(t.rooms or {}), **(t.rooms_min or {})},
+        "adjacent": [list(x) for x in (t.adjacent or [])],
+        "not_adjacent": [list(x) for x in (t.not_adjacent or [])],
+        "must_place": list(t.must_place or []),
+        "place_in": dict(t.place_in or {}),
+        "vastu_zones": dict(t.vastu_zones or {}),
+    }
+    brief = {"requirements": _reqs,
+             "scenario": res.typology,
              "site_kind": "apartment_unit" if is_unit else "plot",
              "plot_area_sqft": plot_sqft or None,
              "habitable_floors": int(t.storeys or 1)}
     findings = validate_plan(plan, brief=brief, profile=BENGALURU)
     errs = [f for f in findings if f.severity == "error"]
     res.n_errors, res.n_warnings = len(errs), len(findings) - len(errs)
+    # Keep the ids: without them the only way to ask "which rule fails most
+    # across the suite" was to re-validate outside this function, and doing
+    # that with an empty brief blamed the bye-law family for 10 errors on
+    # apartment units that `check_bylaws` correctly skips when it is told the
+    # site is a unit.
+    res.error_ids = [f.rule_id for f in errs]
+    res.warn_ids = [f.rule_id for f in findings if f.severity == "warn"]
 
     # ---- compliance ------------------------------------------------------
     res.checks.append(Check("no_rule_errors", not errs,

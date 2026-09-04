@@ -264,7 +264,7 @@ class Document:
         out of the solver had zero anchors, and one `move_wall_parallel`
         dropped all seven room names -- reconciliation fell through to
         matching by exact wall set, which a wall move invalidates by
-        definition. `tests/probe_agent.py` caught it; the tests below pin it.
+        definition. `scripts/probe_agent.py` caught it; the tests below pin it.
 
         Deliberately NOT called when loading from storage. A stored document's
         rooms already carry anchors, and mutating a design on load would

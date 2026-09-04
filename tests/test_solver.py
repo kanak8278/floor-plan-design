@@ -400,7 +400,10 @@ def test_2bhk_on_20x30_reports_the_band_argument():
     assert res.topology_exhausted is True
     joined = " ".join(res.infeasible_groups)
     assert "clear width" in joined and "band" in joined, res.infeasible_groups
-    assert "min_clear_width" in res.infeasible_groups
+    # The diagnosis carries both a prose sentence with the arithmetic and the
+    # constraint-group name; the name is a substring of one entry, not an
+    # entry of its own ("min_area+min_clear_width (jointly)").
+    assert "min_clear_width" in joined, res.infeasible_groups
 
 
 def test_short_budget_never_misreports_a_solvable_brief_as_infeasible():
@@ -517,11 +520,26 @@ def test_pinned_walls_survive_a_resolve_and_unpinned_ones_do_not():
     assert all(g in got for g in pinned_geom), "a pinned wall moved"
     assert pinned.pinned_ok is True
 
-    # the re-solve genuinely changed the plan, so the pin was load-bearing
-    assert pinned.area_m2["living"] > base.area_m2["living"] + 1.0
+    # The control is on the FREE solve, not the pinned one. This used to assert
+    # that the pinned re-solve grew the living room, which asks the pin to fail:
+    # on seed 1 the two pinned walls are the ones that bound the living room, so
+    # honouring them means the living room cannot grow (16.32 -> 16.03 m2).
+    # What shows the pin was load-bearing is that the same brief WITHOUT pins
+    # does grow it, to 22.7 m2, by moving exactly those walls.
     free_got = {_wall_axis_coord(w) for w in free.plan.walls}
     assert not all(g in free_got for g in pinned_geom), \
         "control failed: walls did not move even without pins"
+    # Deliberately NOT "the free solve gives the living room more area". It
+    # sometimes does not, and correctly: on a 30x40 3BHK the topologies that
+    # deliver a 23 m2 living room all break the required kitchen-living
+    # adjacency or leave a room off circulation, and the cross-topology key
+    # prefers structure over area on purpose. What this test is about is
+    # whether a pin holds, so it asserts that the plans DIFFER -- the pin
+    # constrained the search -- without claiming which one has more living
+    # room.
+    assert {k: round(v, 2) for k, v in pinned.area_m2.items()} != \
+        {k: round(v, 2) for k, v in free.area_m2.items()}, \
+        "the pin cost nothing: pinned and free produced the same areas"
 
 
 def test_pinning_without_a_previous_result_is_a_no_op_not_a_crash():
