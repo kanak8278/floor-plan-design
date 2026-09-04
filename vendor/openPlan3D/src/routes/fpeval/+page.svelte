@@ -8,10 +8,20 @@
   let filter = 'all';
 
   const KEY = 'floorplan_projects';
+  const THUMB = 'floorplan_thumb_';
   // Everything fpeval has ever written, including the legacy prefixes from
   // earlier runs, so a stale generation cannot survive a reload.
   const GENERATED = ['fpeval-', 'sx-', 'fp-', 'b-', 'demo-', 'proj-'];
   let purged = 0;
+  let held = 0;          // how many plans the browser is holding right now
+
+  // Thumbnails live under their own keys, so removing a plan without them
+  // leaves the image behind and the next plan to reuse that id shows the old
+  // picture.
+  /** @param {string} id */
+  const forget = (id) => { try { localStorage.removeItem(THUMB + id); } catch {} };
+
+  const count = () => Object.keys(JSON.parse(localStorage.getItem(KEY) || '{}')).length;
 
   onMount(async () => {
     try {
@@ -24,12 +34,19 @@
       // Anything the user drew themselves is untouched.
       let removed = 0;
       for (const k of Object.keys(all)) {
-        if (GENERATED.some((pre) => k.startsWith(pre))) { delete all[k]; removed++; }
+        if (GENERATED.some((pre) => k.startsWith(pre))) { delete all[k]; forget(k); removed++; }
       }
       for (const p of [...suite, ...resplan]) all[p.id] = JSON.stringify(p);
       localStorage.setItem(KEY, JSON.stringify(all));
       purged = removed;
-      status = `${suite.length} generated + ${resplan.length} converted plans loaded` + (removed ? `, ${removed} superseded plan(s) purged.` : '.');
+      held = count();
+      status = suite.length || resplan.length
+        ? `${suite.length} generated + ${resplan.length} converted plans loaded`
+          + (removed ? `, ${removed} superseded plan(s) purged. ` : '. ')
+          + `${held} plan(s) in this browser.`
+        : `Nothing to load: /fpeval/suite.json and /fpeval/projects.json are `
+          + `empty. ${removed} generated plan(s) purged; ${held} plan(s) left `
+          + `in this browser.`;
       ok = true;
     } catch (e) { status = 'Failed: ' + e; }
   });
@@ -62,12 +79,24 @@
       const all = JSON.parse(localStorage.getItem(KEY) || '{}');
       let n = 0;
       for (const k of Object.keys(all)) {
-        if (GENERATED.some((pre) => k.startsWith(pre))) { delete all[k]; n++; }
+        if (GENERATED.some((pre) => k.startsWith(pre))) { delete all[k]; forget(k); n++; }
       }
       localStorage.setItem(KEY, JSON.stringify(all));
       suite = []; resplan = [];
-      status = `cleared ${n} generated plan(s); anything you drew yourself is untouched`;
+      held = count();
+      status = `cleared ${n} generated plan(s); ${held} left, including anything you drew yourself`;
     }}>Clear generated</button>
+    <button class="danger" on:click={() => {
+      // Everything, including hand-drawn plans, so it asks first. "Clear
+      // generated" above only removes what fpeval wrote.
+      const n = count();
+      if (!confirm(`Delete ALL ${n} plan(s) in this browser, including any you `
+                 + `drew by hand? This cannot be undone.`)) return;
+      for (const k of Object.keys(JSON.parse(localStorage.getItem(KEY) || '{}'))) forget(k);
+      localStorage.setItem(KEY, '{}');
+      suite = []; resplan = []; held = 0;
+      status = `cleared all ${n} plan(s). Clean slate.`;
+    }}>Clear everything</button>
     <button class:active={tab === 'suite'} on:click={() => tab = 'suite'}>Generated ({suite.length})</button>
     <button class:active={tab === 'resplan'} on:click={() => tab = 'resplan'}>ResPlan ({resplan.length})</button>
   </div>
