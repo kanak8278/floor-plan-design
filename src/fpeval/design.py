@@ -251,7 +251,10 @@ def check(plan, *, adjacency: dict[str, set[str]] | None = None,
         by_cat.setdefault(_cat(r), []).append(r.id)
 
     circ = set(getattr(typology, "circulation", ("living", "dining", "foyer")))
-    single_dwelling = getattr(typology, "kind", "") != "rental_floors"
+    # `multi_kitchen` is declared on the scenario; the kind string is the
+    # fallback for callers still passing a typology.py Typology.
+    single_dwelling = not (getattr(typology, "multi_kitchen", False)
+                           or getattr(typology, "kind", "") == "rental_floors")
 
     # ---- 1. one kitchen per dwelling ---------------------------------------
     kits = by_cat.get("kitchen", [])

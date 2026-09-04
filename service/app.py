@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from fpeval.bylaws import BENGALURU
 from fpeval.envelope import compute_envelope, CityProfileAdapter, RoomReq
 from fpeval.solver import solve_layout, LayoutSpec
+from fpeval.bridge import relational_pairs, resolve_scenario
 from fpeval.rules import validate as validate_plan
 from fpeval.render import render as render_svg
 from fpeval.project import to_project, from_project
@@ -66,10 +67,19 @@ class GenerateIn(BaseModel):
     time_limit_s: float = 12.0
     storey_height: int = 3000
     render: bool = True
+    # What the client asked for, so the BRIEF.* family can compare intent
+    # against the result. Build it with `bridge.brief_from_spec(spec)`.
+    # Passing None leaves all six brief checks inert, which is what the service
+    # did unconditionally before.
+    brief: dict[str, Any] | None = None
+    # Topology scenario key, e.g. "house_mid" or "apartment_standard". Left
+    # unset it is inferred from the programme and the plot.
+    scenario: str | None = None
 
 
 class ProjectIn(BaseModel):
     project: dict[str, Any]
+    brief: dict[str, Any] | None = None
 
 
 class RenderIn(ProjectIn):
@@ -121,14 +131,31 @@ def generate(body: GenerateIn) -> dict[str, Any]:
                     target_m2=r.target_m2, weight=r.weight,
                     vastu_zone=r.vastu_zone, is_entrance=r.is_entrance)
             for r in body.programme]
+    brief = body.brief or {}
     try:
         stmt = compute_envelope(body.width_ft, body.depth_ft,
                                 road_facing=body.road_facing, profile=PROFILE,
                                 programme=prog)
+        # Relational terms, from the scenario's preference matrix. The service
+        # used to build a LayoutSpec from programme + entrance + time limit and
+        # nothing else, so it solved with no relational objective at all and
+        # then validated against TYPO / TOPO / ZONE rules that assume one. Only
+        # the offline suite runner ever populated these, which meant the
+        # measured suite figures described a configuration the service did not
+        # run.
+        sc = resolve_scenario(
+            prog, site_kind=str(brief.get("site_kind", "plot")),
+            plot_sqft=body.width_ft * body.depth_ft,
+            storeys=int(brief.get("habitable_floors", 1) or 1),
+            scenario_key=body.scenario or brief.get("scenario"))
+        req_adj, forb_adj, soft_adj = relational_pairs(prog, sc)
         res = solve_layout(
             body.width_ft, body.depth_ft,
             LayoutSpec(programme=prog,
                        entrance_room=body.entrance_room or (prog[0].id if prog else None),
+                       required_adjacency=req_adj,
+                       forbidden_adjacency=forb_adj,
+                       soft_adjacency=soft_adj,
                        time_limit_s=body.time_limit_s),
             road_facing=body.road_facing, north_deg=body.north_deg,
             profile=PROFILE, plan_id=f"api-{int(t0)}",
@@ -142,13 +169,19 @@ def generate(body: GenerateIn) -> dict[str, Any]:
         "status": status,
         "solve_ms": round(1000 * (time.time() - t0)),
         "area_statement": getattr(stmt, "to_dict", lambda: None)() if stmt else None,
+        # Which relational terms the solve actually carried. Reported because a
+        # plan solved with none of them is a different artefact from one solved
+        # with all of them, and the findings must be read differently.
+        "scenario": {"key": sc.key, "display": sc.display,
+                     "required": len(req_adj), "forbidden": len(forb_adj),
+                     "weighted": len(soft_adj)},
     }
     if plan is None:
         out["infeasible_groups"] = list(getattr(res, "infeasible_groups", []) or [])
         out["explanation"] = getattr(res, "explanation", None) or getattr(res, "reason", None)
         return out
 
-    findings = validate_plan(plan, brief=None, profile=BENGALURU)
+    findings = validate_plan(plan, brief=brief, profile=BENGALURU)
     out["project"] = to_project(plan)
     out["findings"] = _findings_json(findings)
     if body.render:
@@ -166,7 +199,7 @@ def validate(body: ProjectIn) -> dict[str, Any]:
     except Exception as e:
         raise HTTPException(400, f"not a readable Project: {type(e).__name__}: {e}")
     t0 = time.time()
-    findings = validate_plan(plan, brief=None, profile=BENGALURU)
+    findings = validate_plan(plan, brief=body.brief, profile=BENGALURU)
     return {"findings": _findings_json(findings),
             "n_errors": sum(1 for f in findings if f.severity == "error"),
             "n_warnings": sum(1 for f in findings if f.severity == "warn"),
@@ -180,6 +213,6 @@ def render(body: RenderIn) -> dict[str, Any]:
         plan = from_project(body.project)
     except Exception as e:
         raise HTTPException(400, f"not a readable Project: {type(e).__name__}: {e}")
-    findings = validate_plan(plan, brief=None, profile=BENGALURU) if body.with_findings else None
+    findings = validate_plan(plan, brief=body.brief, profile=BENGALURU) if body.with_findings else None
     svg = render_svg(plan, body.mode, findings=findings)
     return {"svg": svg, "mode": body.mode, "bytes": len(svg)}

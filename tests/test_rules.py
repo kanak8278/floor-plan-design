@@ -616,6 +616,9 @@ SCALE_FREE = {
     "GEO.OPENING_TOO_WIDE", "GEO.OPENING_OVERRUNS_WALL", "GEO.OPENING_OFF_WALL",
     "GEO.NO_FRONT_DOOR", "GEO.UNREACHABLE_ROOM",
     "NBC.WC_OPENS_INTO_KITCHEN",
+    # Budgeted because `typology._COMMON` gained three prohibitions from the
+    # suite review; without a budget this family could drift unnoticed.
+    "TYPO.FORBIDDEN_ADJACENCY",
 }
 
 
@@ -660,6 +663,11 @@ FP_BUDGET = {
     "GEO.ROOM_OUTSIDE_ENVELOPE": 0.03,
     "GEO.ROOM_DEGENERATE": 0.02,
     "NBC.WC_OPENS_INTO_KITCHEN": 0.04,
+    # Measured 2.5% on 200 real ResPlan plans (5 findings / 200): 2 WC-into-
+    # kitchen, 3 kitchen-into-bedroom. Real plans do carry these defects, so the
+    # budget allows them; it exists to catch a rule that starts firing on
+    # everything.
+    "TYPO.FORBIDDEN_ADJACENCY": 0.05,
 }
 FP_BUDGET_DEFAULT = 0.005
 

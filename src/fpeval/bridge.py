@@ -365,3 +365,270 @@ def typology_adjacency(prog, kind: str
         if anchor:
             req.append((bid, anchor))
     return req, forb
+
+
+# --------------------------------------------------------------- spec -> brief
+# The rule engine reads a `brief` dict; `check_brief` looks for its content under
+# `brief["requirements"]`. Nothing built that dict from a DesignSpec: the only
+# producer was `score.py`, which builds it from hand-written suite ground truth.
+# So in production -- prompt -> extract_spec -> solve -> validate -- all six
+# BRIEF.* rules received an empty dict and returned nothing, and the service
+# passes `brief=None` outright. A stated client requirement was therefore neither
+# an input to the solver nor a checkable assertion on the result.
+#
+# The mapping is mechanical; every field it needs is already on DesignSpec.
+
+# Vastu requirement strings the extractor emits, e.g. "pooja_northeast".
+_ZONE_WORDS = {
+    "north": "N", "northeast": "NE", "north_east": "NE", "east": "E",
+    "southeast": "SE", "south_east": "SE", "south": "S",
+    "southwest": "SW", "south_west": "SW", "west": "W",
+    "northwest": "NW", "north_west": "NW", "centre": "centre", "center": "centre",
+}
+# `relation` values `check_brief` can actually test. `visual` needs a sightline
+# test and `same_floor` needs a storey field on Room; both are reported as
+# unchecked rather than silently dropped, because a requirement that vanishes
+# looks exactly like one that passed.
+_DOOR_RELATIONS = ("direct_access",)
+_TOUCH_RELATIONS = ("adjacent",)
+
+
+# The vastu requirement strings use a shorter vocabulary than either
+# `SPEC_TO_CANON` or `roomtypes` aliases: "master_southwest", not
+# "master_bedroom_southwest". Adding "master" as a roomtypes alias would match
+# it anywhere in a printed label, so the shorthand is resolved here instead.
+_VASTU_ROOM_WORDS = {
+    "master": "master_bedroom", "master_bed": "master_bedroom",
+    "toilet": "bathroom", "bath": "bathroom", "wc": "bathroom",
+    "hall": "living", "drawing": "living", "puja": "pooja",
+    "stair": "stair", "staircase": "stair", "entrance": "foyer",
+    "entry": "foyer", "main_door": "foyer",
+}
+
+
+def _vastu_zone_pairs(reqs) -> dict[str, str]:
+    """["pooja_northeast", "no_toilet_northeast"] -> {"pooja": "NE"}.
+
+    A `no_x_zone` string is a prohibition, not a placement, and the VASTU family
+    already scores avoid-zones from `roomtypes.vastu_avoid`; encoding it here as
+    a *requested* zone would invert its meaning.
+    """
+    out: dict[str, str] = {}
+    for s in reqs or []:
+        t = str(s).strip().lower()
+        if t.startswith(("no_", "avoid_", "not_")):
+            continue
+        for word, zone in sorted(_ZONE_WORDS.items(), key=lambda kv: -len(kv[0])):
+            if t.endswith("_" + word) or t.endswith(word):
+                head = t[: len(t) - len(word)].rstrip("_")
+                cat = canon(head)
+                if cat == "unknown":
+                    cat = _VASTU_ROOM_WORDS.get(head, "unknown")
+                if cat == "unknown":
+                    cat = rt.canonical(head.replace("_", " "))
+                if cat != "unknown":
+                    out[cat] = zone
+                break
+    return out
+
+
+def brief_from_spec(spec: Any, *, typology: str | None = None) -> dict:
+    """DesignSpec -> the `brief` dict the rule engine reads.
+
+    Counts are per canonical category, so "3 BHK" arriving as two `bedroom`
+    plus one `master_bedroom` asks for 3 bedrooms and `check_brief._ids`
+    resolves the subtype. Optional rooms are excluded: a nice-to-have that did
+    not fit is a trade-off the solver reports, not a brief failure.
+    """
+    rooms: dict[str, int] = {}
+    zones: dict[str, str] = {}
+    attached = 0
+    for r in getattr(spec, "rooms", []) or []:
+        if getattr(r, "optional", False):
+            continue
+        key = canon(getattr(r, "category", ""))
+        if key == "unknown":
+            continue
+        # Count master_bedroom as a bedroom request too, matching how the suite
+        # and `roomtypes.SUBTYPE_OF` treat it.
+        rooms[key] = rooms.get(key, 0) + 1
+        if getattr(r, "attached_bath", False):
+            attached += 1
+        z = getattr(r, "preferred_zone", None)
+        if z:
+            zones[key] = z
+
+    ent = getattr(spec, "entrance", None)
+    if ent is not None and getattr(ent, "via_foyer", False):
+        rooms.setdefault("foyer", 1)
+
+    door_pairs: list[list[str]] = []
+    touch_pairs: list[list[str]] = []
+    forbid_pairs: list[list[str]] = []
+    unchecked: list[str] = []
+    for adj in getattr(spec, "adjacency", []) or []:
+        a, b = canon(getattr(adj, "a", "")), canon(getattr(adj, "b", ""))
+        if a == "unknown" or b == "unknown" or a == b:
+            continue
+        rel = getattr(adj, "relation", "adjacent")
+        prohibited = getattr(adj, "kind", "required") == "prohibited"
+        if prohibited:
+            # A prohibition on any relation is at least a prohibition on a door,
+            # which is the strongest thing we can test.
+            forbid_pairs.append([a, b])
+        elif rel in _DOOR_RELATIONS:
+            door_pairs.append([a, b])
+        elif rel in _TOUCH_RELATIONS:
+            touch_pairs.append([a, b])
+        else:
+            unchecked.append(f"{a}-{b} ({rel})")
+
+    vs = getattr(spec, "vastu", None)
+    zones.update(_vastu_zone_pairs(getattr(vs, "requirements", None)))
+
+    area = getattr(spec, "unit_area", None)
+    is_unit = getattr(spec, "site_kind", "plot") == "apartment_unit"
+    w, d = getattr(spec, "plot_width_ft", None), getattr(spec, "plot_depth_ft", None)
+
+    brief: dict = {
+        "requirements": {
+            "rooms": rooms,
+            "adjacent": door_pairs,
+            "touching": touch_pairs,
+            "not_adjacent": forbid_pairs,
+            "vastu_zones": zones,
+            "must_place": [],
+            "place_in": {},
+            "unchecked_relations": unchecked,
+        },
+        "site_kind": getattr(spec, "site_kind", "plot"),
+        "plot_area_sqft": (w * d) if (w and d) else None,
+        "habitable_floors": int(getattr(spec, "storeys", 1) or 1),
+        "attached_bath": attached,
+        "vastu": bool(getattr(vs, "enabled", False)),
+    }
+    if typology:
+        brief["typology"] = typology
+    if is_unit and area is not None:
+        brief["carpet_sqft"] = (getattr(area, "rera_carpet_sqft", None)
+                                or getattr(area, "carpet_sqft", None))
+    return brief
+
+
+def spec_adjacency_pairs(spec: Any, prog: list[RoomReq]
+                         ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """The spec's OWN adjacency wishes as solver room-id pairs.
+
+    `spec_to_programme` never read `spec.adjacency`, so "a balcony off the master
+    bedroom" reached neither the solver nor the validator. Distinct hosts where
+    the brief asks for several of one type: two balconies off two different
+    rooms need two different hosts, not the same one twice.
+    """
+    by_cat: dict[str, list[str]] = {}
+    for r in prog:
+        by_cat.setdefault(r.category, []).append(r.id)
+    room_ids = {r.id for r in prog}
+
+    def pick(token: str, used: set[str]) -> str | None:
+        # An agent's `set_adjacency` names room ids; an extracted brief names
+        # categories. Accept either.
+        if token in room_ids:
+            return token
+        cats = rt.subtypes_of(canon(token)) + rt.counts_as(canon(token))[1:]
+        for c in cats:
+            for i in by_cat.get(c, []):
+                if i not in used:
+                    return i
+        for c in cats:
+            if by_cat.get(c):
+                return by_cat[c][0]
+        return None
+
+    def all_of(token: str) -> list[str]:
+        if token in room_ids:
+            return [token]
+        c = canon(token)
+        return [i for cat in rt.subtypes_of(c) + rt.counts_as(c)[1:]
+                for i in by_cat.get(cat, [])]
+
+    req: list[tuple[str, str]] = []
+    forb: list[tuple[str, str]] = []
+    used: set[str] = set()
+    for adj in getattr(spec, "adjacency", []) or []:
+        a, b = getattr(adj, "a", ""), getattr(adj, "b", "")
+        if a == b or (a not in room_ids and canon(a) == "unknown") \
+                or (b not in room_ids and canon(b) == "unknown"):
+            continue
+        if getattr(adj, "kind", "required") == "prohibited":
+            # A prohibition applies to EVERY room it names -- "no toilet off
+            # the kitchen" means no toilet off any kitchen -- so it is the
+            # cross product, not one chosen host.
+            forb += [(x, y) for x in all_of(a) for y in all_of(b) if x != y]
+            continue
+        if getattr(adj, "relation", "adjacent") not in _DOOR_RELATIONS + _TOUCH_RELATIONS:
+            continue                            # `visual`/`same_floor`: no solver term
+        x, y = pick(a, used), pick(b, used)
+        if x and y and x != y:
+            req.append((x, y))
+            used.update((x, y))
+    return req, forb
+
+
+# ------------------------------------------------------- relational solve terms
+# `topology.solver_pairs` turns a scenario's signed preference matrix into
+# required / forbidden / weighted room-id pairs, and the solver has carried the
+# machinery for all three since the start: `required_adjacency` is priced at 1e7
+# in the cross-topology key, `forbidden_adjacency` removes the edge outright,
+# and `soft_adjacency` is weighted by `w_soft_adj`.
+#
+# Only `score.py` ever populated them. `loop.py` and `service/app.py` built a
+# LayoutSpec from programme + entrance + time limit and nothing else, so on both
+# of those paths the 1e7 term multiplied an empty list and `w_soft_adj` weighted
+# nothing -- the plan was solved with no relational objective at all and then
+# validated against rules that assume one. The measured suite figures therefore
+# described a configuration neither the repair loop nor the service ran.
+#
+# One helper, so the three callers cannot drift again.
+
+def resolve_scenario(prog: list[RoomReq], *, site_kind: str = "plot",
+                     plot_sqft: float | None = None,
+                     carpet_sqft: float | None = None, storeys: int = 1,
+                     scenario_key: str | None = None):
+    """The topology scenario for a programme. Explicit key beats inference."""
+    from . import topology as TP
+    if scenario_key and scenario_key in TP.SCENARIOS:
+        return TP.SCENARIOS[scenario_key]
+    cats = [r.category for r in prog]
+    return TP.resolve(
+        site_kind=site_kind, plot_sqft=plot_sqft, carpet_sqft=carpet_sqft,
+        storeys=int(storeys or 1),
+        bedrooms=sum(1 for c in cats if c in ("bedroom", "master_bedroom")),
+        kitchens=max(sum(1 for c in cats if c == "kitchen"), 1),
+        has_two_living=sum(1 for c in cats if c == "living") >= 2)
+
+
+def relational_pairs(prog: list[RoomReq], scenario, *, spec: Any = None
+                     ) -> tuple[list[tuple[str, str]], list[tuple[str, str]],
+                                list[tuple[str, str, float]]]:
+    """(required, forbidden, weighted) for `LayoutSpec`, scenario + spec merged.
+
+    The scenario supplies the defaults for the typology and size band; the spec
+    supplies what this client actually asked for, and a client's explicit wish
+    outranks a default -- so spec pairs are appended after and a forbidden pair
+    wins over a required one carrying the same rooms. Silently solving for a
+    pair the brief forbids is worse than dropping the default.
+    """
+    from . import topology as TP
+    req, forb, soft = TP.solver_pairs(prog, scenario)
+    if spec is not None:
+        s_req, s_forb = spec_adjacency_pairs(spec, prog)
+        req += s_req
+        forb += s_forb
+    forb_keys = {frozenset(p) for p in forb}
+    req = [p for p in dict.fromkeys(req)
+           if p[0] != p[1] and frozenset(p) not in forb_keys]
+    forb = [p for p in dict.fromkeys(forb) if p[0] != p[1]]
+    req_keys = {frozenset(p) for p in req}
+    soft = [t for t in soft if t[0] != t[1] and frozenset(t[:2]) not in forb_keys
+            and frozenset(t[:2]) not in req_keys]
+    return req, forb, soft

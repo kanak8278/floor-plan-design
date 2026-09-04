@@ -13,6 +13,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+# ROOT as well as SRC: `service` and `tests` are imported as top-level packages
+# (`from service.store import ...`, `from tests.test_rules import ...`), and
+# pytest's prepend import mode only puts `tests/` on the path, not the root.
+for path in (SRC, ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 os.chdir(ROOT)

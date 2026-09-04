@@ -27,7 +27,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .bridge import cap_service_targets, shed_optional, spec_to_programme
+from .bridge import (cap_service_targets, shed_optional, spec_to_programme,
+                     resolve_scenario, relational_pairs)
 from .bylaws import BENGALURU
 from .commands import Command
 from .envelope import CityProfileAdapter, UnitInterior, compute_envelope
@@ -62,35 +63,6 @@ class BuildResult:
     @property
     def n_warnings(self) -> int:
         return sum(1 for f in self.findings if getattr(f, "severity", "") == "warn")
-
-
-def _adjacency(spec: DesignSpec, ids: set[str]) -> tuple[list, list]:
-    """Brief adjacencies as solver constraints.
-
-    The brief writes some of these against a category ("no WC opening onto a
-    kitchen") and some against a room id, so both are resolved to ids here.
-    Without this the agent's `set_adjacency` would write to the brief, report
-    success, and change nothing about the solve -- the same shape of failure
-    as a command with no handler, only harder to notice.
-    """
-    by_cat: dict[str, list[str]] = {}
-    for r in spec.rooms:
-        by_cat.setdefault(r.category, []).append(r.id)
-
-    def expand(token: str) -> list[str]:
-        if token in ids:
-            return [token]
-        return by_cat.get(token, [])
-
-    req: list[tuple[str, str]] = []
-    forb: list[tuple[str, str]] = []
-    for a in spec.adjacency:
-        for x in expand(a.a):
-            for y in expand(a.b):
-                if x == y:
-                    continue
-                (req if a.kind == "required" else forb).append((x, y))
-    return req, forb
 
 
 def build(doc: Any, *, time_limit_s: float = 12.0,
@@ -152,8 +124,15 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
 
     facing = (sp.road_facing_side or "north")[0].upper()
     w_ft, d_ft = float(sp.plot_width_ft or 0), float(sp.plot_depth_ft or 0)
-    ids = {r.id for r in prog}
-    req, forb = _adjacency(sp, ids)
+    # Scenario defaults plus what this brief actually asked for, through the
+    # one helper `loop.py` and `service/app.py` also use. Solving with an empty
+    # relational objective and then validating against TYPO/TOPO/ZONE rules
+    # that assume one is how a plan comes back with the hall at the far end.
+    sc = resolve_scenario(prog, site_kind=("apartment_unit" if unit else "plot"),
+                          plot_sqft=(w_ft * d_ft) if (w_ft and d_ft) else None,
+                          carpet_sqft=sp.unit_area.resolved_carpet_sqft(),
+                          storeys=int(sp.storeys or 1))
+    req, forb, soft = relational_pairs(prog, sc, spec=sp)
 
     t0 = time.time()
     try:
@@ -172,6 +151,7 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
             w_ft, d_ft,
             LayoutSpec(programme=prog,
                        required_adjacency=req, forbidden_adjacency=forb,
+                       soft_adjacency=soft,
                        entrance_room=next((r.id for r in prog if r.is_entrance),
                                           prog[0].id),
                        time_limit_s=time_limit_s),
@@ -220,6 +200,8 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
                     w_ft, d_ft,
                     LayoutSpec(programme=kept, required_adjacency=req2,
                                forbidden_adjacency=forb2,
+                               soft_adjacency=[t for t in soft
+                                               if t[0] in keep_ids and t[1] in keep_ids],
                                entrance_room=next(
                                    (r.id for r in kept if r.is_entrance),
                                    kept[0].id),
