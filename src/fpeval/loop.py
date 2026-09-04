@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .bylaws import BENGALURU
-from .bridge import spec_to_programme, SQFT_M2
+from .bridge import spec_to_programme, relational_pairs, resolve_scenario, SQFT_M2
 from .envelope import compute_envelope, CityProfileAdapter
 from .solver import solve_layout, LayoutSpec
 from .rules import validate as validate_plan
@@ -157,10 +157,23 @@ def _solve(spec, w_ft, d_ft, facing, time_limit_s, plan_id):
         b = budgets.get(r.id)
         if b is not None and getattr(b, "budget_m2", 0):
             r.target_m2 = round(float(b.budget_m2), 2)
+    # Relational terms. Without these the loop solved with no relational
+    # objective -- the 1e7 required-adjacency penalty multiplied an empty list
+    # and `w_soft_adj` weighted nothing -- and then validated the result against
+    # TYPO / TOPO / ZONE rules that assume one. Every relational finding the
+    # patcher then saw was unreachable by re-solving, so the loop could only
+    # ever clear it by luck.
+    sc = resolve_scenario(prog, site_kind=getattr(spec, "site_kind", "plot"),
+                          plot_sqft=(w_ft * d_ft) if (w_ft and d_ft) else None,
+                          storeys=int(getattr(spec, "storeys", 1) or 1))
+    req_adj, forb_adj, soft_adj = relational_pairs(prog, sc, spec=spec)
     sr = solve_layout(w_ft, d_ft,
                       LayoutSpec(programme=prog,
                                  entrance_room=next((r.id for r in prog if r.is_entrance),
                                                     prog[0].id),
+                                 required_adjacency=req_adj,
+                                 forbidden_adjacency=forb_adj,
+                                 soft_adjacency=soft_adj,
                                  time_limit_s=time_limit_s),
                       road_facing=facing, profile=PROFILE, plan_id=plan_id)
     return sr, str(getattr(sr, "status", "?")), warn, round(1000 * (time.time() - t0))

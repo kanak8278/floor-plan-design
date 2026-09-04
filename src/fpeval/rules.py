@@ -1210,8 +1210,11 @@ def check_zoning(ctx: _Ctx) -> list[Finding]:
     out: list[Finding] = []
     zones: dict[str, list[str]] = {}
     for r in ctx.rooms:
-        z = TP.ZONE_OF.get(r.category or "")
-        if z and r.id in ctx.polys:
+        cat = r.category or ""
+        z = TP.ZONE_OF.get(cat)
+        # A pooja is public but Vastu pins it to the NE, away from the living, so
+        # counting it here reports a fragmented public zone on correct plans.
+        if z and r.id in ctx.polys and cat not in TP.ZONE_FRAGMENTATION_EXEMPT:
             zones.setdefault(z, []).append(r.id)
     for z in ("private", "public"):
         ids = zones.get(z, [])
@@ -1408,6 +1411,38 @@ def check_brief(ctx: _Ctx) -> list[Finding]:
                 f"the brief asks for no door between the {ca.replace('_', ' ')} "
                 f"and the {cb.replace('_', ' ')}, but {names.get(hit[0], hit[0])} "
                 f"opens into {names.get(hit[1], hit[1])}", list(hit)))
+
+    # ---- boundary adjacency, which is NOT a door ------------------------
+    # `spec.Adjacency.relation` distinguishes `direct_access` (a door) from
+    # `adjacent` (share a wall, door optional). Mapping both onto the door check
+    # above would reject a correct plan: "pooja adjacent to the living" is
+    # satisfied by a shared wall, and a door from a living room into a shrine is
+    # not what was asked for.
+    for pair in (req.get("touching") or []):
+        ca, cb = pair[0], pair[1]
+        xs, ys = _ids(ca), _ids(cb)
+        if not xs or not ys:
+            continue
+        if any(y in a.get(x, ()) for x in xs for y in ys):
+            continue                      # a door satisfies "adjacent" outright
+        touch = any(ctx.polys[x].buffer(60).intersects(ctx.polys[y])
+                    for x in xs for y in ys
+                    if x in ctx.polys and y in ctx.polys)
+        if not touch:
+            out.append(Finding(
+                "BRIEF.NOT_TOUCHING", "error", 0.8,
+                f"the brief asks for the {ca.replace('_', ' ')} to sit next to "
+                f"the {cb.replace('_', ' ')}; they neither share a wall nor a "
+                "door", xs[:2] + ys[:2]))
+
+    # ---- requirements we cannot test ------------------------------------
+    # Reported, not dropped. A requirement that vanishes from the report looks
+    # exactly like one that passed, which is the worst way for a check to fail.
+    for what in (req.get("unchecked_relations") or []):
+        out.append(Finding(
+            "BRIEF.RELATION_UNCHECKED", "warn", 0.1,
+            f"the brief states {what} and no check can test that relation yet; "
+            "it is neither confirmed nor denied", []))
 
     # ---- items, and which room they belong in ---------------------------
     placed = {f.catalog_id for f in getattr(ctx.plan, "furniture", None) or []}
@@ -1749,10 +1784,15 @@ def validate(plan: Plan, brief: dict | None = None,
     fs += check_zoning(ctx)
     fs += check_syntax(ctx)
     fs += check_standards(ctx)
-    fs += check_brief(ctx)
+    # Vastu BEFORE check_brief: `BRIEF.ZONE_UNMET` reads the vastu findings to
+    # tell "a zone we prefer" from "a zone the client asked for and did not
+    # get", and nothing wrote them. Running vastu last meant that rule read an
+    # absent key on every plan and could never fire.
     if brief.get("vastu", True):
         _s, vf = vastu_score(plan, profile, ctx)
+        ctx.brief["_vastu_findings"] = list(vf)
         fs += vf
+    fs += check_brief(ctx)
 
     if rules is not None:
         kept: list[Finding] = []

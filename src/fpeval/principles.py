@@ -184,7 +184,10 @@ def prompt_block(scenario_key: str = "house_standard", *, vastu: bool = True,
 # Families exempt from needing a principle. GEO is arithmetic -- "rooms must not
 # overlap" is not design advice, it is a validity condition. The declarative
 # BYLAW checks report an UNDECLARED brief field, which is paperwork, not design.
-EXEMPT_PREFIXES = ("GEO.", "TYPO.ASSUMED", "BYLAW.SITE_UNSPECIFIED",
+# BRIEF is exempt for a different reason than GEO: it is not a design judgement
+# at all. "The client asked for three bedrooms and got two" needs no principle
+# to justify it, and writing one would imply we could argue the point.
+EXEMPT_PREFIXES = ("GEO.", "BRIEF.", "TYPO.ASSUMED", "BYLAW.SITE_UNSPECIFIED",
                    "BYLAW.UNIT_NOT_A_SITE", "BYLAW.MAX_FLOORS_UNCHECKED",
                    "BYLAW.RWH_UNDECLARED", "BYLAW.ROAD_WIDTH_UNDECLARED")
 

@@ -61,6 +61,20 @@ _COMMON = (
             "a shrine must not share a wall or door with a toilet"),
     AdjRule("pooja", "kitchen", "separate", 0.4,
             "usually kept apart, though less strictly than from a toilet"),
+    # Mirrors of the three prohibitions added to `topology.UNIVERSAL` from the
+    # review of the 89 suite plans. They have to exist in BOTH tables: the
+    # solver reads `topology.Scenario.prefs`, while `TYPO.FORBIDDEN_ADJACENCY`
+    # in `rules.py` reads `Typology.expect` from here. Carrying it in one place
+    # only means the solver avoids a defect the validator cannot name.
+    AdjRule("kitchen", "bedroom", "separate", 1.0,
+            "cooking heat, smell and traffic inside a sleeping room. Measured: "
+            "3 of 200 real ResPlan plans (1.5%), 24 of 89 of ours (27%)"),
+    AdjRule("bathroom", "bathroom", "separate", 1.0,
+            "a toilet whose only door is into another toilet leaves neither "
+            "usable privately. Measured: 0 of 200 real ResPlan plans, "
+            "13 of 89 of ours"),
+    AdjRule("pooja", "stair", "separate", 1.0,
+            "a shrine under or beside a staircase"),
 )
 
 TYPOLOGIES: dict[str, Typology] = {

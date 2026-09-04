@@ -13,7 +13,18 @@ Built because the solver had no relational vocabulary at all. Measured against
 Ours have no spatial hierarchy whatsoever. Those real-plan figures are the
 targets in `SYNTAX_TARGETS` below.
 
-Two design choices worth stating:
+**What ResPlan can and cannot settle.** It is South Asian, so the region is
+right, but it labels only six room types -- living, kitchen, bedroom, bathroom,
+balcony, storage (`resplan.py:52`) -- and it is unit-level and single-floor,
+median 110 m². So it settles the *skeleton*: is the living room the core, does
+privacy grade with depth. It settles nothing about pooja, sitout, utility,
+store, foyer, servant, parking or the compound, which is to say nothing about
+the part of this file that is Indian rather than generic. Those preferences come
+from Indian plot-housing practice and from the Bengaluru builder plans behind
+`typology.py`, and the numbers in `SYNTAX_TARGETS` do not validate them. Do not
+reach for a ResPlan figure to justify a rule about a room ResPlan cannot see.
+
+Three design choices worth stating:
 
 * **Weighted preferences, not binary pairs.** The layout-optimisation literature
   converges on an adjacency *preference matrix*; our solver took a list of
@@ -23,6 +34,17 @@ Two design choices worth stating:
 * **Scenario = typology x size band.** A 20x30 2BHK cannot have a separate
   dining room and a 50x80 villa must. The same rule table for both is wrong in
   one direction or the other.
+* **Indian-centric by construction, not by calibration.** The prohibitions here
+  are the ones Indian practice actually holds -- a WC off the kitchen, a shrine
+  sharing a wall with a toilet or sitting under the stair, a toilet off the
+  dining, a bedroom door into the kitchen -- and the typologies are the ones
+  that exist on Indian plots, including rental floors and the joint-family house
+  with two kitchens on one floor. Where a rule has no measured backing, it says
+  so in its `why` rather than borrowing a foreign number.
+
+Stilt parking is deliberately absent from the scenarios: it is an area and
+height question, and `bylaws.py` already carries it as `stilt+3` / `stilt+4`
+with `max_habitable_floors` excluding the stilt. Nothing topological changes.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -31,21 +53,76 @@ from typing import Literal
 Zone = Literal["public", "private", "service", "circulation", "outdoor"]
 Relation = Literal["direct", "open", "near", "separate", "any"]
 
+# `rules.py` reads this with `.get()`, so a category missing here is not an error
+# -- it is silently invisible to every ZONE rule. `passage` was missing while all
+# 89 suite plans contain one, so the corridor counted towards no zone at all.
+# Covers the union of `roomtypes.py` keys and `spec.py` CATEGORIES, checked
+# rather than assumed. Note the two vocabularies disagree on spelling --
+# roomtypes says `sitout` and `stair`, spec says `sit_out` and `staircase` --
+# so both spellings are listed until that drift is resolved.
 ZONE_OF: dict[str, Zone] = {
-    "living": "public", "dining": "public", "foyer": "circulation",
-    "sitout": "outdoor", "bedroom": "private", "master_bedroom": "private",
-    "study": "private", "kitchen": "service", "utility": "service",
-    "store": "service", "bathroom": "service", "shaft": "service",
-    "stair": "circulation", "balcony": "outdoor", "patio": "outdoor",
-    "parking": "outdoor", "landscape": "outdoor", "pooja": "public",
+    # public
+    "living": "public", "dining": "public", "hall": "public",
+    "pooja": "public",
+    # `family` is not yet a real type: it needs a `roomtypes.py` entry and a
+    # `spec.py` category before the villa's formal/family prefs below can fire.
+    # Listed here so the zone is right the day it lands.
+    "family": "public",
+    # private
+    "bedroom": "private", "master_bedroom": "private",
+    "guest_bedroom": "private", "study": "private", "office": "private",
+    "servant": "private", "dress": "private",
+    # service
+    "kitchen": "service", "utility": "service", "store": "service",
+    "bathroom": "service", "toilet": "service", "powder": "service",
+    "handwash": "service", "shaft": "service",
+    # circulation -- every one of these was absent, including `passage`, which
+    # all 89 suite plans contain
+    "foyer": "circulation", "stair": "circulation", "staircase": "circulation",
+    "passage": "circulation", "corridor": "circulation",
+    # outdoor
+    "sitout": "outdoor", "sit_out": "outdoor", "balcony": "outdoor",
+    "patio": "outdoor", "terrace": "outdoor", "parking": "outdoor",
+    "garage": "outdoor", "landscape": "outdoor",
 }
 
-# Measured on 400 real ResPlan plans. These are what a good plan looks like.
+# A pooja room is public in the sense that guests use it, but Vastu pins it to
+# the NE corner, which is usually nowhere near the living room. Counting it as a
+# public room therefore reports a fragmented public zone on plans that are
+# correct. It keeps its zone for reasoning and is excluded from the contiguity
+# test only.
+ZONE_FRAGMENTATION_EXEMPT: frozenset[str] = frozenset({"pooja"})
+
+# Measured on 400 real ResPlan plans -- South Asian, so the right region, but
+# read the scope limit before trusting a number here on a plot house:
+#
+#   * ResPlan labels SIX room types (`resplan.py:52` -- living, kitchen, bedroom,
+#     bathroom, balcony, storage). Pooja, sitout, utility, store, foyer and study
+#     are unrepresentable in it (`roomtypes.py:153`). Everything that makes this
+#     file Indian rather than generic is therefore UNCALIBRATED: these figures
+#     validate the skeleton, not the vocabulary.
+#   * ResPlan is unit-level and single-floor, median 110 m². These are flats. A
+#     30x40 plot house carries a sitout, parking and a compound that no ResPlan
+#     plan has.
+#
+# So they are the apartment/compact baseline, not a universal target. Scenarios
+# that are meant to read differently override them via `Scenario.syntax_targets`
+# -- a villa splitting formal from family living HAS two weaker public cores, by
+# design, and must not be graded against a single-core figure.
 SYNTAX_TARGETS = {
     "living_is_core": 0.95,      # fraction of plans where living is most integrated
     "living_relative_min": 2.00,  # real median 2.53
     "privacy_gradient_max": 0.55,  # real median 0.39
     "public_score_min": 0.80,     # real median +1.426
+}
+
+# Formal + family living is the point of these typologies, so integration spreads
+# across two public rooms instead of concentrating in one. Relaxed, not dropped.
+SYNTAX_TARGETS_TWO_PUBLIC = {
+    "living_is_core": 0.95,
+    "living_relative_min": 1.40,
+    "privacy_gradient_max": 0.70,
+    "public_score_min": 0.50,
 }
 
 
@@ -66,8 +143,13 @@ BathKind = Literal[
     "unreachable",     # no door. A defect.
 ]
 
-CIRCULATION = {"foyer", "stair", "living", "dining"}
-PRIVATE_CATS = {"bedroom", "master_bedroom", "study"}
+# Same omission as ZONE_OF had: a bath opening off a `passage` scored
+# from_circulation=False and reached "common" down the fallback branch instead of
+# the circulation branch. Every suite plan routes its baths off a passage.
+CIRCULATION = {"foyer", "stair", "staircase", "living", "dining", "hall",
+               "passage", "corridor"}
+PRIVATE_CATS = {"bedroom", "master_bedroom", "guest_bedroom", "study",
+                "office", "servant", "dress"}
 
 
 @dataclass
@@ -145,6 +227,20 @@ class Pref:
     weight: float
     relation: Relation = "direct"
     why: str = ""
+    # A prohibition the solver must EXCLUDE rather than price. Reserved for law
+    # and hygiene. `solver.NBC_FORBIDDEN` already carries the principle for the
+    # one pair it hard-codes -- "a code prohibition is not a cost: exclude the
+    # edge, and if that strands a room the TOPOLOGY is wrong" -- but
+    # `solver_pairs` used to hand EVERY -1.0 preference over as a hard
+    # exclusion, taste included. Measured on a 50x80 5BHK villa: the
+    # living-bedroom rule became five hard exclusions, no bedroom could hang
+    # off the living room, and with no foyer or stair in the programme the door
+    # assignment had nowhere left to put them -- so the solver fell back to
+    # topologies with an interior habitable room and the plan gained
+    # DESIGN.NO_WINDOW and NBC.VENTILATION_HABITABLE. Buying design quality
+    # with legality is exactly what the 2e7 > 1e7 priority order exists to
+    # prevent, and a hard exclusion routes around that order entirely.
+    hard: bool = False
 
     @property
     def required(self) -> bool: return self.weight >= 0.9
@@ -156,17 +252,30 @@ class Pref:
 # Universal, every scenario. Law and hygiene, not taste.
 UNIVERSAL: tuple[Pref, ...] = (
     Pref("kitchen", "bathroom", -1.0, "separate",
-         "NBC: a WC must not open into a kitchen"),
+         "NBC: a WC must not open into a kitchen", hard=True),
     Pref("pooja", "bathroom", -1.0, "separate",
-         "a shrine must not share a door or wall with a toilet"),
+         "a shrine must not share a door or wall with a toilet", hard=True),
     Pref("dining", "bathroom", -1.0, "separate",
-         "rejected outright in Indian practice"),
+         "rejected outright in Indian practice", hard=True),
     Pref("kitchen", "utility", 1.0, "direct",
          "the machine and the cylinder live off the kitchen"),
     Pref("kitchen", "store", 0.6, "direct", "dry store within reach"),
     Pref("bedroom", "bedroom", -0.5, "separate",
          "bedrooms opening into each other costs privacy"),
     Pref("pooja", "kitchen", -0.3, "separate", "usually kept apart"),
+    # --- added from the review of the 89 plans in out/suite_svg. Each was
+    # --- absent, and each turned up as a real defect at scale.
+    Pref("pooja", "stair", -1.0, "separate",
+         "a shrine under or beside a staircase; the one prohibition no Indian "
+         "client waives", hard=True),
+    Pref("kitchen", "bedroom", -1.0, "separate",
+         "cooking heat, smell and traffic inside a sleeping room. Measured: 3 of "
+         "200 real ResPlan plans (1.5%), 24 of 89 of ours (27%), and 15 of ours "
+         "made it the kitchen's ONLY way in. Priced, not excluded: a hard edge "
+         "here strands the kitchen on tight plots"),
+    Pref("bathroom", "bathroom", -1.0, "separate",
+         "a toilet whose only door is into another toilet; neither can then be "
+         "used privately. Measured: 0 of 200 real ResPlan plans, 13 of 89 of ours"),
 )
 
 
@@ -182,6 +291,12 @@ class Scenario:
     max_depth: int = 3
     # Rooms this scenario expects to exist; absence is a programme gap, not an error.
     expects: tuple[str, ...] = ()
+    # More than one kitchen is CORRECT here, so #54 must not fire. Previously
+    # inferred from `kind == "rental_floors"`, which missed the joint-family
+    # house: two kitchens on ONE floor is not a rental building and was rejected.
+    multi_kitchen: bool = False
+    # Overrides SYNTAX_TARGETS where this scenario is meant to read differently.
+    syntax_targets: dict[str, float] | None = None
     notes: str = ""
 
     def matrix(self) -> dict[frozenset, Pref]:
@@ -273,7 +388,11 @@ SCENARIOS: dict[str, Scenario] = {
                Pref("living", "bedroom", -0.6, "separate",
                     "bedrooms belong off a passage"),
                Pref("sitout", "foyer", 0.7, "direct", "portico"),
-               Pref("parking", "sitout", 0.6, "near", "car to door")),
+               Pref("parking", "sitout", 0.6, "near", "car to door"),
+               Pref("landscape", "living", 0.4, "near",
+                    "the garden is what the living room looks at"),
+               Pref("landscape", "sitout", 0.5, "near",
+                    "the sitout faces the garden, not the compound wall")),
         circulation=("living", "dining", "foyer"),
         entry_sequence=("sitout", "foyer", "living", "dining"), max_depth=3,
         expects=("foyer", "living", "dining", "kitchen", "utility", "store",
@@ -294,11 +413,22 @@ SCENARIOS: dict[str, Scenario] = {
                     "a bedroom door must not open into the formal living"),
                Pref("pooja", "foyer", 0.5, "near", "shrine near arrival"),
                Pref("sitout", "foyer", 0.6, "direct", "portico"),
-               Pref("parking", "sitout", 0.6, "near", "porch to door")),
+               Pref("parking", "sitout", 0.6, "near", "porch to door"),
+               # The formal/family split the notes call the point of the
+               # typology. It was stated in prose and expressible nowhere: there
+               # was no `family` room and `expects` listed one living.
+               Pref("family", "living", -0.4, "separate",
+                    "the family living is what the formal living is NOT; a door "
+                    "between them puts guests in the family's room"),
+               Pref("family", "dining", 0.6, "near",
+                    "the family sits where it eats"),
+               Pref("family", "bedroom", 0.3, "near",
+                    "the family living belongs on the bedroom side")),
         circulation=("living", "dining", "foyer", "stair"),
         entry_sequence=("sitout", "foyer", "living", "dining"), max_depth=4,
-        expects=("foyer", "living", "dining", "kitchen", "utility", "store",
-                 "pooja", "parking", "sitout", "stair"),
+        expects=("foyer", "living", "family", "dining", "kitchen", "utility",
+                 "store", "pooja", "parking", "sitout", "stair"),
+        syntax_targets=SYNTAX_TARGETS_TWO_PUBLIC,
         notes="Formal vs family living is the point; do not merge them."),
 
     "duplex": Scenario(
@@ -313,7 +443,8 @@ SCENARIOS: dict[str, Scenario] = {
                Pref("foyer", "living", 0.9, "direct", "hall is the hub")),
         circulation=("living", "dining", "foyer", "stair"),
         entry_sequence=("sitout", "foyer", "living"), max_depth=4,
-        expects=("living", "dining", "kitchen", "stair", "bathroom")),
+        expects=("living", "dining", "kitchen", "stair", "bathroom"),
+        syntax_targets=SYNTAX_TARGETS_TWO_PUBLIC),
 
     "rental_floors": Scenario(
         key="rental_floors", display="Rental floors",
@@ -326,7 +457,36 @@ SCENARIOS: dict[str, Scenario] = {
         circulation=("living", "foyer", "stair"),
         entry_sequence=("stair", "foyer", "living"), max_depth=3,
         expects=("living", "kitchen", "bathroom", "stair"),
+        multi_kitchen=True,
         notes="Multiple kitchens are correct here, one per unit."),
+
+    # ---------- 7. joint family: two kitchens on ONE floor ----------
+    # Two married brothers or a parent generation cooking separately under one
+    # roof, sharing the living room. Common in Indian plot housing and it was
+    # unrepresentable: `resolve()` only reached `rental_floors` when
+    # storeys > 1, so this fell to a house scenario and #54
+    # DESIGN.MULTIPLE_KITCHENS rejected a correct plan as an error.
+    "joint_family": Scenario(
+        key="joint_family", display="Joint family house (shared living)",
+        typology="independent_house", size_band="mid",
+        prefs=(Pref("living", "dining", 0.7, "near", "the shared public zone"),
+               Pref("dining", "kitchen", 1.0, "direct", "serving distance"),
+               Pref("kitchen", "kitchen", 0.4, "near",
+                    "two kitchens share a plumbing and gas line if adjacent"),
+               Pref("kitchen", "utility", 1.0, "direct", "one yard can serve both"),
+               Pref("foyer", "living", 0.9, "direct", "one shared arrival"),
+               Pref("living", "bedroom", -0.5, "separate",
+                    "each family's bedrooms belong off their own passage"),
+               Pref("sitout", "foyer", 0.6, "direct", "covered arrival"),
+               Pref("parking", "sitout", 0.6, "near", "car to door")),
+        circulation=("living", "dining", "foyer"),
+        entry_sequence=("sitout", "foyer", "living"), max_depth=3,
+        expects=("foyer", "living", "dining", "kitchen", "utility", "store",
+                 "pooja", "parking", "sitout"),
+        multi_kitchen=True,
+        syntax_targets=SYNTAX_TARGETS_TWO_PUBLIC,
+        notes="Two kitchens on one floor is the definition, not a defect. "
+              "Distinct from rental_floors: the living zone is SHARED."),
 }
 
 
@@ -356,6 +516,9 @@ def resolve(*, site_kind: str = "plot", plot_sqft: float | None = None,
         return SCENARIOS[f"apartment_{band if band in ('compact','large') else 'standard'}"]
     if kitchens > 1 and storeys > 1:
         return SCENARIOS["rental_floors"]
+    if kitchens > 1:
+        # One floor, two kitchens: a joint family, not a rental building.
+        return SCENARIOS["joint_family"]
     if band == "large" or (has_two_living and bedrooms >= 5):
         return SCENARIOS["villa"]
     if storeys >= 2:
@@ -382,13 +545,26 @@ def solver_pairs(prog, scenario: Scenario
         ha, hb = by_cat.get(p.a), by_cat.get(p.b)
         if not ha or not hb:
             continue
-        if p.forbidden:
+        if p.forbidden and p.hard:
             for x in ha:
                 for y in hb:
                     if x != y:
                         forb.append((x, y))
+        elif p.forbidden:
+            # Strongly discouraged, not excluded. Every pair gets the penalty,
+            # not one representative: the point of "no bedroom door in the
+            # formal living" is that it holds for all five bedrooms.
+            for x in ha:
+                for y in hb:
+                    if x != y:
+                        soft.append((x, y, p.weight))
         elif p.required:
             req.append((ha[0], hb[0]))       # one representative pair
         elif abs(p.weight) > 0.05:
-            soft.append((ha[0], hb[0], p.weight))
+            # Two DISTINCT rooms. `bedroom`-`bedroom` took ha[0] and hb[0] from
+            # the same list and emitted a self-pair, which weights nothing.
+            x = ha[0]
+            y = next((i for i in hb if i != x), None)
+            if y is not None:
+                soft.append((x, y, p.weight))
     return req, forb, soft
