@@ -1,0 +1,120 @@
+{
+  "id": "godrej-woods-1193-2bhk",
+  "usable": true,
+  "tier": "A",
+  "source": {
+    "image": "corpus/india/raw/godrej-ihp-3.5-bhk-floor-plan.webp",
+    "project": "Godrej Woods, Thanisandra, Bengaluru",
+    "city": "Bengaluru",
+    "jurisdiction": "BBMP",
+    "sheet_title": "UNIT - 2BHK+2T",
+    "storey_label": null,
+    "sheet_units": "metric primary, feet-inches secondary",
+    "filename_is_wrong": "file is named 3.5-bhk; the drawing is a 2BHK+2T",
+    "annotated_by": "hand",
+    "annotated_on": "2026-09-04"
+  },
+
+  "prompt": "I'm looking at a 2BHK apartment, about 1190 sqft saleable and 719 carpet. The front door opens straight into a dining space that doubles as the foyer. Living room off that with a balcony. Kitchen with a separate utility off it for the washing machine. A corridor runs from the entrance back to two bedrooms - the master with its own attached toilet and its own balcony, the second bedroom next to it, and a common toilet off the corridor.",
+
+  "spec_truth": {
+    "site_kind": "apartment_unit",
+    "plot_width_ft": null,
+    "plot_depth_ft": null,
+    "road_facing_side": null,
+    "north_deg": null,
+    "storeys": 1,
+    "half_bhk": false,
+    "unit_label": "2BHK+2T",
+    "unit_area": {
+      "saleable_sqft": 1193.38,
+      "rera_carpet_sqft": 719.17,
+      "balcony_sqft": 75.72,
+      "carpet_sqft": null,
+      "quoted_as": "saleable_sqft"
+    },
+    "rooms": {
+      "master_bedroom": 1, "bedroom": 1, "living": 1, "dining": 1,
+      "kitchen": 1, "utility": 1, "bathroom": 2, "balcony": 2, "corridor": 1
+    },
+    "vastu": {"enabled": false, "strictness": "none"},
+    "entrance": {"side": null, "via_foyer": true}
+  },
+
+  "rooms": [
+    {"id": "living",  "label": "LIVING",        "category": "living",
+     "printed": ["3.200X3.800", "10'-6\"X12'-6\""], "w_mm": 3200, "d_mm": 3800, "area_sqft": 130.9},
+    {"id": "dining",  "label": "DINING/FOYER",  "category": "dining",
+     "printed": ["3.645X2.785", "12'-0\"X9'-2\""], "w_mm": 3645, "d_mm": 2785, "area_sqft": 109.3,
+     "note": "single room labelled for two functions; it is the entry space"},
+    {"id": "kitchen", "label": "KITCHEN",       "category": "kitchen",
+     "printed": ["2.750x2.540", "9'-0\"X8'-4\""], "w_mm": 2750, "d_mm": 2540, "area_sqft": 75.2},
+    {"id": "utility", "label": "UTILITY",       "category": "utility",
+     "printed": ["2.125X1.230", "7'-0\"X4'-0\""], "w_mm": 2125, "d_mm": 1230, "area_sqft": 28.1},
+    {"id": "mbed",    "label": "M. BEDROOM",    "category": "master_bedroom",
+     "printed": ["3.050X3.800", "10'-0\"X12'-6\""], "w_mm": 3050, "d_mm": 3800, "area_sqft": 124.8,
+     "resolves_to_today": "bedroom",
+     "note": "abbreviated label; roomtypes.canonical('M. BEDROOM') loses the master distinction"},
+    {"id": "bed1",    "label": "BEDROOM-1",     "category": "bedroom",
+     "printed": ["3.050X3.770", "10'-0\"X12'-4\""], "w_mm": 3050, "d_mm": 3770, "area_sqft": 123.8},
+    {"id": "mtoilet", "label": "M. TOILET",     "category": "bathroom",
+     "printed": ["2.450X1.525", "8'-0\"X5'-0\""], "w_mm": 2450, "d_mm": 1525, "area_sqft": 40.2,
+     "note": "en-suite to mbed"},
+    {"id": "ctoilet", "label": "C. TOILET",     "category": "bathroom",
+     "printed": ["2.450X1.525", "8'-0\"X5'-0\""], "w_mm": 2450, "d_mm": 1525, "area_sqft": 40.2,
+     "note": "common; off the corridor"},
+    {"id": "corridor","label": "CORRIDOR",      "category": "corridor",
+     "printed": ["(1.100) 3'-7\" WIDE"], "w_mm": 1100, "d_mm": null, "area_sqft": null,
+     "resolves_to_today": "foyer",
+     "note": "width-only label, length not printed; length back-solved at 6.3 m by area closure"},
+    {"id": "balc_liv","label": "BALCONY",       "category": "balcony",
+     "printed": ["2.670X1.230", "8'-9\"X4'-0\""], "w_mm": 2670, "d_mm": 1230, "area_sqft": 35.3,
+     "note": "off living"},
+    {"id": "balc_mbed","label": "BALCONY",      "category": "balcony",
+     "printed": ["3.050X1.230", "10'-0\"X4'-0\""], "w_mm": 3050, "d_mm": 1230, "area_sqft": 40.4,
+     "note": "off mbed"}
+  ],
+
+  "outside_unit": [],
+
+  "graph": {
+    "front_door": {"into": "dining", "side": "sheet_west", "true_bearing": null},
+    "doors": [
+      ["dining", "corridor"], ["dining", "living"], ["dining", "kitchen"],
+      ["kitchen", "utility"], ["corridor", "bed1"], ["corridor", "mbed"],
+      ["corridor", "ctoilet"], ["mbed", "mtoilet"],
+      ["living", "balc_liv"], ["mbed", "balc_mbed"]
+    ],
+    "touching": [
+      ["living", "dining"], ["living", "kitchen"], ["living", "balc_liv"],
+      ["dining", "kitchen"], ["dining", "corridor"], ["kitchen", "utility"],
+      ["kitchen", "corridor"], ["corridor", "bed1"], ["corridor", "mbed"],
+      ["corridor", "ctoilet"], ["bed1", "mbed"], ["bed1", "ctoilet"],
+      ["mbed", "mtoilet"], ["mbed", "balc_mbed"], ["ctoilet", "mtoilet"]
+    ],
+    "exterior_windows": {
+      "living": ["sheet_north"], "bed1": ["sheet_north"], "mbed": ["sheet_east"],
+      "kitchen": ["sheet_north"], "dining": ["sheet_west"],
+      "ctoilet": ["sheet_south"], "mtoilet": ["sheet_south"]
+    },
+    "windowless": []
+  },
+
+  "envelope": {
+    "shape": "re-entrant; balconies and utility project beyond the main rectangle",
+    "bbox_mm": null,
+    "note": "no overall unit dimension printed; envelope not derivable from this sheet"
+  },
+
+  "sheet_errors": [],
+
+  "closure": {
+    "balcony": {"computed_m2": 7.036, "printed_m2": 7.04, "ok": true},
+    "utility": {"computed_m2": 2.614, "printed_m2": 2.61, "ok": true},
+    "carpet": {"labelled_rooms_m2": 59.86, "printed_m2": 66.81,
+               "residual_m2": 6.95,
+               "explains": "corridor 1.100 wide x approx 6.3 m, unlabelled length",
+               "ok": true},
+    "verdict": "every printed sub-total is reproduced by the room dimensions; Tier A"
+  }
+}

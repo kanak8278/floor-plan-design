@@ -43,6 +43,10 @@ from .spec import (
 
 MODEL_REASONING = "claude-opus-5"
 MODEL_BULK = "claude-sonnet-5"
+# Brief -> DesignSpec on the plan-generation path. Sonnet, because the job is
+# structured transcription of a stated brief into a fixed schema, not open-ended
+# reasoning: the geometry is CP-SAT's and the vocabulary is `spec.py`'s.
+MODEL_GENERATE = "claude-sonnet-5"
 
 # USD per 1M tokens (input, output). Cache reads are 0.1x input.
 PRICES: dict[str, tuple[float, float]] = {
@@ -605,7 +609,7 @@ MISSING_FACING_QUESTION = (
 def extract_spec(
     prompt: str,
     *,
-    model: str = MODEL_REASONING,
+    model: str = MODEL_GENERATE,
     client: Any = None,
     usage: Optional[UsageLog] = None,
     max_attempts: int = 3,

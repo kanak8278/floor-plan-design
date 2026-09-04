@@ -200,6 +200,26 @@ class RoomSpec:
         if not self.name:
             self.name = self.category.replace("_", " ").title()
 
+    @property
+    def size_stated(self) -> bool:
+        """Did the CLIENT name this room's size, or is it a category default?
+
+        Derived rather than stored. `__post_init__` fills `min_sqft` from
+        `ROOM_CATEGORIES` on every unsized room, so by the time anything
+        downstream looks, "the brief said 12x14" and "we guessed a bedroom is
+        at least 100 sqft" are indistinguishable -- and the envelope needs the
+        difference to know which sizes it may not overwrite. Storing a flag
+        instead would put a derived value in the LLM's JSON contract and lose
+        it on every save/load round trip.
+
+        A client who states exactly the default value reads as unstated. That
+        is harmless: the default is what they would have got anyway.
+        """
+        info = ROOM_CATEGORIES.get(self.category)
+        if info is None:
+            return self.min_sqft is not None
+        return self.min_sqft is not None and self.min_sqft != info.min_sqft
+
     # -- unit bridges to the solver ----------------------------------------
     @property
     def min_area_mm2(self) -> int:
@@ -252,7 +272,14 @@ class AreaQuote:
     loading_factor: Optional[float] = None      # super built-up / carpet
     quoted_as: Optional[str] = None             # which figure the client gave
 
-    DEFAULT_LOADING = 1.40                      # midpoint of the measured range
+    # Saleable / carpet, measured on the 11 hand-annotated Bengaluru builder
+    # sheets in `corpus/india/truth` and their area tables:
+    #   min 1.388 (735 2STN)   median 1.588   mean 1.587   max 1.750 (Prakriti)
+    # The old 1.40 was commented "midpoint of the measured range" and was in
+    # fact the observed FLOOR, so every saleable-quoted brief was handed ~13%
+    # more carpet than the flat really has, and the surplus was then spread
+    # into the rooms.
+    DEFAULT_LOADING = 1.59
 
     def resolved_carpet_sqft(self) -> Optional[float]:
         """Best available carpet area. This is the only figure the solver can use."""

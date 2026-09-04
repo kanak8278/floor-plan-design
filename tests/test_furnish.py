@@ -82,8 +82,13 @@ def _solver_plan(w_ft: float, d_ft: float, bhk: int, facing_dir: str,
                  extras: bool = False) -> Plan:
     prog = bhk_programme(bhk, dining=extras, pooja=extras, utility=extras)
     res = solve_layout(w_ft, d_ft,
+                       # Deterministic: a wall-clock budget with 8 racing
+                       # workers made this fixture a dice roll, and the same
+                       # 4BHK produced a furnishable master bedroom on one run
+                       # and a 14.45 m2 slot too narrow for a bed on the next.
+                       # A furniture test cannot be a ruler on a moving plan.
                        LayoutSpec(programme=prog, entrance_room="living",
-                                  time_limit_s=30.0),
+                                  time_limit_s=30.0, deterministic=True),
                        road_facing=facing_dir, profile=PROF,
                        plan_id=f"fz-{w_ft:.0f}x{d_ft:.0f}-{bhk}{facing_dir}")
     assert res.plan is not None, f"{w_ft}x{d_ft} {bhk}BHK -> {res.status}"

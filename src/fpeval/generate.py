@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from .spec import SQFT_PER_M2 as SQFT_M2
 from .bridge import (cap_service_targets, shed_optional, spec_to_programme,
                      resolve_scenario, relational_pairs)
 from .bylaws import BENGALURU
@@ -134,84 +135,119 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
                           storeys=int(sp.storeys or 1))
     req, forb, soft = relational_pairs(prog, sc, spec=sp)
 
-    t0 = time.time()
-    try:
+    def budget(programme):
+        """Envelope -> per-room target. Returns the area statement."""
         stmt = compute_envelope(w_ft, d_ft, road_facing=facing, profile=profile,
-                                programme=prog)
-        # The envelope decides how much floor there actually is after setbacks
-        # and coverage, and hands back a per-room budget. Solving against the
-        # brief's wish list instead is how a programme that wants 1400 sqft on
-        # a 900 sqft envelope becomes a plan with one enormous hall.
-        budgets = {b.id: b for b in (getattr(stmt, "budgets", None) or [])}
-        for r in prog:
-            b = budgets.get(r.id)
-            if b is not None and getattr(b, "budget_m2", 0):
+                                programme=programme)
+        for r in programme:
+            b = next((x for x in (stmt.budgets or []) if x.id == r.id), None)
+            if b is not None and b.budget_m2:
                 r.target_m2 = round(float(b.budget_m2), 2)
-        res = solve_layout(
+        return stmt
+
+    def attempt(programme, required, forbidden, softs):
+        """One solve. Extracted because the retries duplicated all of it."""
+        ids = {r.id for r in programme}
+        return solve_layout(
             w_ft, d_ft,
-            LayoutSpec(programme=prog,
-                       required_adjacency=req, forbidden_adjacency=forb,
-                       soft_adjacency=soft,
-                       entrance_room=next((r.id for r in prog if r.is_entrance),
-                                          prog[0].id),
+            LayoutSpec(programme=programme,
+                       required_adjacency=[t for t in required
+                                           if t[0] in ids and t[1] in ids],
+                       forbidden_adjacency=[t for t in forbidden
+                                            if t[0] in ids and t[1] in ids],
+                       soft_adjacency=[t for t in softs
+                                       if t[0] in ids and t[1] in ids],
+                       entrance_room=next((r.id for r in programme
+                                           if r.is_entrance), programme[0].id),
                        time_limit_s=time_limit_s),
             road_facing=facing, north_deg=sp.north_deg, profile=profile,
             plan_id=f"{design.id}-solved")
+
+    t0 = time.time()
+    try:
+        stmt = budget(prog)
+        # Say so when the client's own room sizes do not fit the area they
+        # quoted. Silently scaling every stated room by 0.84 is the behaviour
+        # that made "nothing is big enough" the commonest complaint: the brief
+        # was answerable, just not at the quoted area, and nobody was told.
+        stated = [r for r in prog if getattr(r, "size_stated", False)]
+        asked = sum((r.min_sqft or 0) / SQFT_M2 for r in sp.rooms
+                    if getattr(r, "size_stated", False))
+        offered = sum(r.target_m2 for r in stated)
+        if asked and offered and offered < asked * 0.97:
+            warn.append(
+                f"the room sizes in the brief total {asked * SQFT_M2:.0f} sqft "
+                f"but this area only leaves {offered * SQFT_M2:.0f} sqft for "
+                f"them, so every stated room was scaled to "
+                f"{offered / asked:.0%}. Raise the area or drop a room to get "
+                "the sizes you asked for")
+        res = attempt(prog, req, forb, soft)
     except Exception as exc:
         return BuildResult(status="error", assumptions=assumptions, warnings=warn,
                            solve_ms=round(1000 * (time.time() - t0)),
                            errors=[f"{type(exc).__name__}: {exc}"])
 
     # ---- shed the nice-to-haves rather than refuse ----------------------
-    # `RoomSpec.optional` is read nowhere on the solve path -- not in
-    # `bridge`, not in `envelope`, not in `solver` -- so every room in the
-    # brief was mandatory and an over-specified brief could only come back
-    # INFEASIBLE. Measured on the first track B run: from "a 30x40 east facing
-    # site in Bengaluru, need a 3BHK ground floor house", extraction produced
-    # eleven solver rooms including a sitout, a foyer, a dining, a utility and
-    # a pooja that nobody asked for. Total target area was LOWER than the
-    # ground truth's, so it was not area -- eleven rooms each carry an NBC
-    # minimum plus their walls, and that does not fit 1200 sqft after
-    # setbacks. Track A never sees this because ground truth asks for what it
-    # asks for.
-    #
-    # Dropping the optional rooms, lowest priority first, and saying which is
-    # a better answer than a refusal: the client gets a house and a sentence
-    # about what did not fit.
-    if getattr(res, "plan", None) is None and any(
-            getattr(r, "optional", False) for r in sp.rooms):
+    # `RoomSpec.optional` was read nowhere on the solve path, so every room in
+    # the brief was mandatory and an over-specified brief could only come back
+    # INFEASIBLE. Dropping the optional rooms, lowest priority first, and
+    # saying which is a better answer than a refusal.
+    if res.plan is None and any(getattr(r, "optional", False) for r in sp.rooms):
         kept, shed = shed_optional(prog)
-        keep_ids = {r.id for r in kept}
         if kept:
-            warn.append("dropped the optional room(s) "
-                        + ", ".join(sorted(shed))
+            warn.append("dropped the optional room(s) " + ", ".join(sorted(shed))
                         + " -- the programme did not fit the site with them")
-            req2 = [(a, b) for a, b in req if a in keep_ids and b in keep_ids]
-            forb2 = [(a, b) for a, b in forb if a in keep_ids and b in keep_ids]
             try:
-                stmt = compute_envelope(w_ft, d_ft, road_facing=facing,
-                                        profile=profile, programme=kept)
-                budgets = {b.id: b for b in (getattr(stmt, "budgets", None) or [])}
-                for r in kept:
-                    b = budgets.get(r.id)
-                    if b is not None and getattr(b, "budget_m2", 0):
-                        r.target_m2 = round(float(b.budget_m2), 2)
-                res = solve_layout(
-                    w_ft, d_ft,
-                    LayoutSpec(programme=kept, required_adjacency=req2,
-                               forbidden_adjacency=forb2,
-                               soft_adjacency=[t for t in soft
-                                               if t[0] in keep_ids and t[1] in keep_ids],
-                               entrance_room=next(
-                                   (r.id for r in kept if r.is_entrance),
-                                   kept[0].id),
-                               time_limit_s=time_limit_s),
-                    road_facing=facing, north_deg=sp.north_deg, profile=profile,
-                    plan_id=f"{design.id}-solved")
-                prog = kept
+                budget(kept)
+                res, prog = attempt(kept, req, forb, soft), kept
             except Exception as exc:
                 warn.append(f"retry without optional rooms failed: "
                             f"{type(exc).__name__}: {exc}")
+
+    # ---- relax the targets rather than refuse ---------------------------
+    # A target is a preference; only the NBC minimum is a requirement. But the
+    # envelope inflates every target to consume the footprint, and a bigger
+    # mandatory room is HARDER to tile inside a fixed rectangle under a hard
+    # aspect bound -- so feasibility was not monotone in the envelope. Measured
+    # on a real 719 sqft unit: 851 sqft of footprint solved, 857 sqft came back
+    # infeasible, 871 sqft solved again. Pulling the targets back toward the
+    # minima strictly enlarges the feasible set, so this cannot make things
+    # worse, and it turns an "impossible" answer into a slightly smaller house.
+    for pull in (0.5, 0.0):
+        if res.plan is not None:
+            break
+        for r in prog:
+            floor = r.nbc_min_area_m2()
+            r.target_m2 = round(floor + pull * max(0.0, r.target_m2 - floor), 2)
+        try:
+            res = attempt(prog, req, forb, soft)
+        except Exception as exc:
+            warn.append(f"relaxed retry failed: {type(exc).__name__}: {exc}")
+            break
+        if res.plan is not None:
+            warn.append(
+                "the room sizes were pulled back toward their minimums to make "
+                "the plan fit; no arrangement of the requested sizes tiles this "
+                "footprint")
+
+    # ---- declare a compact-profile deviation rather than refuse ----------
+    # NBC's minima are law, and real Indian compact units are built below them:
+    # Godrej Prakriti's kitchen is 1900 x 1900 mm (3.6 m2) against a 5.0 m2
+    # floor, and a published 735 sqft unit has a 1.1 m2 bath. Returning
+    # INFEASIBLE means we cannot draw a flat somebody already lives in.
+    # `bridge` has carried a compact profile and the wording for declaring the
+    # deviation since it was written, wired only into `score.py`, so the
+    # product refused where the suite relaxed.
+    if res.plan is None:
+        from .bridge import _apply_relaxed, relaxed_note
+        _apply_relaxed(prog)
+        try:
+            budget(prog)
+            res = attempt(prog, req, forb, soft)
+        except Exception as exc:
+            warn.append(f"compact-profile retry failed: {type(exc).__name__}: {exc}")
+        if res.plan is not None:
+            warn.append(relaxed_note(prog) or "compact profile applied")
 
     out = BuildResult(status=str(getattr(res, "status", "?")),
                       assumptions=assumptions, warnings=warn,
@@ -220,7 +256,13 @@ def build(doc: Any, *, time_limit_s: float = 12.0,
     plan = getattr(res, "plan", None)
     if plan is None:
         out.infeasible_groups = list(getattr(res, "infeasible_groups", []) or [])
-        out.errors = [getattr(res, "explanation", None)
+        # `SolveResult` names this field `message`; reading `explanation` meant
+        # every infeasibility diagnostic the solver had already computed --
+        # which topologies it tried and which constraint groups were jointly
+        # unsatisfiable -- was thrown away and replaced by one useless
+        # sentence. That is the whole reason an INFEASIBLE brief could not be
+        # debugged without attaching a harness to the solver.
+        out.errors = [getattr(res, "message", None)
                       or "the brief cannot be satisfied on this site"]
         return out
 
@@ -261,6 +303,20 @@ def report(r: BuildResult) -> str:
     if r.ok:
         lines.append(f"Solved: {r.status} in {r.solve_ms} ms. "
                      f"{r.n_errors} rule error(s), {r.n_warnings} warning(s).")
+        # A count is not actionable. Reporting "4 rule error(s)" and nothing
+        # else meant the one moment the model could fix something -- straight
+        # after the solve that caused it -- was the moment it was told least.
+        from .agent import _finding_line
+        bad = [f for f in r.findings if getattr(f, "severity", "") == "error"]
+        warns = [f for f in r.findings if getattr(f, "severity", "") == "warn"]
+        for f in bad[:12]:
+            lines.append("  " + _finding_line(f).lstrip("- "))
+        for f in warns[:8]:
+            lines.append("  " + _finding_line(f).lstrip("- "))
+        if bad:
+            lines.append("  Fix the errors or tell the user why you are not "
+                         "going to. Do not hand over a plan with errors "
+                         "without saying so.")
     else:
         lines.append(f"Not solved: {r.status}.")
         for e in r.errors:

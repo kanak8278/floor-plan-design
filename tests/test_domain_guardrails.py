@@ -602,9 +602,18 @@ def test_an_opening_cannot_be_widened_past_the_boundary_it_connects():
         assert doc.apply(c).ok
     assert build(doc, time_limit_s=12.0).ok
 
-    o = doc.design.active.openings[0]
-    wall = next(w for w in doc.design.active.walls if w.id == o.wall_id)
-    assert wall.length > 3000, "fixture needs a long spanning wall to be a test"
+    # Pick an opening that actually HAS a short shared run on a long wall.
+    # Taking `openings[0]` and hoping made this test a hostage to the layout:
+    # any change to room targets reshuffles the opening list and the fixture
+    # silently stops testing anything.
+    from fpeval.apply import _usable_run_mm
+    st = doc.design.active
+    cand = [(o, w) for o in st.openings
+            for w in st.walls if w.id == o.wall_id
+            and w.length > 3000
+            and (_usable_run_mm(st, w, o.position) or w.length) < 3000]
+    assert cand, "fixture needs an opening whose shared run is shorter than the wall"
+    o, wall = cand[0]
 
     res = doc.apply(agent("update_opening", opening_id=o.id, width_mm=3000))
     assert not res.ok, (
@@ -1040,3 +1049,36 @@ def test_a_drag_does_not_move_a_wall_that_merely_ends_nearby():
     assert res.ok, res.errors
     w9 = next(w for w in doc.design.active.walls if w.id == "w9")
     assert (w9.start.x, w9.start.y) == (6000, 500), "an unrelated wall moved"
+
+
+def test_aspect_caps_admit_every_real_room():
+    """`standards.MAX_ASPECT` must sit above the corpus, not on it.
+
+    The caps are calibrated from hand-measured builder drawings, so the table
+    and the data are two halves of one claim and each half passes its own tests
+    while the pair can be wrong. `dining` was set to 2.60 against an observed
+    maximum of 2.61 and made a real Godrej Woods unit unbuildable: CP-SAT
+    proved it infeasible on all 400 topologies over one hundredth of a ratio.
+    """
+    import json
+    from pathlib import Path
+    from fpeval.standards import MAX_ASPECT
+
+    root = Path(__file__).resolve().parents[1]
+    worst: dict[str, tuple[float, str, str]] = {}
+    for f in sorted((root / "corpus/india/truth").glob("*.json")):
+        t = json.loads(f.read_text())
+        for r in t["rooms"]:
+            if not (r.get("category") and r.get("w_mm") and r.get("d_mm")):
+                continue
+            a = max(r["w_mm"], r["d_mm"]) / min(r["w_mm"], r["d_mm"])
+            if a > worst.get(r["category"], (0.0,))[0]:
+                worst[r["category"]] = (a, t["id"], r.get("label") or r["id"])
+    assert worst, "no annotated rooms with dimensions -- the corpus is the fixture"
+
+    too_tight = [
+        f"{cat}: cap {MAX_ASPECT[cat]} <= real {a:.2f} ({eid} {label})"
+        for cat, (a, eid, label) in sorted(worst.items())
+        if cat in MAX_ASPECT and MAX_ASPECT[cat] <= a
+    ]
+    assert not too_tight, too_tight

@@ -69,6 +69,11 @@ UNIT_ASPECT = 1.25
 # faces, a ratio of 0.958, so the factor that lands on the quoted figure is
 # 1/0.958 = 1.044.
 CARPET_TO_FOOTPRINT = 1.04
+# Room areas -> footprint, when the brief sizes its own rooms. Their sum is
+# CLEAR floor; the footprint has to add internal walls and the circulation that
+# links them. 1.25 is walls (~8%) plus circulation (~15%), which is what the
+# hand-annotated real drawings measure.
+PROGRAMME_TO_FOOTPRINT = 1.25
 
 
 @dataclass(frozen=True)
@@ -146,6 +151,8 @@ def resolve(spec: DesignSpec) -> tuple[DesignSpec, list[Assumption]]:
     # A room with no bounds competes for area against rooms that have them and
     # loses, which shows up as one absurdly thin room rather than as an error.
     for r in sp.rooms:
+        # `size_stated` is set in `RoomSpec.__post_init__`; by here min_sqft is
+        # already filled and the question can no longer be asked.
         info = ROOM_CATEGORIES.get(r.category)
         if info is None:
             continue
@@ -162,20 +169,44 @@ def resolve(spec: DesignSpec) -> tuple[DesignSpec, list[Assumption]]:
 def _unit_footprint(sp: DesignSpec) -> tuple[Optional[float], Optional[float], str]:
     """Width and depth for an apartment unit, from whatever area was quoted."""
     q = sp.unit_area
-    carpet = q.carpet_sqft or q.rera_carpet_sqft
-    if carpet is None and q.builtup_sqft:
-        carpet = q.builtup_sqft / 1.20
-        src = "built-up, less 20% for walls and common area"
-    elif carpet is None and q.super_builtup_sqft:
-        carpet = q.super_builtup_sqft / 1.30
-        src = "super built-up, less the usual 30% loading"
-    elif carpet is not None:
-        src = "the quoted carpet area"
+    # `AreaQuote.resolved_carpet_sqft` is the one place that knows how to read a
+    # quote. This function had a second, shorter chain with different factors
+    # and NO `saleable_sqft` branch -- so the commonest Indian way to quote a
+    # flat ("1150 sq.ft." meaning saleable) fell through to "no area quoted"
+    # and got a default 30x40 footprint regardless of what was asked for.
+    carpet = q.resolved_carpet_sqft()
+    if carpet is not None:
+        src = ("the quoted carpet area" if (q.carpet_sqft or q.rera_carpet_sqft)
+               else f"the quoted {q.quoted_as or 'gross'} area, less loading")
     else:
         beds = bedroom_count(sp) or DEFAULT_BEDROOMS
         w, d = STANDARD_PLOT_FT.get(beds, STANDARD_PLOT_FT[DEFAULT_BEDROOMS])
         return w, d, (f"no area quoted for the unit; used a {beds}BHK footprint")
-    foot = carpet * CARPET_TO_FOOTPRINT
+    # Balconies are not carpet -- every Indian area table quotes them on a
+    # separate line -- and on the real drawings they cantilever off the slab
+    # outside the enclosed block. The solver tiles them INSIDE the footprint,
+    # so their area has to be added or the programme cannot fit: measured on
+    # the Godrej Woods unit, 719 sqft carpet + 76 sqft of balcony was solved
+    # against a 748 sqft rectangle and came back infeasible on four groups.
+    foot = (carpet + (q.balcony_sqft or 0.0)) * CARPET_TO_FOOTPRINT
+    # The quote is a CEILING, not a target to fill. When the brief names its own
+    # room sizes and they total less than the quote, draw the smaller house: an
+    # architect does not inflate rooms to reach a lease line. Before this, a
+    # 2.5BHK brief that specified all ten rooms (932 sqft) against a 1300 sqft
+    # quote had 271 sqft of surplus distributed into the rooms, which is where
+    # a 424 sqft living room and a passage larger than the hall came from.
+    # `size_stated`, not `min_sqft`: `RoomSpec.__post_init__` fills `min_sqft`
+    # on every room from the category default, so testing it directly answers
+    # "the brief sized its own rooms" YES always -- which shrank a 850 sqft
+    # unit's footprint to the 586 sqft of category minimums and made it
+    # unsolvable. Same trap the flag itself was written to avoid.
+    sized = [r for r in sp.rooms if r.size_stated]
+    asked = sum(r.min_sqft or 0.0 for r in sized)
+    if asked and len(sized) >= max(3, len(sp.rooms) - 1):
+        want = asked * PROGRAMME_TO_FOOTPRINT
+        if want < foot:
+            foot, src = want, (f"{src}, reduced to the {asked:.0f} sqft the "
+                               "brief actually asks for")
     d = (foot / UNIT_ASPECT) ** 0.5
     return round(d * UNIT_ASPECT, 1), round(d, 1), f"derived from {src}"
 

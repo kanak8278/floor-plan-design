@@ -1,0 +1,131 @@
+{
+ "id": "divyasree-shettigere-1150-2bhk",
+ "usable": true,
+ "tier": "B",
+ "source": {
+  "image": "corpus/india/raw/divyasree-2bhk-layout-shettigere.webp",
+  "project": "Divyasree Shettigere, Bengaluru",
+  "city": "Bengaluru",
+  "jurisdiction": "BBMP",
+  "sheet_title": "2 BHK UNIT PLAN",
+  "sheet_units": "feet-inches only",
+  "annotated_by": "hand",
+  "annotated_on": "2026-09-05"
+ },
+ "prompt": "2BHK apartment, 1150 sqft saleable, 785 carpet, 733 RERA carpet. Big living-dining running across the front with a balcony off it. Kitchen in the corner with a utility next to it. Two bedrooms at the back - master and a second bedroom - each with its own toilet, both toilets reached off a small passage between them.",
+ "spec_truth": {
+  "site_kind": "apartment_unit",
+  "storeys": 1,
+  "half_bhk": false,
+  "unit_label": "2 BHK",
+  "road_facing_side": null,
+  "north_deg": null,
+  "unit_area": {
+   "saleable_sqft": 1150,
+   "carpet_sqft": 785,
+   "rera_carpet_sqft": 733,
+   "quoted_as": "saleable_sqft"
+  },
+  "rooms": {
+   "master_bedroom": 1,
+   "bedroom": 1,
+   "living": 1,
+   "kitchen": 1,
+   "utility": 1,
+   "bathroom": 2,
+   "balcony": 1
+  },
+  "entrance": {
+   "side": null,
+   "via_foyer": false
+  },
+  "vastu": {
+   "enabled": false,
+   "strictness": "none"
+  }
+ },
+ "rooms": [
+  {
+   "id": "balcony",
+   "label": "BALCONY",
+   "category": "balcony",
+   "w_mm": 1524,
+   "d_mm": 3353,
+   "area_sqft": 55.0
+  },
+  {
+   "id": "living",
+   "label": "LIVING / DINING",
+   "category": "living",
+   "w_mm": 6248,
+   "d_mm": 3353,
+   "area_sqft": 225.5,
+   "note": "one room, living and dining together"
+  },
+  {
+   "id": "toilet1",
+   "label": "TOILET",
+   "category": "bathroom",
+   "w_mm": 1524,
+   "d_mm": 2438,
+   "area_sqft": 40.0
+  },
+  {
+   "id": "toilet2",
+   "label": "TOILET",
+   "category": "bathroom",
+   "w_mm": 1524,
+   "d_mm": 2438,
+   "area_sqft": 40.0
+  },
+  {
+   "id": "kitchen",
+   "label": "KITCHEN",
+   "category": "kitchen",
+   "w_mm": 2438,
+   "d_mm": 2743,
+   "area_sqft": 72.0
+  },
+  {
+   "id": "utility",
+   "label": "UTILITY",
+   "category": "utility",
+   "w_mm": 2438,
+   "d_mm": 1219,
+   "area_sqft": 32.0
+  },
+  {
+   "id": "mbed",
+   "label": "MASTER BEDROOM",
+   "category": "master_bedroom",
+   "w_mm": 3658,
+   "d_mm": 3962,
+   "area_sqft": 156.0
+  },
+  {
+   "id": "bed2",
+   "label": "BEDROOM 2",
+   "category": "bedroom",
+   "w_mm": 3353,
+   "d_mm": 3658,
+   "area_sqft": 132.0
+  }
+ ],
+ "envelope": {
+  "shape": "re-entrant; balcony and utility project",
+  "plot_ft": null
+ },
+ "closure": {
+  "carpet": {
+   "labelled_rooms_sqft": 697.5,
+   "printed_carpet_sqft": 785,
+   "residual_sqft": 87.5,
+   "explains": "unlabelled entry and the passage between the toilets",
+   "ok": true
+  },
+  "verdict": "Tier B; single unit plus an area table"
+ },
+ "graph": null,
+ "outside_unit": [],
+ "sheet_errors": []
+}

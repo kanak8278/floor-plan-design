@@ -318,7 +318,13 @@ def test_apartment_unit_without_an_area_is_underdetermined():
     (AreaQuote(rera_carpet_sqft=733), 733),
     (AreaQuote(builtup_sqft=880), 800),
     (AreaQuote(super_builtup_sqft=1100, loading_factor=1.4), 785.71),
-    (AreaQuote(saleable_sqft=1150), 821.43),          # default 1.40 loading
+    # The default loading factor, 1.59, is the median of the 11 hand-annotated
+    # Bengaluru sheets in corpus/india. This one exists to pin the constant:
+    # change it and this case must change with the evidence.
+    (AreaQuote(saleable_sqft=1150), 1150 / 1.59),
+    # Divyasree Shettigere as printed: 1150 saleable / 785 carpet, a loading of
+    # 1.465. A stated factor always wins over the corpus median.
+    (AreaQuote(saleable_sqft=1150, loading_factor=1.465), 785.0),
     (AreaQuote(), None),
 ])
 def test_area_stack_resolves_to_carpet(quote, expect):

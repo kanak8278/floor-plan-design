@@ -1,0 +1,133 @@
+{
+ "id": "godrej-prakriti-934-2bhk",
+ "usable": true,
+ "tier": "A",
+ "source": {
+  "image": "corpus/india/raw/vgsw12a_1741583845_576260369.jpg",
+  "project": "Godrej Prakriti, BT Road, Kolkata",
+  "city": "Kolkata",
+  "jurisdiction": "KMC",
+  "sheet_title": "RETREAT / KUMAYUN 2BHK - TYPE A1",
+  "sheet_units": "metric primary, feet-inches secondary",
+  "note": "NOT Bengaluru; usable for extraction and shape, not for BBMP bye-laws; EXCLUSIVE AREA 10.31 m2 = 111 sqft is the terrace plus balcony, recorded as balcony_sqft because neither counts as carpet",
+  "annotated_by": "hand",
+  "annotated_on": "2026-09-05"
+ },
+ "prompt": "Compact 2BHK, 934 sqft saleable with 49.57 sqm carpet. Entrance at the north into the living, which has a terrace off it. Dining next to the living, a small kitchen with a utility balcony. Master bedroom with attached toilet and a balcony, a second bedroom, and a common toilet off the living.",
+ "spec_truth": {
+  "site_kind": "apartment_unit",
+  "storeys": 1,
+  "half_bhk": false,
+  "unit_label": "2BHK - TYPE A1",
+  "road_facing_side": null,
+  "north_deg": null,
+  "unit_area": {
+   "saleable_sqft": 934,
+   "carpet_sqft": 533.6,
+   "quoted_as": "saleable_sqft",
+   "balcony_sqft": 111.0
+  },
+  "rooms": {
+   "master_bedroom": 1,
+   "bedroom": 1,
+   "living": 1,
+   "dining": 1,
+   "kitchen": 1,
+   "bathroom": 2,
+   "balcony": 1,
+   "terrace": 1
+  },
+  "entrance": {
+   "side": "north",
+   "via_foyer": false
+  },
+  "vastu": {
+   "enabled": false,
+   "strictness": "none"
+  }
+ },
+ "rooms": [
+  {
+   "id": "toilet",
+   "label": "TOILET",
+   "category": "bathroom",
+   "w_mm": 1450,
+   "d_mm": 2300,
+   "area_sqft": 35.9
+  },
+  {
+   "id": "living",
+   "label": "LIVING",
+   "category": "living",
+   "w_mm": 3250,
+   "d_mm": 3250,
+   "area_sqft": 113.7
+  },
+  {
+   "id": "dining",
+   "label": "DINING",
+   "category": "dining",
+   "w_mm": 3100,
+   "d_mm": 1950,
+   "area_sqft": 65.1
+  },
+  {
+   "id": "mtoilet",
+   "label": "M.TOILET",
+   "category": "bathroom",
+   "w_mm": 1500,
+   "d_mm": 1700,
+   "area_sqft": 27.4
+  },
+  {
+   "id": "kitchen",
+   "label": "KITCHEN",
+   "category": "kitchen",
+   "w_mm": 1900,
+   "d_mm": 1900,
+   "area_sqft": 38.9
+  },
+  {
+   "id": "mbed",
+   "label": "M.BEDROOM",
+   "category": "master_bedroom",
+   "w_mm": 3000,
+   "d_mm": 3250,
+   "area_sqft": 104.9
+  },
+  {
+   "id": "bed2",
+   "label": "BEDROOM",
+   "category": "bedroom",
+   "w_mm": 2950,
+   "d_mm": 3250,
+   "area_sqft": 103.2
+  },
+  {
+   "id": "balcony",
+   "label": "BALCONY",
+   "category": "balcony",
+   "w_mm": 2800,
+   "d_mm": 1050,
+   "area_sqft": 31.6
+  },
+  {
+   "id": "terrace",
+   "label": "TERRACE",
+   "category": "terrace",
+   "w_mm": 2290,
+   "d_mm": 2500,
+   "area_sqft": 61.6
+  }
+ ],
+ "envelope": {
+  "shape": "re-entrant; terrace, balcony and utility balcony project",
+  "plot_ft": null
+ },
+ "closure": {
+  "verdict": "Tier A; dual units agree. ENTRANCE arrow printed at the top"
+ },
+ "graph": null,
+ "outside_unit": [],
+ "sheet_errors": []
+}

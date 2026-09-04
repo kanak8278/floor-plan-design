@@ -1,0 +1,152 @@
+{
+ "id": "godrej-woods-1223-2bhk",
+ "usable": true,
+ "tier": "A",
+ "source": {
+  "image": "corpus/india/raw/2BHK-1223-Godrej-Woods-Thanisandra.webp",
+  "project": "Godrej Woods, Thanisandra, Bengaluru",
+  "city": "Bengaluru",
+  "jurisdiction": "BBMP",
+  "sheet_title": "UNIT - 2BHK+2T",
+  "sheet_units": "metric primary, feet-inches secondary",
+  "note": "same tower as godrej-woods-1193-2bhk, a different unit type",
+  "annotated_by": "hand",
+  "annotated_on": "2026-09-05"
+ },
+ "prompt": "A 2BHK flat, 1223 sqft saleable with 724 sqft RERA carpet. Entry door opens into a small foyer on the east. Kitchen just inside with a utility behind it. Living and dining together in the middle, with a balcony off the dining. Two bedrooms on the west - master with attached toilet and its own balcony, second bedroom, and a common toilet between them.",
+ "spec_truth": {
+  "site_kind": "apartment_unit",
+  "storeys": 1,
+  "half_bhk": false,
+  "unit_label": "2BHK+2T",
+  "road_facing_side": null,
+  "north_deg": null,
+  "unit_area": {
+   "saleable_sqft": 1223.76,
+   "rera_carpet_sqft": 724.56,
+   "balcony_sqft": 82.75,
+   "quoted_as": "saleable_sqft"
+  },
+  "rooms": {
+   "master_bedroom": 1,
+   "bedroom": 1,
+   "living": 1,
+   "dining": 1,
+   "kitchen": 1,
+   "utility": 1,
+   "bathroom": 2,
+   "balcony": 2,
+   "foyer": 1
+  },
+  "entrance": {
+   "side": null,
+   "via_foyer": true
+  },
+  "vastu": {
+   "enabled": false,
+   "strictness": "none"
+  }
+ },
+ "rooms": [
+  {
+   "id": "living",
+   "label": "LIVING",
+   "category": "living",
+   "w_mm": 3200,
+   "d_mm": 3800,
+   "area_sqft": 130.9
+  },
+  {
+   "id": "dining",
+   "label": "DINING",
+   "category": "dining",
+   "w_mm": 4400,
+   "d_mm": 1685,
+   "area_sqft": 79.8,
+   "note": "a 1.685 m wide dining strip; reads as circulation"
+  },
+  {
+   "id": "kitchen",
+   "label": "KITCHEN",
+   "category": "kitchen",
+   "w_mm": 2750,
+   "d_mm": 2450,
+   "area_sqft": 72.5
+  },
+  {
+   "id": "utility",
+   "label": "UTILITY",
+   "category": "utility",
+   "w_mm": 1375,
+   "d_mm": 2610,
+   "area_sqft": 38.6
+  },
+  {
+   "id": "mbed",
+   "label": "M. BEDROOM",
+   "category": "master_bedroom",
+   "w_mm": 3050,
+   "d_mm": 3800,
+   "area_sqft": 124.8
+  },
+  {
+   "id": "bed1",
+   "label": "BEDROOM-1",
+   "category": "bedroom",
+   "w_mm": 3050,
+   "d_mm": 3770,
+   "area_sqft": 123.8
+  },
+  {
+   "id": "mtoilet",
+   "label": "M. TOILET",
+   "category": "bathroom",
+   "w_mm": 2450,
+   "d_mm": 1525,
+   "area_sqft": 40.2
+  },
+  {
+   "id": "ctoilet",
+   "label": "C. TOILET",
+   "category": "bathroom",
+   "w_mm": 2450,
+   "d_mm": 1525,
+   "area_sqft": 40.2
+  },
+  {
+   "id": "foyer",
+   "label": "FOYER",
+   "category": "foyer",
+   "w_mm": 1490,
+   "d_mm": 1725,
+   "area_sqft": 27.7
+  },
+  {
+   "id": "balc_1",
+   "label": "BALCONY",
+   "category": "balcony",
+   "w_mm": 3050,
+   "d_mm": 1230,
+   "area_sqft": 40.4
+  },
+  {
+   "id": "balc_2",
+   "label": "BALCONY",
+   "category": "balcony",
+   "w_mm": 3200,
+   "d_mm": 1230,
+   "area_sqft": 42.4
+  }
+ ],
+ "envelope": {
+  "shape": "re-entrant; balconies and utility project beyond the block",
+  "plot_ft": null,
+  "bbox_mm": null
+ },
+ "closure": {
+  "verdict": "Tier A; dual units agree on every room"
+ },
+ "graph": null,
+ "outside_unit": [],
+ "sheet_errors": []
+}

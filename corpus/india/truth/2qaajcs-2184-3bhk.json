@@ -1,0 +1,176 @@
+{
+ "id": "2qaajcs-2184-3bhk",
+ "usable": true,
+ "tier": "A",
+ "source": {
+  "image": "corpus/india/raw/2qaajcs_1768979079_701780493.jpg",
+  "project": "unidentified Bengaluru tower, UNIT PLAN - 14",
+  "city": "Bengaluru",
+  "jurisdiction": "BBMP",
+  "sheet_title": "3 BHK + 3 TOILETS + STUDY",
+  "sheet_units": "metric primary, feet-inches secondary",
+  "annotated_by": "hand",
+  "annotated_on": "2026-09-05"
+ },
+ "prompt": "3BHK with three toilets and a study, 2184 sqft super built-up and 1310 sqft carpet. Entry from the east into a foyer with a pooja beside it. Living and dining in the middle, balcony off the living. Kitchen with a utility. Three bedrooms - one with attached toilet, the other two sharing two more toilets - plus a study off the living side and a small handwash near the dining.",
+ "spec_truth": {
+  "site_kind": "apartment_unit",
+  "storeys": 1,
+  "half_bhk": false,
+  "unit_label": "3 BHK + 3 TOILETS + STUDY",
+  "road_facing_side": null,
+  "north_deg": null,
+  "unit_area": {
+   "super_builtup_sqft": 2184,
+   "carpet_sqft": 1310,
+   "balcony_sqft": 98,
+   "quoted_as": "super_builtup_sqft"
+  },
+  "rooms": {
+   "bedroom": 3,
+   "living": 1,
+   "dining": 1,
+   "kitchen": 1,
+   "utility": 1,
+   "bathroom": 3,
+   "balcony": 1,
+   "foyer": 1,
+   "study": 1,
+   "pooja": 1,
+   "handwash": 1,
+   "shaft": 3
+  },
+  "entrance": {
+   "side": null,
+   "via_foyer": true
+  },
+  "vastu": {
+   "enabled": false,
+   "strictness": "none"
+  }
+ },
+ "rooms": [
+  {
+   "id": "bed2",
+   "label": "BEDROOM-2",
+   "category": "bedroom",
+   "w_mm": 3950,
+   "d_mm": 3350,
+   "area_sqft": 142.4
+  },
+  {
+   "id": "bed3",
+   "label": "BEDROOM-3",
+   "category": "bedroom",
+   "w_mm": 3750,
+   "d_mm": 3050,
+   "area_sqft": 123.1
+  },
+  {
+   "id": "toi2",
+   "label": "TOI-2",
+   "category": "bathroom",
+   "w_mm": 2520,
+   "d_mm": 1650,
+   "area_sqft": 44.8
+  },
+  {
+   "id": "toi3",
+   "label": "TOI-3",
+   "category": "bathroom",
+   "w_mm": 2520,
+   "d_mm": 1650,
+   "area_sqft": 44.8
+  },
+  {
+   "id": "toi1",
+   "label": "TOI-1",
+   "category": "bathroom",
+   "w_mm": 2450,
+   "d_mm": 1720,
+   "area_sqft": 45.4
+  },
+  {
+   "id": "handwash",
+   "label": "HANDWASH",
+   "category": "handwash",
+   "w_mm": 1670,
+   "d_mm": 1470,
+   "area_sqft": 26.4
+  },
+  {
+   "id": "living",
+   "label": "LIVING",
+   "category": "living",
+   "w_mm": 3670,
+   "d_mm": 3450,
+   "area_sqft": 136.3
+  },
+  {
+   "id": "foyer",
+   "label": "FOYER",
+   "category": "foyer",
+   "w_mm": 2620,
+   "d_mm": 1500,
+   "area_sqft": 42.3
+  },
+  {
+   "id": "dining",
+   "label": "DINING",
+   "category": "dining",
+   "w_mm": 2620,
+   "d_mm": 4070,
+   "area_sqft": 114.8
+  },
+  {
+   "id": "study",
+   "label": "STUDY",
+   "category": "study",
+   "w_mm": 3750,
+   "d_mm": 2450,
+   "area_sqft": 98.9
+  },
+  {
+   "id": "kitchen",
+   "label": "KITCHEN",
+   "category": "kitchen",
+   "w_mm": 2450,
+   "d_mm": 3950,
+   "area_sqft": 104.2
+  },
+  {
+   "id": "bed1",
+   "label": "BEDROOM-1",
+   "category": "bedroom",
+   "w_mm": 4900,
+   "d_mm": 3680,
+   "area_sqft": 194.1
+  },
+  {
+   "id": "utility",
+   "label": "UTILITY",
+   "category": "utility",
+   "w_mm": 2450,
+   "d_mm": 1500,
+   "area_sqft": 39.6
+  },
+  {
+   "id": "balcony",
+   "label": "BALCONY",
+   "category": "balcony",
+   "w_mm": 1400,
+   "d_mm": 3600,
+   "area_sqft": 54.3
+  }
+ ],
+ "envelope": {
+  "shape": "re-entrant; three PHE shafts and a VRV platform",
+  "plot_ft": null
+ },
+ "closure": {
+  "verdict": "Tier A; dual units agree. PUJA is labelled with no dimension"
+ },
+ "graph": null,
+ "outside_unit": [],
+ "sheet_errors": []
+}

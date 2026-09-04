@@ -1048,6 +1048,25 @@ def check_circulation(ctx: _Ctx) -> list[Finding]:
                 f"the only bathroom ({names.get(baths[0], baths[0])}) cannot be "
                 "reached without walking through a bedroom", baths))
 
+    # 3b. A habitable room reachable only through a bedroom is somebody's
+    #     bedroom, whatever the label says. The bathroom case above was the
+    #     only one covered, so a study or a store behind a bedroom door passed
+    #     -- measured on real output, a `study` whose sole access was Bedroom 2.
+    if entry is not None:
+        bedrooms = {r.id for r in ctx.rooms if (r.category or "") in _PRIVATE}
+        open_from_entry = _reach_without(a, entry, bedrooms)
+        for r in ctx.rooms:
+            cat = r.category or ""
+            if cat in _PRIVATE or cat == "bathroom" or r.id not in ctx.polys:
+                continue
+            if not _is_habitable(cat) or r.id in open_from_entry:
+                continue
+            out.append(Finding(
+                "DESIGN.HABITABLE_VIA_BEDROOM", "error", 0.9,
+                f"{names.get(r.id, r.id)} can only be reached by walking "
+                "through a bedroom, so it belongs to whoever sleeps there "
+                "rather than to the household", [r.id]))
+
     # 4. A circulation space that leads nowhere is leftover area with a label on
     #    it, not a room. This is what the solver's filler cell produces.
     for rid, nb in a.items():
@@ -1336,6 +1355,15 @@ def _scenario_for(ctx: _Ctx):
 # "passage: filler hall/corridor absorbing leftover area".
 PASSAGE_IS_A_ROOM_MM = 2100
 
+# Rooms whose whole job is to be walked through. `_CIRC` above is the
+# circulation CORE (living and dining are passed through too); this is the set
+# that is purely circulation and therefore pure overhead.
+_PURE_CIRC = {"foyer", "passage", "corridor", "stair", "staircase"}
+# Measured on the hand-annotated real drawings: Godrej Woods 10.4%, the 30x40
+# duplex about 12-13%. Warn past 18%, call it an error past 25%.
+CIRCULATION_SHARE_MAX = 0.18
+CIRCULATION_SHARE_HARD = 0.25
+
 # Rooms that need a plumbing line.
 _WET_ROOMS = {"kitchen", "bathroom", "wc", "toilet", "powder", "utility",
               "handwash"}
@@ -1475,6 +1503,27 @@ def check_layout_sense(ctx: _Ctx) -> list[Finding]:
                 "than circulation needs; that area would read better as part "
                 "of the living or dining space",
                 [r.id], w, float(PASSAGE_IS_A_ROOM_MM)))
+
+    # ---- circulation in AGGREGATE ---------------------------------------
+    # `CIRCULATION_OVERSIZED` compares one passage against the living room, so
+    # a plan that splits its circulation across a passage, a stair and a foyer
+    # passes every per-room check and still spends a fifth of the floor on
+    # corridors. Measured: our own 30x40 output spent 21% (passage 78 + stair 66
+    # + foyer 20 of 772 sqft carpet) where the real drawing spends about 12%,
+    # and the hand-annotated Godrej Woods unit spends 10.4%.
+    circ = [r.id for r in ctx.rooms
+            if (r.category or "") in _PURE_CIRC and r.id in ctx.polys]
+    carpet = sum(area.get(r.id, 0.0) for r in ctx.rooms if r.id in ctx.polys)
+    if circ and carpet > 0:
+        share = sum(area.get(i, 0.0) for i in circ) / carpet
+        if share > CIRCULATION_SHARE_MAX:
+            sev, wt = ("error", 0.9) if share > CIRCULATION_SHARE_HARD else ("warn", 0.6)
+            out.append(Finding(
+                "DESIGN.CIRCULATION_SHARE", sev, wt,
+                f"circulation is {share:.0%} of the carpet area across "
+                f"{len(circ)} space(s) ({', '.join(name[i] for i in circ)}); "
+                f"real plans run 10-13%. That floor belongs in the rooms",
+                circ, round(share, 3), CIRCULATION_SHARE_MAX))
 
     # ---- the public rooms are not one place -----------------------------
     # The complaint this came from: "living room and hall should be at one

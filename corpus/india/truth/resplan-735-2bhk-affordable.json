@@ -1,0 +1,116 @@
+{
+ "id": "resplan-735-2bhk-affordable",
+ "usable": false,
+ "tier": "B",
+ "source": {
+  "image": "corpus/india/raw/735.jpg",
+  "project": "2STN 2-Bed (Standard), unidentified",
+  "city": null,
+  "jurisdiction": null,
+  "sheet_title": "2STN | 2-Bed (Standard)",
+  "sheet_units": "feet-inches only",
+  "note": "the sheet is cropped on the right, so the envelope is unknown",
+  "annotated_by": "hand",
+  "annotated_on": "2026-09-05"
+ },
+ "not_a_reconstruction_target": "A real, published, affordable-segment unit that our plausibility bands reject: a 4'0\"x3'0\" bath is 1.1 m2 against a 2.8 m2 contents floor, and no living room is labelled at all. Kept as a RULES CALIBRATION case -- either the bands are wrong for this segment or the finding must be a warning, and that question cannot be answered from synthetic plans.",
+ "prompt": "Small 2BHK, 735 sqft saleable and 529 sqft carpet. Two bedrooms off a tiny lobby, a dining area, a small kitchen with a utility behind it, one bath and a separate WC.",
+ "spec_truth": {
+  "site_kind": "apartment_unit",
+  "storeys": 1,
+  "half_bhk": false,
+  "unit_label": "2STN 2-Bed (Standard)",
+  "road_facing_side": null,
+  "north_deg": null,
+  "unit_area": {
+   "saleable_sqft": 735,
+   "carpet_sqft": 529.4,
+   "quoted_as": "saleable_sqft"
+  },
+  "rooms": {
+   "bedroom": 2,
+   "dining": 1,
+   "kitchen": 1,
+   "utility": 1,
+   "bathroom": 1,
+   "toilet": 1
+  },
+  "entrance": {
+   "side": null,
+   "via_foyer": false
+  },
+  "vastu": {
+   "enabled": false,
+   "strictness": "none"
+  }
+ },
+ "rooms": [
+  {
+   "id": "bed1",
+   "label": "BEDROOM-1",
+   "category": "bedroom",
+   "w_mm": 3378,
+   "d_mm": 2997,
+   "area_sqft": 109.0
+  },
+  {
+   "id": "bed2",
+   "label": "BEDROOM-2",
+   "category": "bedroom",
+   "w_mm": 2997,
+   "d_mm": 2946,
+   "area_sqft": 95.0
+  },
+  {
+   "id": "bath",
+   "label": "BATH",
+   "category": "bathroom",
+   "w_mm": 1219,
+   "d_mm": 914,
+   "area_sqft": 12.0,
+   "note": "1.1 m2 -- below our 2.8 m2 contents floor, and it is built"
+  },
+  {
+   "id": "dining",
+   "label": "DINING",
+   "category": "dining",
+   "w_mm": 2946,
+   "d_mm": 2261,
+   "area_sqft": 71.7
+  },
+  {
+   "id": "kitchen",
+   "label": "KITCHEN",
+   "category": "kitchen",
+   "w_mm": 2134,
+   "d_mm": 2134,
+   "area_sqft": 49.0
+  },
+  {
+   "id": "utility",
+   "label": "UTILITY",
+   "category": "utility",
+   "w_mm": 1702,
+   "d_mm": 1422,
+   "area_sqft": 26.1
+  },
+  {
+   "id": "wc",
+   "label": "W.C.",
+   "category": "toilet",
+   "w_mm": 1245,
+   "d_mm": 1118,
+   "area_sqft": 15.0
+  }
+ ],
+ "envelope": {
+  "shape": "cropped on the sheet; not derivable",
+  "plot_ft": null
+ },
+ "closure": {
+  "verdict": "calibration case only, not a reconstruction target"
+ },
+ "graph": null,
+ "outside_unit": [],
+ "sheet_errors": []
+}

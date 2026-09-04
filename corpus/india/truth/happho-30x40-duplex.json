@@ -1,0 +1,179 @@
+{
+  "id": "happho-30x40-duplex",
+  "usable": true,
+  "tier": "A-",
+  "source": {
+    "image": "corpus/india/raw/happho-30x40-duplex-gf.jpg",
+    "image_storey_1": "corpus/india/raw/ff-plan.jpg",
+    "project": "Happho 30x40 duplex (house-plan site, not a builder brochure)",
+    "city": null,
+    "jurisdiction": null,
+    "sheet_title": null,
+    "sheet_units": "millimetres primary, feet-inches secondary",
+    "annotated_by": "hand",
+    "annotated_on": "2026-09-04",
+    "note": "the only two-storey example in the corpus; the two sheets are the same dwelling"
+  },
+
+  "prompt": "I have a 30 by 40 site and want a duplex. On the ground floor: a covered sit-out at the front, a foyer, dining, living, kitchen with a utility behind it, one bedroom with attached toilet, a small WC near the utility, and a powder room off the foyer. Car parking in front and a small patio at the back. Upstairs: master bedroom with attached toilet and a dress room, a second bedroom with its own toilet, a family room, and an open terrace. Keep a double-height cut-out over the dining.",
+
+  "spec_truth": {
+    "site_kind": "plot",
+    "plot_width_ft": 30,
+    "plot_depth_ft": 40,
+    "road_facing_side": null,
+    "north_deg": null,
+    "storeys": 2,
+    "half_bhk": false,
+    "unit_label": null,
+    "unit_area": {},
+    "rooms": {
+      "master_bedroom": 1, "bedroom": 2, "living": 1, "dining": 1, "kitchen": 1,
+      "utility": 1, "bathroom": 3, "toilet": 1, "powder": 1, "foyer": 1,
+      "sitout": 1, "patio": 1, "terrace": 1, "dress": 1, "parking": 1,
+      "landscape": 3, "stair": 1
+    },
+    "vastu": {"enabled": false, "strictness": "none"},
+    "entrance": {"side": null, "via_foyer": true},
+    "note": "no north arrow on either sheet, so road_facing_side must stay null; a prompt that named a facing would be asserting more than the drawing does"
+  },
+
+  "rooms": [
+    {"id": "sitout",  "label": "SITOUT",     "category": "sitout",  "storey": 0,
+     "printed": ["3950X1400", "13'0\"X4'7\""], "w_mm": 3950, "d_mm": 1400, "area_sqft": 59.5,
+     "level_mm": 450},
+    {"id": "porch",   "label": "PORCH",      "category": "sitout",  "storey": 0,
+     "printed": [], "w_mm": null, "d_mm": null, "area_sqft": null, "level_mm": 809,
+     "note": "no dimension printed; entry step between parking and foyer"},
+    {"id": "foyer",   "label": "FOYER",      "category": "foyer",   "storey": 0,
+     "printed": ["1750X2600", "5'9\"X8'6\""], "w_mm": 1750, "d_mm": 2600, "area_sqft": 49.0},
+    {"id": "dining",  "label": "DINING",     "category": "dining",  "storey": 0,
+     "printed": ["4000X3500", "18'1\"X11'8\""], "w_mm": 4000, "d_mm": 3500, "area_sqft": 150.7,
+     "level_mm": 750, "sheet_error": "18'1\" contradicts 4000 mm (= 13'1\")"},
+    {"id": "living",  "label": "LIVING",     "category": "living",  "storey": 0,
+     "printed": ["3950X4500", "13'0\"X15'1\""], "w_mm": 3950, "d_mm": 4500, "area_sqft": 191.3,
+     "sheet_error": "15'1\" contradicts 4500 mm (= 14'9\")"},
+    {"id": "kitchen", "label": "KITCHEN",    "category": "kitchen", "storey": 0,
+     "printed": ["3650X2950", "13'0\"X9'4\""], "w_mm": 3650, "d_mm": 2950, "area_sqft": 115.9,
+     "sheet_error": "both imperial figures contradict the mm (= 12'0\" x 9'8\")"},
+    {"id": "utility", "label": "UITILITY",   "category": "utility", "storey": 0,
+     "printed": ["2650X1750", "8'8\"X5'9\""], "w_mm": 2650, "d_mm": 1750, "area_sqft": 49.9,
+     "level_mm": 750, "note": "label is misspelt on the sheet"},
+    {"id": "powder",  "label": "PWD RM",     "category": "powder",  "storey": 0,
+     "printed": ["1000X2200", "5'3\"X7'3\""], "w_mm": 1000, "d_mm": 2200, "area_sqft": 23.7,
+     "resolves_to_today": "bathroom",
+     "sheet_error": "5'3\" contradicts 1000 mm (= 3'3\")",
+     "note": "1000 mm clear width; below the NBC minimum our bathroom band enforces"},
+    {"id": "bed_gf",  "label": "BEDROOM_1",  "category": "bedroom", "storey": 0,
+     "printed": ["4040X5260", "13'3\"X17'3\""], "w_mm": 4040, "d_mm": 5260, "area_sqft": 228.7},
+    {"id": "bath_gf", "label": "TOILET",     "category": "bathroom","storey": 0,
+     "printed": ["1600X2800", "5'3\"X9'2\""], "w_mm": 1600, "d_mm": 2800, "area_sqft": 48.2,
+     "note": "attached to bed_gf"},
+    {"id": "wc_gf",   "label": "TOILET",     "category": "toilet",  "storey": 0,
+     "printed": ["1150X1500", null], "w_mm": 1150, "d_mm": 1500, "area_sqft": 18.6,
+     "uncertain": true, "resolves_to_today": "bathroom",
+     "note": "rotated low-legibility label; the imperial pair could not be read and the mm pair is read at moderate confidence"},
+    {"id": "patio",   "label": "PATIO",      "category": "patio",   "storey": 0,
+     "printed": ["3050X1000", "10'0\"X3'3\""], "w_mm": 3050, "d_mm": 1000, "area_sqft": 32.8},
+    {"id": "stair",   "label": null,          "category": "stair",  "storey": 0,
+     "printed": [], "w_mm": null, "d_mm": null, "area_sqft": null,
+     "note": "drawn but unlabelled and undimensioned; crosses the dining/bedroom zone"},
+    {"id": "parking", "label": null,          "category": "parking","storey": 0,
+     "printed": [], "w_mm": null, "d_mm": null, "area_sqft": null,
+     "note": "car drawn, no label, no dimension; outside the wall line"},
+
+    {"id": "family",  "label": "FAMILY ROOM","category": "family",  "storey": 1,
+     "printed": ["5150X3850", "16'11\"X12'8\""], "w_mm": 5150, "d_mm": 3850, "area_sqft": 213.4,
+     "level_mm": 3750, "resolves_to_today": "living"},
+    {"id": "terrace", "label": "TERRACE",    "category": "terrace", "storey": 1,
+     "printed": ["3950X4050", "13'0\"X13'8\""], "w_mm": 3950, "d_mm": 4050, "area_sqft": 172.2,
+     "level_mm": 3600, "resolves_to_today": "patio",
+     "sheet_error": "13'8\" contradicts 4050 mm (= 13'3\")"},
+    {"id": "cutout",  "label": "CUT OUT",    "category": null,      "storey": 1,
+     "printed": ["2700X2400", "6'10\"X7'10\""], "w_mm": 2700, "d_mm": 2400, "area_sqft": 69.8,
+     "resolves_to_today": "unknown",
+     "sheet_error": "6'10\" contradicts 2700 mm (= 8'10\")",
+     "note": "a void over the ground-floor dining, not a room; no category exists for it"},
+    {"id": "mbed",    "label": "M. BEDROOM", "category": "master_bedroom", "storey": 1,
+     "printed": ["3950X5000", "13'0\"X16'5\""], "w_mm": 3950, "d_mm": 5000, "area_sqft": 212.6,
+     "resolves_to_today": "bedroom"},
+    {"id": "bed_ff",  "label": "BEDROOM",    "category": "bedroom", "storey": 1,
+     "printed": ["3350X4350", "11'0\"X14'5\""], "w_mm": 3350, "d_mm": 4350, "area_sqft": 156.9},
+    {"id": "bath_ff1","label": "TOILET",     "category": "bathroom","storey": 1,
+     "printed": ["1600X2800", "5'3\"X9'2\""], "w_mm": 1600, "d_mm": 2800, "area_sqft": 48.2,
+     "note": "attached to bed_ff"},
+    {"id": "dress",   "label": "DRESS",      "category": "dress",   "storey": 1,
+     "printed": ["1950X2800", "13'0\"X16'5\""], "w_mm": 1950, "d_mm": 2800, "area_sqft": 58.8,
+     "resolves_to_today": "store",
+     "sheet_error": "the imperial pair is M. BEDROOM's, copied in error (1950x2800 = 6'5\"x9'2\")"},
+    {"id": "bath_ff2","label": "TOILET",     "category": "bathroom","storey": 1,
+     "printed": ["1600X2800", "5'3\"X9'2\""], "w_mm": 1600, "d_mm": 2800, "area_sqft": 48.2,
+     "note": "attached to mbed, via dress"}
+  ],
+
+  "outside_unit": [],
+
+  "graph": {
+    "front_door": {"into": "foyer", "via": "porch", "side": "sheet_west", "true_bearing": null},
+    "doors": [
+      ["porch", "foyer"], ["foyer", "dining"], ["foyer", "powder"],
+      ["dining", "living"], ["dining", "kitchen"], ["dining", "stair"],
+      ["living", "sitout"], ["kitchen", "utility"],
+      ["dining", "bed_gf"], ["bed_gf", "bath_gf"], ["bed_gf", "patio"],
+      ["utility", "wc_gf"],
+      ["stair", "family"], ["family", "terrace"], ["family", "mbed"],
+      ["family", "bed_ff"], ["bed_ff", "bath_ff1"], ["mbed", "dress"],
+      ["dress", "bath_ff2"]
+    ],
+    "doors_uncertain": [
+      ["dining", "bed_gf"],
+      ["utility", "wc_gf"]
+    ],
+    "touching": [
+      ["porch", "foyer"], ["porch", "sitout"], ["foyer", "dining"],
+      ["foyer", "powder"], ["dining", "living"], ["dining", "kitchen"],
+      ["dining", "stair"], ["dining", "bed_gf"], ["living", "sitout"],
+      ["living", "kitchen"], ["kitchen", "utility"], ["utility", "wc_gf"],
+      ["bed_gf", "bath_gf"], ["bed_gf", "stair"], ["bed_gf", "patio"],
+      ["bath_gf", "utility"], ["powder", "stair"],
+      ["family", "terrace"], ["family", "cutout"], ["family", "mbed"],
+      ["family", "bed_ff"], ["mbed", "terrace"], ["mbed", "dress"],
+      ["bed_ff", "bath_ff1"], ["bed_ff", "cutout"], ["dress", "bath_ff2"],
+      ["bath_ff1", "dress"]
+    ],
+    "exterior_windows": {
+      "living": ["sheet_east"], "dining": [], "kitchen": ["sheet_east"],
+      "bed_gf": ["sheet_west"], "bath_gf": [], "family": ["sheet_west"],
+      "mbed": ["sheet_west"], "bed_ff": ["sheet_west"]
+    },
+    "windowless": ["dining", "bath_gf", "wc_gf", "powder", "bath_ff2"],
+    "note": "dining is interior on the ground floor and is lit by the first-floor cut-out; our rules have no way to express that, so dining will read as a windowless habitable room"
+  },
+
+  "envelope": {
+    "shape": "re-entrant on both storeys; parking, sitout and patio sit outside the wall line",
+    "plot_ft": [30, 40],
+    "plot_sqft": 1200,
+    "bbox_mm": [9144, 12192],
+    "gf_room_area_sqft": 876,
+    "coverage_flag": "ground-floor built-up rooms alone are 876 sqft of a 1200 sqft plot (73%) before walls and the unlabelled stair; with a 230 mm external and 115 mm internal wall allowance the footprint lands near 80%, above the 75% coverage cap our bylaws table applies to this plot band. Flagged for checking against bylaws.py, not asserted as non-compliant.",
+    "levels_mm": [0, 150, 450, 750, 809, 3600, 3750]
+  },
+
+  "sheet_errors": [
+    "DINING: 18'1\" vs 4000 mm (13'1\")",
+    "LIVING: 15'1\" vs 4500 mm (14'9\")",
+    "KITCHEN: 13'0\"x9'4\" vs 3650x2950 mm (12'0\"x9'8\")",
+    "PWD RM: 5'3\" vs 1000 mm (3'3\")",
+    "TERRACE: 13'8\" vs 4050 mm (13'3\")",
+    "CUT OUT: 6'10\" vs 2700 mm (8'10\")",
+    "DRESS: imperial pair copied from M. BEDROOM",
+    "UITILITY: label misspelt"
+  ],
+
+  "closure": {
+    "carpet": {"printed_m2": null,
+               "note": "no area schedule on either sheet, so there is no independent checksum; the mm column is the only authority and the imperial column disagrees with it on 6 rooms"},
+    "verdict": "Tier A- (dual units, no printed area total). The mm figures are internally consistent; the imperial column is unreliable on this sheet and must not be used."
+  }
+}

@@ -95,42 +95,14 @@ def canon(category: str) -> str:
     return SPEC_TO_CANON.get(category, "unknown")
 
 
-# Service rooms must not absorb surplus area. The room-type midpoint for a
-# bathroom is (2.8 + 8.0) / 2 = 5.4 m2, and proportional budget scaling then
-# inflated it further -- wet-02 ended up with four bathrooms at 6.8 m2 each,
-# 19% of the carpet area, against a measured real-plan norm of ~4% per bath.
-# Surplus belongs to the habitable rooms.
-SERVICE_TARGET_M2 = {
-    "balcony": 4.0,    # ~4.5 x 1.2 m, the size builder plans actually show
-    "sitout": 5.0,
-    "patio": 6.0,
-    "bathroom": 4.0,   # real median 4.64, p25 3.82
-    # 3.0 was too small: at 2.5 m2 realised, the door swing covered 72% of
-    # the floor and a 600x650 washing machine had nowhere to stand. A utility
-    # that must hold a machine plus access needs ~4 m2.
-    "utility": 4.2,
-    "store": 2.5,
-    "shaft": 0.6,
-    "foyer": 4.0,
-    "pooja": 2.5,
-}
-SERVICE_TARGET_CAP_M2 = {
-    "balcony": 7.0,
-    "sitout": 9.0,
-    "patio": 14.0,
-    "bathroom": 6.0,   # p85-ish; a master bath with a tub may reach this
-    "utility": 5.0,
-    "store": 5.0,
-    "shaft": 2.0,
-    "foyer": 8.0,
-    "pooja": 5.0,
-}
 
 
 # The contents floor lives in `standards`, with the clearances it comes from.
 # It was duplicated here and applied only on this path, so a programme built
 # straight from `envelope.bhk_programme` never got it.
-from .standards import CONTENTS_FLOOR_M2 as SERVICE_FLOOR_M2  # noqa: E402
+from .standards import (CONTENTS_FLOOR_M2 as SERVICE_FLOOR_M2,  # noqa: E402
+                        SERVICE_TARGET_M2, SERVICE_TARGET_CAP_M2,
+                        MAX_ASPECT)
 
 
 def cap_service_targets(prog) -> list[str]:
@@ -209,6 +181,11 @@ def spec_to_programme(spec: Any, *, relaxed: bool = False
             category=key, target_m2=target,
             weight=1.0 if getattr(r, "priority", 3) <= 2 else 0.7,
             vastu_zone=zone, is_entrance=is_entrance,
+            # Measured off the corpus rather than a flat 2.6 for every room.
+            # See `standards.MAX_ASPECT`: no real bedroom in 89 transcribed
+            # rooms exceeds 1.33, so a 2.6 cap licensed corridor-shaped
+            # bedrooms that were the right area and unusable.
+            max_aspect=MAX_ASPECT.get(key, 2.6),
         )
         # `RoomSpec.optional` was read nowhere on the solve path, so a room the
         # brief only guessed at was as mandatory as one the client asked for --
@@ -217,6 +194,10 @@ def spec_to_programme(spec: Any, *, relaxed: bool = False
         # has to know about it unless it wants to.
         rq.optional = bool(getattr(r, "optional", False))   # declared field
         rq.attached_bath = bool(getattr(r, "attached_bath", False))
+        # `given` is the brief's own figure. Recording that it was stated is
+        # what lets `_allocate` keep it: the size was already computed here and
+        # then thrown away one call later by the envelope's proportional budget.
+        rq.size_stated = bool(getattr(r, "size_stated", False))
         # The brief's own area ceiling, which the solve path read nowhere. A
         # client who says "master 150-190 sqft" means the upper figure too.
         #

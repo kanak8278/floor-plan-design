@@ -304,6 +304,14 @@ class RoomReq:
     # `not_run` -- because I asserted the attribute was free instead of
     # grepping for who copies the object.
     optional: bool = False
+    # The brief named an explicit size for this room. A stated size is a
+    # CONSTRAINT, not a suggestion: `_allocate` pins it and makes the unstated
+    # rooms absorb over- and under-supply instead. Before this the envelope's
+    # proportional budget overwrote every target, so a brief that said "master
+    # bedroom 12'0 x 14'0" got 12'0 x 14'0 computed, then discarded and
+    # replaced by 1.23x that -- measured on a real 2.5BHK brief where the
+    # system invented 219 sqft and forced it into the rooms.
+    size_stated: bool = False
 
     def _nbc_row(self) -> tuple[int, float]:
         """The NBC row for this category, inherited by subtypes.
@@ -384,6 +392,18 @@ def bhk_programme(n_bed: int, *, baths: int | None = None, dining: bool = False,
     if utility:
         reqs.append(RoomReq("utility", "Utility", "utility",
                             target_m2=_T["utility"], weight=0.35, vastu_zone="NW"))
+    # Ceilings on every non-habitable room, here rather than only in
+    # `bridge.cap_service_targets`: this builder feeds `solve_layout` directly
+    # from tests, probes and `score.py`, and on that path nothing capped a
+    # service room at all. Surplus then landed in circulation -- a 17.3 m2
+    # passage next to a 14.5 m2 master bedroom.
+    from .standards import SERVICE_TARGET_CAP_M2, MAX_ASPECT
+    for r in reqs:
+        cap = SERVICE_TARGET_CAP_M2.get(r.category)
+        if cap is not None:
+            r.max_area_m2 = cap
+            r.target_m2 = min(r.target_m2 or cap, cap)
+        r.max_aspect = MAX_ASPECT.get(r.category, r.max_aspect)
     return reqs
 
 
@@ -641,8 +661,16 @@ def compute_envelope(width_ft: float, depth_ft: float, *,
     step("layout rect (centrelines)", f"footprint inset {half} mm",
          f"{tw} x {td} mm", mm2_to_m2(t_area), "m2")
 
-    usable = mm2_to_m2(t_area) * (1.0 - circulation_frac)
-    step("usable after circulation", f"{circulation_frac:.0%} circulation",
+    # The circulation reserve is for circulation the PROGRAMME does not name.
+    # When the brief already lists a foyer/corridor/passage as rooms, taking
+    # the fraction as well removes that area twice: measured on the Godrej
+    # Woods unit, a programme whose rooms total 758 sqft was offered 619 --
+    # 82% -- against a footprint derived from its own quoted carpet area.
+    named_circ = any(r.category in _PROGRAMME_CIRC for r in programme)
+    circ = 0.0 if named_circ else circulation_frac
+    usable = mm2_to_m2(t_area) * (1.0 - circ)
+    step("usable after circulation",
+         f"{circ:.0%} circulation" + (" (programme names its own)" if named_circ else ""),
          "centreline area x (1 - circ)", usable, "m2")
 
     # per-room budget: scale requested targets onto the usable area
@@ -739,9 +767,74 @@ def compute_envelope(width_ft: float, depth_ft: float, *,
 # larger than the brief. A bathroom does not usefully triple; a living room
 # does grow. Surplus beyond these caps becomes `slack_m2`, which the solver
 # absorbs as a hall/passage instead of bloating wet rooms.
-GROWTH_CAP = {"living": 1.8, "dining": 1.8, "bedroom": 1.6, "study": 1.6,
-              "kitchen": 1.35, "bathroom": 1.20, "wc": 1.15, "pooja": 1.30,
-              "utility": 1.30, "storage": 1.60, "balcony": 1.60, "passage": 99.0}
+# How far a room may grow above its target when there is surplus floor.
+#
+# `passage` was 99.0 -- a licence for circulation to absorb everything, and it
+# did: measured on a real 30x40 brief, passage + stair + foyer came to 21% of
+# carpet against ~12% in the real drawing. Circulation is a cost, not a room
+# that benefits from being bigger, so every circulation category is pinned at
+# its target and the surplus goes to `SLACK_ABSORBER` instead.
+#
+# `wc` and `storage` were dead keys: `bridge.canon` maps toilet -> bathroom and
+# the store category is `store`, so neither name could ever be looked up.
+# Circulation the brief can name itself. When it does, `compute_envelope` must
+# not also hold back `circulation_frac` for the same thing.
+_PROGRAMME_CIRC = {"foyer", "passage", "corridor", "stair", "staircase"}
+
+GROWTH_CAP = {"living": 1.8, "dining": 1.8, "bedroom": 1.6,
+              "master_bedroom": 1.6, "study": 1.6, "servant": 1.3,
+              "kitchen": 1.35, "bathroom": 1.20, "pooja": 1.30,
+              "utility": 1.30, "store": 1.60, "balcony": 1.60,
+              "sitout": 1.40, "patio": 1.40,
+              # circulation: no growth
+              "passage": 1.0, "corridor": 1.0, "foyer": 1.0, "stair": 1.0,
+              "shaft": 1.0}
+
+# Surplus past the growth caps belongs in the social space -- that is where a
+# client would put it -- not spread pro-rata across bathrooms and corridors.
+SLACK_ABSORBER = ("living", "dining", "family")
+# The absorber is generous but not unbounded: a 40 m2 living room in a 3BHK is
+# not a better plan, it is an unassigned-floor problem with a nicer label.
+ABSORBER_CAP = 1.5
+
+
+def _allocate_surplus(reqs: Sequence[RoomReq], targets: Sequence[float],
+                      available_m2: float) -> list[float]:
+    """More floor than the programme asked for.
+
+    A stated size stays exactly as stated. Unstated rooms grow proportionally
+    up to their `GROWTH_CAP`. Whatever is still left goes to the social space,
+    not pro-rata to every bathroom and corridor.
+    """
+    out = list(targets)
+    stated = [bool(getattr(r, "size_stated", False)) for r in reqs]
+    elastic = [i for i in range(len(reqs)) if not stated[i]]
+    pinned_sum = sum(targets[i] for i in range(len(reqs)) if stated[i])
+    base = sum(targets[i] for i in elastic)
+    pool = available_m2 - pinned_sum
+    if elastic and base > 0 and pool > 0:
+        s = pool / base
+        for i in elastic:
+            cap = GROWTH_CAP.get(reqs[i].category, 1.4)
+            out[i] = targets[i] * min(s, cap)
+    left = available_m2 - sum(out)
+    if left > 1e-6:
+        # Prefer living, then dining, then the largest habitable room. Nothing
+        # eligible means the surplus stays unallocated slack, which is the
+        # honest outcome -- the solver reports it and the renderer shows it.
+        pick = None
+        for cat in SLACK_ABSORBER:
+            pick = next((i for i, r in enumerate(reqs) if r.category == cat), None)
+            if pick is not None:
+                break
+        if pick is not None:
+            # At least its own growth cap: `ABSORBER_CAP` below the category's
+            # `GROWTH_CAP` would make the absorber clamp SHRINK a room that had
+            # already grown past it, which is how a 3BHK unit that used to
+            # solve came back infeasible at all three quoted areas.
+            cap = max(ABSORBER_CAP, GROWTH_CAP.get(reqs[pick].category, 1.4))
+            out[pick] = min(out[pick] + left, targets[pick] * cap)
+    return out
 
 
 def _allocate(reqs: Sequence[RoomReq], targets: Sequence[float],
@@ -759,12 +852,19 @@ def _allocate(reqs: Sequence[RoomReq], targets: Sequence[float],
     if tsum <= 0:
         return [available_m2 / len(reqs)] * len(reqs)
     if available_m2 >= tsum:
-        s = available_m2 / tsum
-        return [t * min(s, GROWTH_CAP.get(r.category, 1.4))
-                for r, t in zip(reqs, targets)]
+        return _allocate_surplus(reqs, targets, available_m2)
     mins = [r.nbc_min_area_m2() for r in reqs]
     out = list(targets)
-    frozen = [False] * len(reqs)
+    # A stated size is a constraint: shrink the rooms nobody sized first, and
+    # only fall back to shrinking the stated ones when that is not enough.
+    # `frozen` already means "will not shrink further", so pinning is just
+    # starting the water-fill with the stated rooms frozen at their target.
+    stated = [bool(getattr(r, "size_stated", False)) for r in reqs]
+    elastic_room = sum(targets[i] - mins[i]
+                       for i in range(len(reqs)) if not stated[i])
+    deficit = tsum - available_m2
+    pin_stated = any(stated) and not all(stated) and elastic_room >= deficit
+    frozen = list(stated) if pin_stated else [False] * len(reqs)
     for _ in range(len(reqs) + 1):
         free = [i for i in range(len(reqs)) if not frozen[i]]
         if not free:

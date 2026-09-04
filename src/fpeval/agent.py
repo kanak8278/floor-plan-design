@@ -316,6 +316,19 @@ def _stale(doc: Document) -> bool:
     return last_spec > last_solve
 
 
+def _finding_line(f: Any) -> str:
+    """One finding as a sentence the model can act on.
+
+    Reads `detail` (the field that exists) and appends `element_ids`, because
+    "a bedroom is unreachable" is not actionable without knowing which one.
+    """
+    detail = getattr(f, "detail", None) or ""
+    ids = list(getattr(f, "element_ids", None) or [])
+    where = f" [{', '.join(map(str, ids))}]" if ids else ""
+    return (f"- [{getattr(f, 'severity', '?')}] "
+            f"{getattr(f, 'rule_id', '')}: {detail or f}{where}")
+
+
 def turn_context(doc: Document, last_seen_seq: int,
                  findings: Sequence[Any] = ()) -> str:
     """The per-turn operator message: state, then what changed since.
@@ -352,9 +365,12 @@ def turn_context(doc: Document, last_seen_seq: int,
         parts += ["", "No changes since your last message."]
     if findings:
         parts += ["", "VALIDATOR FINDINGS"]
-        parts += [f"- [{getattr(f, 'severity', '?')}] "
-                  f"{getattr(f, 'rule_id', '')}: {getattr(f, 'message', f)}"
-                  for f in findings[:25]]
+        # `Finding` has `detail`, not `message`, and its __repr__ is the terse
+        # `<E GEO.UNREACHABLE_ROOM w=1.00>`. So the getattr fallback fed the
+        # model a rule id and a weight and never the sentence saying what was
+        # wrong or `element_ids` saying which rooms -- which is why an agent
+        # that was told about an unenterable bedroom every turn never fixed it.
+        parts += [_finding_line(f) for f in findings[:25]]
 
     return "\n".join(parts)
 
@@ -607,9 +623,7 @@ def _run_tool(name: str, args: dict, ctx: ToolContext) -> str:
         fs = ctx.findings_fn()
         if not fs:
             return "No findings. The plan is clean against the rules engine."
-        return "\n".join(
-            f"[{getattr(f, 'severity', '?')}] {getattr(f, 'rule_id', '')}: "
-            f"{getattr(f, 'message', f)}" for f in fs[:40])
+        return "\n".join(_finding_line(f) for f in fs[:40])
     if name == "solve_layout":
         from .generate import build, report
         r = build(ctx.doc, reason=str(args.get("reason") or ""))

@@ -1,0 +1,150 @@
+{
+ "id": "brigade-lakecrest-1353-2bhk",
+ "usable": true,
+ "tier": "A",
+ "source": {
+  "image": "corpus/india/raw/2BHK-1353-Brigade-Lakecrest-Bhattarahalli.webp",
+  "project": "Brigade Lakecrest, Bhattarahalli, Bengaluru",
+  "city": "Bengaluru",
+  "jurisdiction": "BBMP",
+  "sheet_title": "2BHK 2T TYPE C18",
+  "sheet_units": "metric primary, feet-inches secondary",
+  "annotated_by": "hand",
+  "annotated_on": "2026-09-05"
+ },
+ "prompt": "2BHK, 1353 sqft super built-up and 873 sqft carpet. Entry on the east into a foyer. Living and dining open off it, with a balcony off the dining. Kitchen with a utility beyond it. A 1.15 m passage leads to two bedrooms - one with its own toilet off the passage, the master with an attached toilet and a balcony.",
+ "spec_truth": {
+  "site_kind": "apartment_unit",
+  "storeys": 1,
+  "half_bhk": false,
+  "unit_label": "2BHK 2T - TYPE C18",
+  "road_facing_side": null,
+  "north_deg": null,
+  "unit_area": {
+   "super_builtup_sqft": 1353,
+   "carpet_sqft": 873,
+   "balcony_sqft": 65,
+   "quoted_as": "super_builtup_sqft"
+  },
+  "rooms": {
+   "master_bedroom": 1,
+   "bedroom": 1,
+   "living": 1,
+   "dining": 1,
+   "kitchen": 1,
+   "utility": 1,
+   "bathroom": 2,
+   "balcony": 2,
+   "foyer": 1,
+   "corridor": 1
+  },
+  "entrance": {
+   "side": null,
+   "via_foyer": true
+  },
+  "vastu": {
+   "enabled": false,
+   "strictness": "none"
+  }
+ },
+ "rooms": [
+  {
+   "id": "bed1",
+   "label": "BEDROOM-1",
+   "category": "bedroom",
+   "w_mm": 3840,
+   "d_mm": 3810,
+   "area_sqft": 157.5
+  },
+  {
+   "id": "toilet1",
+   "label": "TOILET-1",
+   "category": "bathroom",
+   "w_mm": 1570,
+   "d_mm": 2500,
+   "area_sqft": 42.2
+  },
+  {
+   "id": "living",
+   "label": "LIVING",
+   "category": "living",
+   "w_mm": 4440,
+   "d_mm": 3810,
+   "area_sqft": 182.1
+  },
+  {
+   "id": "foyer",
+   "label": "FOYER",
+   "category": "foyer",
+   "w_mm": 2110,
+   "d_mm": 1600,
+   "area_sqft": 36.3
+  },
+  {
+   "id": "kitchen",
+   "label": "KITCHEN",
+   "category": "kitchen",
+   "w_mm": 2450,
+   "d_mm": 2740,
+   "area_sqft": 72.3
+  },
+  {
+   "id": "utility",
+   "label": "UTILITY",
+   "category": "utility",
+   "w_mm": 2450,
+   "d_mm": 1270,
+   "area_sqft": 33.5
+  },
+  {
+   "id": "mbed",
+   "label": "MASTER BEDROOM",
+   "category": "master_bedroom",
+   "w_mm": 3470,
+   "d_mm": 3690,
+   "area_sqft": 137.8
+  },
+  {
+   "id": "dining",
+   "label": "DINING",
+   "category": "dining",
+   "w_mm": 2700,
+   "d_mm": 3250,
+   "area_sqft": 94.5
+  },
+  {
+   "id": "mtoilet",
+   "label": "M. TOILET",
+   "category": "bathroom",
+   "w_mm": 1570,
+   "d_mm": 2500,
+   "area_sqft": 42.2
+  },
+  {
+   "id": "balc_1",
+   "label": "BALCONY",
+   "category": "balcony",
+   "w_mm": 2250,
+   "d_mm": 1240,
+   "area_sqft": 30.0
+  },
+  {
+   "id": "balc_2",
+   "label": "BALCONY",
+   "category": "balcony",
+   "w_mm": 2700,
+   "d_mm": 1240,
+   "area_sqft": 36.0
+  }
+ ],
+ "envelope": {
+  "shape": "re-entrant; two balconies and the utility project",
+  "plot_ft": null
+ },
+ "closure": {
+  "verdict": "Tier A; dual units agree, PASSAGE is width-only at 1.15 m"
+ },
+ "graph": null,
+ "outside_unit": [],
+ "sheet_errors": []
+}

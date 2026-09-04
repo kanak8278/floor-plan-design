@@ -84,6 +84,10 @@ _EDGE_PEN = {
 }
 _EDGE_PEN_DEFAULT = 3
 
+# How far past its measured ceiling a room may be stretched, when stretching is
+# what buys a required adjacency. See the hard aspect cap below.
+ASPECT_HARD_SLACK = 1.25
+
 CONSTRAINT_GROUPS = (
     "max_area","min_area", "min_clear_width", "max_aspect_hard",
                      "door_width", "pinned")
@@ -639,8 +643,23 @@ def _build_model(nodes: list[_Node], root: int, reqs: Sequence[RoomReq],
                 m.Add(over >= 0)
                 over_terms[-1] = over
 
-        # hard aspect cap as a rational, so it stays linear
-        num = int(round(spec.max_aspect_hard * 10))
+        # Hard aspect cap as a rational, so it stays linear.
+        #
+        # Per room, not one global 4.0. `r.max_aspect` carries the measured
+        # ceiling from `standards.MAX_ASPECT` and used to be SOFT -- a
+        # preference the objective could buy its way out of, and it did: a
+        # bedroom capped at 1.55 came back at 2.36, which is 2630 x 6200 mm.
+        # The area was ample (15.2 m2) and the shape was a corridor, so the
+        # furnisher could not place a bed in a master bedroom. A shape bound
+        # that the objective may violate is not a bound.
+        # A margin above the soft preference. Clamping hard AT the measured
+        # ceiling left the solver no room to trade shape for a required
+        # adjacency and a 3BHK on 30x40 came back with kitchen and living
+        # unconnected; 1.25x still excludes the 2.36-aspect "bedroom" that a
+        # flat 4.0 licensed, which is the case that mattered.
+        soft = r.max_aspect or spec.max_aspect_hard
+        hard = min(spec.max_aspect_hard, soft * ASPECT_HARD_SLACK)
+        num = int(round(hard * 10))
         add("max_aspect_hard",
             m.Add(cw * 10 <= ch * num), m.Add(ch * 10 <= cw * num))
 
