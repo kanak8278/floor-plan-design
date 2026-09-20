@@ -18,3 +18,8 @@ tests/js/samples.json
 vendor/openPlan3D/.svelte-kit/
 vendor/openPlan3D/node_modules/
 vendor/openPlan3D/static/fpeval/*.json
+
+# Local secrets and per-deployment config. Only .env.example is tracked.
+.env
+.env.*
+!.env.example
